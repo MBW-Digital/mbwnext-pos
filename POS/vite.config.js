@@ -246,7 +246,7 @@ export default defineConfig({
 		port: 8080,
 		proxy: {
 			"^/(app|api|assets|files|printview)": {
-				target: "http://127.0.0.1:8040",
+				target: "http://127.0.0.1:8016",
 				ws: true,
 				changeOrigin: true,
 				secure: false,
@@ -257,7 +257,7 @@ export default defineConfig({
 					const isLocalhost =
 						site_name === "localhost" || site_name === "127.0.0.1"
 					const targetHost = isLocalhost ? "127.0.0.1" : site_name
-					return `http://${targetHost}:8040`
+					return `http://${targetHost}:8016`
 				},
 			},
 		},

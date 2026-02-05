@@ -42,6 +42,7 @@ import {
 } from "frappe-ui"
 
 import "./index.css"
+import "./mbw-custom.css"
 
 const log = logger.create("Main")
 

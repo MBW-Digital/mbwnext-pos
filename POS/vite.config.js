@@ -236,6 +236,9 @@ export default defineConfig({
 			"showdown",
 			"highlight.js/lib/core",
 			"interactjs",
+            "debug",
+            "socket.io-client",
+            "engine.io-client",
 		],
 	},
 	server: {
@@ -243,7 +246,7 @@ export default defineConfig({
 		port: 8080,
 		proxy: {
 			"^/(app|api|assets|files|printview)": {
-				target: "http://127.0.0.1:8000",
+				target: "http://127.0.0.1:8040",
 				ws: true,
 				changeOrigin: true,
 				secure: false,
@@ -254,7 +257,7 @@ export default defineConfig({
 					const isLocalhost =
 						site_name === "localhost" || site_name === "127.0.0.1"
 					const targetHost = isLocalhost ? "127.0.0.1" : site_name
-					return `http://${targetHost}:8000`
+					return `http://${targetHost}:8040`
 				},
 			},
 		},

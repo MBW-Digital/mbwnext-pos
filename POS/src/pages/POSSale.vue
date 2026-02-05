@@ -416,7 +416,7 @@
 						</svg>
 					</div>
 					<h3 class="mt-4 text-lg font-medium text-gray-900">
-						{{ __("Welcome to POS Next") }}
+						{{ __("Welcome to MBW Next POS") }}
 					</h3>
 					<p class="mt-2 text-sm text-gray-500">
 						{{ __("Please open a shift to start making sales") }}
@@ -770,7 +770,7 @@
 								{{ __("Sign Out?") }}
 							</h3>
 							<p class="text-sm text-gray-600">
-								{{ __("You will be logged out of POS Next") }}
+								{{ __("You will be logged out of MBW Next POS") }}
 							</p>
 						</div>
 
@@ -927,8 +927,7 @@
 				@confirm="confirmClearCache"
 			/>
 
-			<!-- Footer -->
-			<POSFooter />
+			<!-- Footer removed -->
 		</template>
 	</div>
 </template>
@@ -938,7 +937,6 @@ import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
-import POSFooter from "@/components/common/POSFooter.vue";
 import ManagementSlider from "@/components/pos/ManagementSlider.vue";
 import POSHeader from "@/components/pos/POSHeader.vue";
 import BatchSerialDialog from "@/components/sale/BatchSerialDialog.vue";

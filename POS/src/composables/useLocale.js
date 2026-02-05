@@ -37,24 +37,18 @@ export const SUPPORTED_LOCALES = {
 		countryCode: "us",
 		dir: "ltr",
 	},
+	vi: {
+		name: "Vietnamese",
+		nativeName: "Tiếng Việt",
+		countryCode: "vn",
+		dir: "ltr",
+	},
 	ar: {
 		name: "Arabic",
 		nativeName: "العربية",
 		countryCode: "eg",
 		dir: "rtl",
 	},
-	id: {
-		name: "Indonesian",
-		nativeName: "Bahasa",
-		countryCode: "id",
-		dir: "ltr",
-	},
-	"pt-br": {
-		name: "Portuguese (Brazil)",
-		nativeName: "Portugues (Brasil)",
-		countryCode: "br",
-		dir: "ltr",
-	}
 }
 
 /**

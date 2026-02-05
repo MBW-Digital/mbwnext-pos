@@ -11,7 +11,7 @@
 
 /* Apply Saudi Riyal symbol font to body for currency support */
 body {
-	font-family: "SaudiRiyalSymbol", "Inter", sans-serif;
+	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", "SaudiRiyalSymbol", sans-serif;
 }
 
 /* Ensure all text elements inherit the font stack with Saudi Riyal support */

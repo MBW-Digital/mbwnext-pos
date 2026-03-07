@@ -172,11 +172,19 @@ export function useInvoice() {
 	})
 
 	// Actions
-	function addItem(item, quantity = 1) {
+	/**
+	 * @param {Object} item - Item to add
+	 * @param {number} quantity - Quantity
+	 * @param {{ merge?: boolean }} options - merge: false = always add as new line (do not merge with existing)
+	 */
+	function addItem(item, quantity = 1, options = {}) {
 		const itemUom = item.uom || item.stock_uom
-		const existingItem = invoiceItems.value.find(
-			(i) => i.item_code === item.item_code && i.uom === itemUom,
-		)
+		const shouldMerge = options.merge !== false
+		const existingItem = shouldMerge
+			? invoiceItems.value.find(
+					(i) => i.item_code === item.item_code && i.uom === itemUom,
+			  )
+			: null
 
 		if (existingItem) {
 			// Store old values before update for incremental cache adjustment

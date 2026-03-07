@@ -172,7 +172,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const hasCustomer = computed(() => !!customer.value)
 
 	// Actions
-	function addItem(item, qty = 1, autoAdd = false, currentProfile = null) {
+	/**
+	 * @param {Object} item - Item to add
+	 * @param {number} qty - Quantity
+	 * @param {boolean} autoAdd - Skip stock validation
+	 * @param {Object|null} currentProfile - POS profile
+	 * @param {{ merge?: boolean }} options - merge: false = add as new line each time (for per-line service items)
+	 */
+	function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
 		// Check stock availability before adding to cart
 		// Skip validation for batch/serial items - they have their own validation in the dialog
 		// Check for stock items AND Product Bundles (bundles now have calculated stock)
@@ -213,7 +220,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		// Add item to cart - no toast notification for performance
-		addItemToInvoice(item, qty)
+		addItemToInvoice(item, qty, options)
 	}
 
 	function clearCart() {

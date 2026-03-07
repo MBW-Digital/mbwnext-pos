@@ -999,6 +999,125 @@
 									</div>
 								</div>
 							</div>
+
+							<!-- Inline Item Discount Controls -->
+							<div
+								v-if="settingsStore.allowItemDiscount"
+								class="mt-1 flex items-center justify-between gap-1 text-[10px] sm:text-xs text-gray-600"
+								@click.stop
+							>
+								<div class="flex items-center gap-1.5 flex-1">
+									<span class="hidden sm:inline font-medium text-gray-500">
+										{{ __("Discount") }}:
+									</span>
+									<!-- Discount Type -->
+									<select
+										class="h-6 sm:h-7 border border-gray-300 rounded-lg px-1.5 bg-white text-[10px] sm:text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+										:value="getInlineDiscountType(item)"
+										@change="
+											($event) => {
+												const type = $event.target.value;
+												setInlineDiscountType(item, type);
+												const updates =
+													type === 'percentage'
+														? {
+																discount_percentage: item.discount_percentage || 0,
+																discount_amount: 0,
+														  }
+														: {
+																discount_percentage: 0,
+																discount_amount: item.discount_amount || 0,
+														  };
+												cartStore.updateItemDetails(
+													item.item_code,
+													updates,
+													item.uom || item.stock_uom
+												);
+											}
+										"
+									>
+										<option value="percentage">
+											{{ __("Percentage (%)") }}
+										</option>
+										<option value="amount">
+											{{ __("Amount") }}
+										</option>
+									</select>
+
+									<!-- Discount Value -->
+									<div class="relative flex-1 max-w-[120px] sm:max-w-[150px]">
+										<input
+											type="number"
+											min="0"
+											step="0.01"
+											class="w-full h-6 sm:h-7 border border-gray-300 rounded-lg ps-1.5 pe-5 text-[10px] sm:text-xs text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
+											:value="
+												getInlineDiscountType(item) === 'percentage'
+													? item.discount_percentage || ''
+													: item.discount_amount || ''
+											"
+											@change="
+												($event) => {
+													const raw = Number.parseFloat($event.target.value || '0');
+													const value = isNaN(raw) || raw < 0 ? 0 : raw;
+													const type = getInlineDiscountType(item);
+													const updates =
+														type === 'percentage'
+															? {
+																	discount_percentage: value,
+																	discount_amount: 0,
+															  }
+															: {
+																	discount_percentage: 0,
+																	discount_amount: value,
+															  };
+													cartStore.updateItemDetails(
+														item.item_code,
+														updates,
+														item.uom || item.stock_uom
+													);
+												}
+											"
+										/>
+										<span
+											class="absolute inset-y-0 end-1.5 flex items-center text-[9px] sm:text-[10px] text-gray-400 pointer-events-none"
+										>
+											{{
+												getInlineDiscountType(item) === 'percentage' ? '%' : ''
+											}}
+										</span>
+									</div>
+								</div>
+
+								<!-- Discount amount preview -->
+								<div
+									v-if="item.discount_amount && item.discount_amount > 0"
+									class="flex items-center gap-1 text-[10px] sm:text-xs text-red-600 font-semibold"
+								>
+									<span>-{{ formatCurrency(item.discount_amount) }}</span>
+								</div>
+							</div>
+
+							<!-- Dịch vụ làm nóng lạnh (trong khung item, giống Discount) -->
+							<div
+								v-if="item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')"
+								class="mt-1 flex items-center justify-between gap-1 text-[10px] sm:text-xs text-gray-600"
+								@click.stop
+							>
+								<span class="hidden sm:inline font-medium text-gray-500">
+									{{ __("Dịch vụ làm nóng lạnh") }}:
+								</span>
+								<label class="flex items-center gap-1.5 cursor-pointer select-none">
+									<input
+										type="checkbox"
+										:checked="isColdStorageCheckedForItem(index)"
+										@change="toggleColdStorageForItem(index, $event.target.checked, item.quantity)"
+										class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+										:aria-label="__('Add hot/cold service for this item')"
+									/>
+									<span class="text-[10px] sm:text-xs text-gray-700">{{ __("Thêm") }}</span>
+								</label>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -1242,6 +1361,11 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
+	/** Item code for dịch vụ làm nóng lạnh (to hide this row on that item's card). */
+	coldStorageFeeItemCode: {
+		type: String,
+		default: "Phí bảo quản lạnh",
+	},
 });
 
 /**
@@ -1270,6 +1394,8 @@ const emit = defineEmits([
 	"show-history", // () - Show invoice history
 	"show-return", // () - Open return invoice dialog
 	"close-shift", // () - Close current shift
+	"add-cold-storage-fee-line", // (count: number) - Add count service lines (theo số lượng item)
+	"remove-cold-storage-fee-line", // (count: number) - Remove count service lines
 	// "create-sales-order", // () - Create Sales Order // Removed as per instruction
 ]);
 
@@ -1295,6 +1421,9 @@ const selectedItem = ref(null); // Item being edited
 
 // UOM dropdown state - tracks which item's UOM dropdown is open (by item_code)
 const openUomDropdown = ref(null);
+
+// Inline discount type state per item (percentage/amount)
+const inlineDiscountTypes = ref({});
 
 /**
  * ============================================================================
@@ -1374,6 +1503,46 @@ watch(
  * @returns {Number} Count of applied offers
  */
 const appliedOfferCount = computed(() => (props.appliedOffers || []).length);
+
+const coldStorageFeeItemCode = computed(
+	() => props.coldStorageFeeItemCode || "Phí bảo quản lạnh"
+);
+/** Tổng số lượng dịch vụ (một dòng, cộng quantity). */
+const coldStorageServiceLineCount = computed(() => {
+	const code = coldStorageFeeItemCode.value;
+	return (props.items || [])
+		.filter((i) => i.item_code === code)
+		.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+});
+
+/** Số dòng dịch vụ "gán" cho item tại index (phân bổ theo thứ tự). */
+function getColdStorageShare(index) {
+	const code = coldStorageFeeItemCode.value;
+	const items = props.items || [];
+	let remaining = coldStorageServiceLineCount.value;
+	for (let i = 0; i < items.length; i++) {
+		if (items[i].item_code === code) continue;
+		const qty = Math.max(0, Math.floor(Number(items[i].quantity) || 0));
+		const share = Math.min(qty, remaining);
+		remaining -= share;
+		if (i === index) return share;
+	}
+	return 0;
+}
+
+function isColdStorageCheckedForItem(index) {
+	return getColdStorageShare(index) > 0;
+}
+
+function toggleColdStorageForItem(index, checked, quantity) {
+	const qty = Math.max(0, Math.floor(Number(quantity) || 0));
+	if (qty <= 0) return;
+	if (checked) {
+		emit("add-cold-storage-fee-line", qty);
+	} else {
+		emit("remove-cold-storage-fee-line", qty);
+	}
+}
 
 /**
  * Pre-computed customer lookup map for O(1) access by ID.
@@ -1771,6 +1940,38 @@ function handleQuantityBlur(item) {
 			emit("update-quantity", item.item_code, roundedQty, item.uom);
 		}
 	}
+}
+
+// Helper to build unique key for inline discount state
+function getInlineDiscountKey(item) {
+	return `${item.item_code}::${item.uom || item.stock_uom || ""}`;
+}
+
+// Get inline discount type for an item (percentage/amount)
+function getInlineDiscountType(item) {
+	const key = getInlineDiscountKey(item);
+	const current = inlineDiscountTypes.value[key];
+	if (current === "percentage" || current === "amount") {
+		return current;
+	}
+
+	// Derive from item data when not set
+	const derived =
+		item.discount_amount && item.discount_amount > 0 ? "amount" : "percentage";
+	inlineDiscountTypes.value = {
+		...inlineDiscountTypes.value,
+		[key]: derived,
+	};
+	return derived;
+}
+
+// Update inline discount type for an item
+function setInlineDiscountType(item, type) {
+	const key = getInlineDiscountKey(item);
+	inlineDiscountTypes.value = {
+		...inlineDiscountTypes.value,
+		[key]: type === "amount" ? "amount" : "percentage",
+	};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

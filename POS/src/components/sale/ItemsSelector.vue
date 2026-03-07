@@ -82,8 +82,20 @@
 						]"
 						:aria-label="__('Search items')"
 					/>
-					<!-- Barcode Scan Icon and Auto-Add Toggle -->
+					<!-- Camera Scan + Barcode Scanner + Auto-Add Toggle -->
 					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
+						<button
+							@click="showCameraBarcodeDialog = true"
+							class="p-1 sm:p-1.5 rounded transition-[background-color] duration-75 touch-manipulation hover:bg-gray-100 active:bg-gray-200 text-gray-600"
+							:title="__('Scan barcode with camera')"
+							:aria-label="__('Scan barcode with camera')"
+						>
+							<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 13v7a2 2 0 01-2 2H7a2 2 0 01-2-2v-7"/>
+							</svg>
+						</button>
 						<button
 							@click="toggleBarcodeScanner"
 							:class="[
@@ -277,6 +289,29 @@
 				style="min-height: 0;"
 			>
 				<div class="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5 sm:gap-2.5">
+					<!-- Ô dịch vụ làm nóng lạnh (cùng kiểu ô item) -->
+					<button
+						type="button"
+						@click="$emit('add-cold-storage-fee-line')"
+						:class="[
+							'group relative bg-white border border-gray-200 rounded-lg p-1.5 sm:p-2.5 touch-manipulation transition-[border-color,box-shadow] duration-100 cursor-pointer hover:border-blue-400 hover:shadow-md text-left w-full',
+						]"
+						:title="__('Add hot/cold service to cart')"
+					>
+						<div class="relative aspect-square bg-gray-100 rounded-md mb-1.5 sm:mb-2 overflow-hidden flex items-center justify-center">
+							<svg class="h-8 w-8 sm:h-10 sm:w-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+							</svg>
+						</div>
+						<div class="min-w-0">
+							<h3 class="text-[10px] sm:text-xs font-semibold text-gray-900 truncate mb-0.5 leading-tight">
+								{{ __("Dịch vụ làm nóng lạnh") }}
+							</h3>
+							<p class="text-[9px] sm:text-[10px] text-blue-600 font-semibold leading-tight">
+								+ {{ __("Add") }}
+							</p>
+						</div>
+					</button>
 					<div
 						v-for="item in paginatedItems"
 						:key="item.item_code"
@@ -511,6 +546,31 @@
 						</tr>
 					</thead>
 					<tbody class="bg-white divide-y divide-gray-200">
+						<!-- Dòng dịch vụ làm nóng lạnh (cùng kiểu ô item) -->
+						<tr
+							@click="$emit('add-cold-storage-fee-line')"
+							class="group cursor-pointer hover:bg-blue-50 hover:shadow-md transition-[background-color,box-shadow] duration-100 touch-manipulation active:bg-blue-100"
+							:title="__('Add hot/cold service to cart')"
+						>
+							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[50px] sm:w-[60px]">
+								<div class="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded flex items-center justify-center">
+									<svg class="h-4 w-4 sm:h-5 sm:w-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+									</svg>
+								</div>
+							</td>
+							<td class="px-2 sm:px-3 py-2 max-w-[120px] sm:max-w-[180px] md:max-w-[200px]">
+								<div class="text-xs sm:text-sm font-medium text-gray-900 truncate">
+									{{ __("Dịch vụ làm nóng lạnh") }}
+								</div>
+							</td>
+							<td class="hidden sm:table-cell px-2 sm:px-3 py-2 whitespace-nowrap sm:max-w-[150px]">
+								<div class="text-xs sm:text-sm text-blue-600 font-semibold">+ {{ __("Add") }}</div>
+							</td>
+							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[70px] sm:w-[100px]">—</td>
+							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[70px] sm:w-[100px]">—</td>
+							<td class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]">—</td>
+						</tr>
 						<tr
 							v-for="item in paginatedItems"
 							:key="item.item_code"
@@ -707,10 +767,17 @@
 		:uom="warehouseDialogItem.uom"
 		:company="warehouseDialogItem.company"
 	/>
+
+	<!-- Camera Barcode Scanner Dialog -->
+	<CameraBarcodeDialog
+		v-model="showCameraBarcodeDialog"
+		@barcode="onCameraBarcodeDetected"
+	/>
 </template>
 
 <script setup>
 import LazyImage from "@/components/common/LazyImage.vue"
+import CameraBarcodeDialog from "@/components/sale/CameraBarcodeDialog.vue"
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue"
 import { useItemSearchStore } from "@/stores/itemSearch"
 import { usePOSSettingsStore } from "@/stores/posSettings"
@@ -738,7 +805,7 @@ const props = defineProps({
 	},
 })
 
-const emit = defineEmits(["item-selected"])
+const emit = defineEmits(["item-selected", "add-cold-storage-fee-line"])
 
 // Use composables
 const { getStockStatus } = useStock()
@@ -779,6 +846,9 @@ const showSortDropdown = ref(false) // Sort dropdown visibility
 // Warehouse availability dialog state
 const showWarehouseDialog = ref(false)
 const warehouseDialogItem = ref(null)
+
+// Camera barcode scanner dialog
+const showCameraBarcodeDialog = ref(false)
 
 // Infinite scroll refs
 const gridScrollContainer = ref(null)
@@ -1208,6 +1278,12 @@ async function handleBarcodeSearch(forceAutoAdd = false) {
 			showWarning(__('Multiple Items Found: {0} items match. Please select one.', [filteredItems.value.length]))
 		}
 	}
+}
+
+function onCameraBarcodeDetected(barcode) {
+	if (!barcode || !barcode.trim()) return
+	itemStore.setSearchTerm(barcode.trim())
+	handleBarcodeSearch(true)
 }
 
 function toggleBarcodeScanner() {

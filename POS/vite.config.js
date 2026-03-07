@@ -71,11 +71,11 @@ export default defineConfig({
 			registerType: "autoUpdate",
 			includeAssets: ["favicon.png", "icon.svg", "icon-maskable.svg"],
 			manifest: {
-				name: "POSNext",
-				short_name: "POSNext",
+				name: "MBW Next POS",
+				short_name: "MBW Next POS",
 				description:
 					"Point of Sale system with real-time billing, stock management, and offline support",
-				theme_color: "#4F46E5",
+				theme_color: "#c4161c",
 				background_color: "#ffffff",
 				display: "standalone",
 				scope: "/assets/pos_next/pos/",
@@ -246,7 +246,7 @@ export default defineConfig({
 		port: 8080,
 		proxy: {
 			"^/(app|api|assets|files|printview)": {
-				target: "http://127.0.0.1:8016",
+				target: "http://127.0.0.1:8040",
 				ws: true,
 				changeOrigin: true,
 				secure: false,
@@ -257,7 +257,7 @@ export default defineConfig({
 					const isLocalhost =
 						site_name === "localhost" || site_name === "127.0.0.1"
 					const targetHost = isLocalhost ? "127.0.0.1" : site_name
-					return `http://${targetHost}:8016`
+					return `http://${targetHost}:8040`
 				},
 			},
 		},

@@ -41,7 +41,7 @@
 			</div>
 		</div>
 
-		<!-- Search Bar with Barcode Scanner and View Controls -->
+		<!-- Search Bar with Camera Scan, Barcode Scanner and View Controls -->
 		<div class="px-1.5 sm:px-3 py-1.5 sm:py-2 bg-white border-b border-gray-200">
 			<div class="flex items-center gap-1 sm:gap-2">
 				<div class="flex-1 relative min-w-0">
@@ -82,20 +82,8 @@
 						]"
 						:aria-label="__('Search items')"
 					/>
-					<!-- Camera Scan + Barcode Scanner + Auto-Add Toggle -->
+					<!-- Barcode Scanner + Auto-Add Toggle (inside search input) -->
 					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
-						<button
-							@click="showCameraBarcodeDialog = true"
-							class="p-1 sm:p-1.5 rounded transition-[background-color] duration-75 touch-manipulation hover:bg-gray-100 active:bg-gray-200 text-gray-600"
-							:title="__('Scan barcode with camera')"
-							:aria-label="__('Scan barcode with camera')"
-						>
-							<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 13v7a2 2 0 01-2 2H7a2 2 0 01-2-2v-7"/>
-							</svg>
-						</button>
 						<button
 							@click="toggleBarcodeScanner"
 							:class="[
@@ -129,6 +117,18 @@
 						</button>
 					</div>
 				</div>
+				<!-- Camera scan button between search and view mode -->
+				<button
+					@click="showCameraBarcodeDialog = true"
+					class="p-1.5 sm:p-2 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white shadow-sm flex-shrink-0 transition-colors touch-manipulation"
+					:title="__('Scan barcode with camera')"
+					:aria-label="__('Scan barcode with camera')"
+				>
+					<svg class="w-4 h-4 sm:w-4.5 sm:h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+					</svg>
+				</button>
 				<div class="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
 					<button
 						@click="setViewMode('grid')"

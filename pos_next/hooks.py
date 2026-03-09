@@ -319,3 +319,11 @@ scheduler_events = {
 
 
 website_route_rules = [{'from_route': '/pos/<path:app_path>', 'to_route': 'pos'},]
+
+
+fixtures = [
+    {
+        "doctype": "Custom Field",
+        "filters": [["module", "in", ("POS Next")]]
+    },
+]

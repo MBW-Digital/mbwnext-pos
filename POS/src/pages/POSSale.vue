@@ -465,6 +465,53 @@
 					<p class="mt-2 text-sm text-gray-500">
 						{{ __("Please open a shift to start making sales") }}
 					</p>
+					<!-- Trạng thái chấm công + nút thao tác -->
+					<div class="mt-4 space-y-3">
+						<div
+							class="inline-flex items-center px-3 py-1 rounded-full text-xs"
+							:class="[
+								attendanceState === 'checked_in'
+									? 'bg-green-50 text-green-700'
+									: attendanceState === 'checked_out'
+										? 'bg-gray-100 text-gray-700'
+										: 'bg-red-50 text-red-700',
+							]"
+						>
+							<span
+								class="w-2 h-2 rounded-full me-2"
+								:class="[
+									attendanceState === 'checked_in'
+										? 'bg-green-500'
+										: attendanceState === 'checked_out'
+											? 'bg-gray-400'
+											: 'bg-red-500',
+								]"
+							/>
+							<span class="font-medium">
+								{{ attendanceStatusLabel }}
+							</span>
+						</div>
+						<div class="flex items-center justify-center gap-3">
+							<Button
+								v-if="showCheckInButton"
+								variant="outline"
+								theme="gray"
+								:loading="isAttendanceActionLoading"
+								@click="handleCheckIn"
+							>
+								{{ __("Check In") }}
+							</Button>
+							<Button
+								v-if="showCheckOutButton"
+								variant="outline"
+								theme="gray"
+								:loading="isAttendanceActionLoading"
+								@click="handleCheckOut"
+							>
+								{{ __("Check Out") }}
+							</Button>
+						</div>
+					</div>
 					<Button
 						variant="solid"
 						theme="blue"
@@ -704,6 +751,51 @@
 							@click="confirmClearCart"
 						>
 							{{ __("Clear All") }}
+						</Button>
+					</div>
+				</template>
+			</Dialog>
+
+			<!-- Dialog chọn ca làm việc cho chấm công -->
+			<Dialog
+				v-model="showShiftDialog"
+				:options="{ title: __('Select Shift'), size: 'xs' }"
+			>
+				<template #body-content>
+					<div class="py-3 space-y-3">
+						<p class="text-sm text-gray-600">
+							{{ __("Please select a shift for attendance.") }}
+						</p>
+						<select
+							v-model="tempSelectedShiftType"
+							class="mt-1 block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
+						>
+							<option
+								v-for="shift in shiftTypes"
+								:key="shift.name"
+								:value="shift.name"
+							>
+								{{ shift.name }}
+							</option>
+						</select>
+					</div>
+				</template>
+				<template #actions>
+					<div class="flex gap-2 w-full">
+						<Button
+							class="flex-1"
+							variant="subtle"
+							@click="cancelShiftDialog"
+						>
+							{{ __("Cancel") }}
+						</Button>
+						<Button
+							class="flex-1"
+							variant="solid"
+							theme="blue"
+							@click="confirmShiftSelection"
+						>
+							{{ __("Confirm") }}
 						</Button>
 					</div>
 				</template>
@@ -1116,6 +1208,208 @@ const showInvoiceManagement = ref(false);
 
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
+
+// Trạng thái chấm công (check-in / check-out)
+const attendanceStatus = ref(null);
+const shiftTypes = ref([]);
+const showShiftDialog = ref(false);
+const tempSelectedShiftType = ref("");
+const pendingAttendanceAction = ref(null);
+
+const attendanceStatusResource = createResource({
+	url: "pos_next.api.attendance.get_today_status",
+	auto: false,
+	onSuccess(data) {
+		attendanceStatus.value = data;
+	},
+});
+
+const attendanceCheckInResource = createResource({
+	url: "pos_next.api.attendance.check_in",
+	auto: false,
+	onSuccess(data) {
+		attendanceStatus.value = data;
+		showSuccess(__("Check-in successful"));
+	},
+	onError(error) {
+		log.error("Attendance check-in error:", error);
+		showError(parseError(error));
+	},
+});
+
+const attendanceCheckOutResource = createResource({
+	url: "pos_next.api.attendance.check_out",
+	auto: false,
+	onSuccess(data) {
+		attendanceStatus.value = data;
+		showSuccess(__("Check-out successful"));
+	},
+	onError(error) {
+		log.error("Attendance check-out error:", error);
+		showError(parseError(error));
+	},
+});
+
+const attendanceState = computed(
+	() => attendanceStatus.value?.state || "not_marked"
+);
+
+const attendanceStatusLabel = computed(() => {
+	if (attendanceState.value === "checked_in") {
+		return __("You have checked in today");
+	}
+	if (attendanceState.value === "checked_out") {
+		return __("You have checked out today");
+	}
+	return __("You have not checked in today");
+});
+
+const showCheckInButton = computed(
+	() =>
+		attendanceState.value === "not_marked" ||
+		attendanceState.value === "checked_out"
+);
+
+const showCheckOutButton = computed(
+	() => attendanceState.value === "checked_in"
+);
+
+const isAttendanceActionLoading = computed(
+	() =>
+		attendanceCheckInResource.loading || attendanceCheckOutResource.loading
+);
+
+const currentShiftName = computed(() => {
+	if (!shiftTypes.value.length) {
+		return null;
+	}
+
+	const now = new Date();
+	const minutesNow = now.getHours() * 60 + now.getMinutes();
+
+	// Ưu tiên ca có khoảng thời gian bao phủ thời điểm hiện tại
+	for (const shift of shiftTypes.value) {
+		const start = shift.start_time;
+		const end = shift.end_time;
+
+		if (!start || !end) continue;
+
+		const [sh, sm] = String(start).split(":").map((v) => parseInt(v || "0", 10));
+		const [eh, em] = String(end).split(":").map((v) => parseInt(v || "0", 10));
+
+		const startMinutes = sh * 60 + sm;
+		const endMinutes = eh * 60 + em;
+
+		if (minutesNow >= startMinutes && minutesNow <= endMinutes) {
+			return shift.name;
+		}
+	}
+
+	// Nếu không khớp ca nào theo giờ, dùng ca đầu tiên làm mặc định
+	return shiftTypes.value[0].name;
+});
+
+function isShiftActiveNow(shiftName) {
+	if (!shiftName || !shiftTypes.value.length) {
+		return false;
+	}
+
+	const shift = shiftTypes.value.find((s) => s.name === shiftName);
+	if (!shift || !shift.start_time || !shift.end_time) {
+		// Nếu ca không có giờ bắt đầu/kết thúc rõ ràng thì không ràng buộc
+		return true;
+	}
+
+	const now = new Date();
+	const minutesNow = now.getHours() * 60 + now.getMinutes();
+
+	const [sh, sm] = String(shift.start_time)
+		.split(":")
+		.map((v) => parseInt(v || "0", 10));
+	const [eh, em] = String(shift.end_time)
+		.split(":")
+		.map((v) => parseInt(v || "0", 10));
+
+	const startMinutes = sh * 60 + sm;
+	const endMinutes = eh * 60 + em;
+
+	return minutesNow >= startMinutes && minutesNow <= endMinutes;
+}
+
+function openShiftDialog(action) {
+	pendingAttendanceAction.value = action;
+
+	// Gán giá trị mặc định là ca hiện tại (nếu có) hoặc ca đầu tiên
+	if (!tempSelectedShiftType.value) {
+		const autoShift = currentShiftName.value;
+		if (autoShift) {
+			tempSelectedShiftType.value = autoShift;
+		} else if (shiftTypes.value.length > 0) {
+			tempSelectedShiftType.value = shiftTypes.value[0].name;
+		}
+	}
+
+	showShiftDialog.value = true;
+}
+
+async function handleCheckIn() {
+	// Luôn mở popup chọn ca khi chấm công vào
+	if (!shiftTypes.value.length) {
+		showWarning(
+			__("No shift types found. Please configure Shift Type first.")
+		);
+		return;
+	}
+	openShiftDialog("check_in");
+}
+
+async function handleCheckOut() {
+	// Mở popup xác nhận ca khi chấm công ra
+	openShiftDialog("check_out");
+}
+
+function cancelShiftDialog() {
+	showShiftDialog.value = false;
+	pendingAttendanceAction.value = null;
+}
+
+async function confirmShiftSelection() {
+	if (!tempSelectedShiftType.value) {
+		showWarning(__("Please select a shift."));
+		return;
+	}
+
+	const chosenShift = tempSelectedShiftType.value;
+
+	// Chặn chấm công nếu ca không khớp giờ hiện tại
+	if (!isShiftActiveNow(chosenShift)) {
+		showWarning(
+			__(
+				"The current time is not within the selected shift time range. Please choose a valid shift."
+			)
+		);
+		return;
+	}
+
+	showShiftDialog.value = false;
+
+	try {
+		if (pendingAttendanceAction.value === "check_in") {
+			await attendanceCheckInResource.submit({
+				pos_profile: shiftStore.profileName,
+				shift: chosenShift,
+			});
+		} else if (pendingAttendanceAction.value === "check_out") {
+			await attendanceCheckOutResource.submit({
+				pos_profile: shiftStore.profileName,
+			});
+		}
+	} catch (error) {
+		log.error("confirmShiftSelection error:", error);
+	} finally {
+		pendingAttendanceAction.value = null;
+	}
+}
 const selectedInvoiceForView = ref(null);
 
 // Invoice history data (used by InvoiceManagement component)
@@ -1187,6 +1481,23 @@ onMounted(async () => {
 		updateLayoutBounds();
 	};
 	window.addEventListener("resize", handleResize, { passive: true });
+
+	// Load today's attendance status for the current user
+	try {
+		await attendanceStatusResource.fetch();
+	} catch (error) {
+		log.error("Error loading attendance status:", error);
+	}
+
+	// Load available shift types (dùng nội bộ để tự gán ca khi chấm công)
+	try {
+		const response = await call("pos_next.api.attendance.get_shift_types", {});
+		const data = response?.message || response || [];
+		shiftTypes.value = Array.isArray(data) ? data : [];
+	} catch (error) {
+		log.error("Error loading shift types:", error);
+		shiftTypes.value = [];
+	}
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {

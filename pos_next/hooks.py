@@ -204,6 +204,7 @@ doc_events = {
 		"validate": "pos_next.validations.validate_item"
 	},
 	"Customer": {
+		"before_insert": "pos_next.api.customers.set_customer_code_if_mandatory",
 		"after_insert": "pos_next.api.customers.auto_assign_loyalty_program"
 	},
 	"Sales Invoice": {

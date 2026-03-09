@@ -3,8 +3,57 @@ POS Next Customer API
 Handles customer search, creation, and management for POS operations
 """
 
+import re
+
 import frappe
 from frappe import _
+
+
+VN_COUNTRY_CODE = "84"
+
+
+def _phone_to_vn_customer_code(mobile_no):
+    """
+    Convert phone number to Vietnam-style customer_code: 84 + digits (e.g. 84862598791).
+    Strips non-digits, removes leading 0, prefixes 84 if not present.
+    """
+    if not mobile_no:
+        return None
+    digits = re.sub(r"\D", "", str(mobile_no).strip())
+    if not digits:
+        return None
+    if digits.startswith(VN_COUNTRY_CODE):
+        return digits
+    if digits.startswith("0"):
+        digits = digits[1:]
+    return VN_COUNTRY_CODE + digits
+
+
+def _get_unique_customer_code(customer_name, mobile_no=None):
+    """
+    Generate a unique customer_code when the field is mandatory.
+    Prefers mobile_no: format 84 + digits (VN), e.g. 84862598791.
+    Fallback: unique code from customer_name if no phone or phone invalid.
+    """
+    code = _phone_to_vn_customer_code(mobile_no) if mobile_no else None
+    if code:
+        candidate = code
+        suffix = 0
+        while frappe.db.exists("Customer", {"customer_code": candidate}):
+            suffix += 1
+            candidate = f"{code}-{suffix}"
+        return candidate
+
+    base = (customer_name or "").strip()
+    base = re.sub(r"[^a-zA-Z0-9\u00C0-\u024F\s-]", "", base)
+    base = re.sub(r"[-\s]+", "-", base).strip("-") or "CUST"
+    base = base[:50]
+    candidate = base
+    suffix = 0
+    while frappe.db.exists("Customer", {"customer_code": candidate}):
+        suffix += 1
+        candidate = f"{base}-{suffix}" if suffix <= 9999 else f"{base}-{frappe.generate_hash(length=6)}"
+    return candidate
 
 
 @frappe.whitelist()
@@ -83,18 +132,22 @@ def create_customer(customer_name, mobile_no=None, email_id=None, customer_group
     if company:
         loyalty_program = get_default_loyalty_program(company)
 
-    customer = frappe.get_doc(
-        {
-            "doctype": "Customer",
-            "customer_name": customer_name,
-            "customer_type": "Individual",
-            "customer_group": customer_group or "Individual",
-            "territory": territory or "All Territories",
-            "mobile_no": mobile_no or "",
-            "email_id": email_id or "",
-            "loyalty_program": loyalty_program,
-        }
-    )
+    doc_dict = {
+        "doctype": "Customer",
+        "customer_name": customer_name,
+        "customer_type": "Individual",
+        "customer_group": customer_group or "Individual",
+        "territory": territory or "All Territories",
+        "mobile_no": mobile_no or "",
+        "email_id": email_id or "",
+        "loyalty_program": loyalty_program,
+    }
+
+    # Set customer_code if the custom field exists and is mandatory (e.g. MBWNext Advanced Selling)
+    if frappe.get_meta("Customer").has_field("customer_code"):
+        doc_dict["customer_code"] = _get_unique_customer_code(customer_name, mobile_no=mobile_no)
+
+    customer = frappe.get_doc(doc_dict)
 
     customer.insert()
 
@@ -157,6 +210,21 @@ def auto_assign_loyalty_program(doc, method=None):
         frappe.logger().info(
             f"Auto-assigned loyalty program '{loyalty_program}' to customer '{doc.name}'"
         )
+
+
+def set_customer_code_if_mandatory(doc, method=None):
+    """
+    Before_insert hook: set customer_code when the custom field exists and is mandatory
+    and the value is empty. Uses mobile_no + mã vùng VN (84), e.g. 84862598791; else fallback from customer_name.
+    """
+    if not frappe.get_meta("Customer").has_field("customer_code"):
+        return
+    if doc.get("customer_code"):
+        return
+    doc.customer_code = _get_unique_customer_code(
+        doc.customer_name or "CUST",
+        mobile_no=doc.get("mobile_no"),
+    )
 
 
 def get_default_loyalty_program_from_settings():

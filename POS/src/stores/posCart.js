@@ -260,6 +260,62 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		writeOffAmount.value = amount || 0
 	}
 
+	/**
+	 * Build a lightweight snapshot of the current cart for tab switching.
+	 * This snapshot is kept entirely on the client and is NOT persisted.
+	 */
+	function getSnapshot() {
+		return {
+			items: toRaw(invoiceItems.value || []),
+			customer: toRaw(customer.value || null),
+			appliedOffers: toRaw(appliedOffers.value || []),
+			appliedCoupon: toRaw(appliedCoupon.value || null),
+			additionalDiscount: additionalDiscount.value || 0,
+			taxInclusive: !!taxInclusive.value,
+			targetDoctype: targetDoctype.value,
+			deliveryDate: deliveryDate.value || "",
+			writeOffAmount: writeOffAmount.value || 0,
+		}
+	}
+
+	/**
+	 * Restore cart state from a snapshot created by getSnapshot().
+	 * Existing cart will be cleared before loading the snapshot.
+	 */
+	function loadSnapshot(snapshot) {
+		if (!snapshot) {
+			clearCart()
+			return
+		}
+
+		// Cancel offer processing and clear current cart
+		debouncedProcessOffers.cancel()
+		offerQueue.cancel()
+		clearInvoiceCart()
+
+		customer.value = snapshot.customer || null
+		appliedOffers.value = snapshot.appliedOffers || []
+		appliedCoupon.value = snapshot.appliedCoupon || null
+		additionalDiscount.value = snapshot.additionalDiscount || 0
+		taxInclusive.value = !!snapshot.taxInclusive
+		targetDoctype.value = snapshot.targetDoctype || "Sales Invoice"
+		deliveryDate.value = snapshot.deliveryDate || ""
+		writeOffAmount.value = snapshot.writeOffAmount || 0
+
+		if (Array.isArray(snapshot.items)) {
+			for (const item of snapshot.items) {
+				// Use raw item data and quantity when restoring
+				const qty = item.quantity || 0
+				if (qty > 0) {
+					addItemToInvoice(item, qty, { merge: false })
+				}
+			}
+		}
+
+		// Rebuild offer snapshot after restoring cart
+		syncOfferSnapshot()
+	}
+
 	async function submitInvoice() {
 		if (invoiceItems.value.length === 0) {
 			showWarning(__("Cart is empty"))
@@ -1742,6 +1798,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		setWriteOffAmount,
 
 		// Utilities
+		getSnapshot,
+		loadSnapshot,
 		cancelPendingOfferProcessing: () => {
 			debouncedProcessOffers.cancel()
 			offerQueue.cancel()

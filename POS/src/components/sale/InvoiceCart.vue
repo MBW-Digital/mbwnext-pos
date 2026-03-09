@@ -1012,7 +1012,7 @@
 									</span>
 									<!-- Discount Type -->
 									<select
-										class="h-6 sm:h-7 border border-gray-300 rounded-lg px-1.5 bg-white text-[10px] sm:text-xs text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+										class="min-h-[28px] h-7 sm:min-h-[32px] sm:h-8 min-w-[140px] w-[140px] sm:min-w-[180px] sm:w-[180px] flex-shrink-0 border border-gray-300 rounded-lg pl-2 pr-7 py-0.5 bg-white text-[10px] sm:text-xs leading-tight text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
 										:value="getInlineDiscountType(item)"
 										@change="
 											($event) => {
@@ -1037,7 +1037,7 @@
 										"
 									>
 										<option value="percentage">
-											{{ __("Percentage (%)") }}
+											{{ __("Percent (%)") }}
 										</option>
 										<option value="amount">
 											{{ __("Amount") }}
@@ -1101,21 +1101,20 @@
 							<!-- Dịch vụ làm nóng lạnh (trong khung item, giống Discount) -->
 							<div
 								v-if="item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')"
-								class="mt-1 flex items-center justify-between gap-1 text-[10px] sm:text-xs text-gray-600"
+								class="mt-2 flex items-center gap-1.5 text-[10px] sm:text-xs text-gray-600"
 								@click.stop
 							>
-								<span class="hidden sm:inline font-medium text-gray-500">
-									{{ __("Dịch vụ làm nóng lạnh") }}:
-								</span>
 								<label class="flex items-center gap-1.5 cursor-pointer select-none">
 									<input
 										type="checkbox"
 										:checked="isColdStorageCheckedForItem(index)"
 										@change="toggleColdStorageForItem(index, $event.target.checked, item.quantity)"
-										class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+										class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
 										:aria-label="__('Add hot/cold service for this item')"
 									/>
-									<span class="text-[10px] sm:text-xs text-gray-700">{{ __("Thêm") }}</span>
+									<span class="font-medium text-gray-500">
+										{{ __("Dịch vụ làm nóng lạnh") }}
+									</span>
 								</label>
 							</div>
 						</div>

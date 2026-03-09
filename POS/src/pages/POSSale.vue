@@ -169,16 +169,56 @@
 			<!-- Main Content: Responsive Layout -->
 			<div
 				v-if="shiftStore.hasOpenShift"
-				class="flex-1 flex overflow-hidden relative"
+				class="flex-1 flex flex-col overflow-hidden relative"
 			>
-				<!-- Icon-Only Management Slider - Always Visible -->
-				<ManagementSlider @menu-clicked="handleManagementMenuClick" />
+				<!-- Invoice Tabs Bar -->
+				<div class="flex items-center justify-between px-2 sm:px-4 py-1.5 bg-white border-b border-gray-200 shadow-sm">
+					<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
+						<button
+							v-for="tab in invoiceTabsStore.tabs"
+							:key="tab.id"
+							@click="handleInvoiceTabClick(tab.id)"
+							:class="[
+								'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium border transition-all touch-manipulation whitespace-nowrap',
+								invoiceTabsStore.activeTabId === tab.id
+									? 'bg-red-600 text-white border-red-600 shadow-sm'
+									: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+							]"
+						>
+							<span>{{ tab.label }}</span>
+							<button
+								v-if="invoiceTabsStore.tabs.length > 1"
+								@click.stop="handleCloseInvoiceTab(tab.id)"
+								class="p-0.5 rounded hover:bg-red-100 hover:text-red-700"
+								:aria-label="__('Close tab')"
+							>
+								<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+								</svg>
+							</button>
+						</button>
+						<button
+							@click="handleAddInvoiceTab"
+							class="ml-1 flex items-center justify-center w-7 h-7 rounded-md border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 hover:text-red-600 hover:border-red-400 flex-shrink-0"
+							:disabled="invoiceTabsStore.tabs.length >= invoiceTabsStore.maxTabs"
+							:aria-label="__('New tab')"
+						>
+							<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+							</svg>
+						</button>
+					</div>
+				</div>
 
-				<!-- Main Content Container -->
-				<div
-					ref="containerRef"
-					class="flex-1 flex flex-col lg:flex-row overflow-hidden relative"
-				>
+				<!-- Icon-Only Management Slider - Always Visible -->
+				<div class="flex-1 flex overflow-hidden">
+					<ManagementSlider @menu-clicked="handleManagementMenuClick" />
+
+					<!-- Main Content Container -->
+					<div
+						ref="containerRef"
+						class="flex-1 flex flex-col lg:flex-row overflow-hidden relative"
+					>
 					<!-- Mobile Tab Navigation -->
 					<div
 						class="lg:hidden bg-white border-b border-gray-200 flex shadow-sm sticky top-0 z-[100]"
@@ -389,8 +429,9 @@
 						</div>
 					</button>
 
-					<!-- PWA Install Badge (Mobile Only) -->
-					<InstallAppBadge />
+						<!-- PWA Install Badge (Mobile Only) -->
+						<InstallAppBadge />
+					</div>
 				</div>
 			</div>
 
@@ -979,6 +1020,7 @@ import { useItemSearchStore } from "@/stores/itemSearch";
 import { useStockStore } from "@/stores/stock";
 // Pinia Stores
 import { usePOSCartStore } from "@/stores/posCart";
+import { useInvoiceTabsStore } from "@/stores/invoiceTabs";
 import { usePOSDraftsStore } from "@/stores/posDrafts";
 import { usePOSSettingsStore } from "@/stores/posSettings";
 import { usePOSShiftStore } from "@/stores/posShift";
@@ -988,6 +1030,7 @@ import { logger } from "@/utils/logger";
 
 // Initialize stores
 const cartStore = usePOSCartStore();
+const invoiceTabsStore = useInvoiceTabsStore();
 const shiftStore = usePOSShiftStore();
 const uiStore = usePOSUIStore();
 const offlineStore = usePOSSyncStore();
@@ -2112,6 +2155,50 @@ async function handleOptionSelected(option) {
 
 function handleCloseShift() {
 	uiStore.showCloseShiftDialog = true;
+}
+
+// ---------------------------------------------------------------------------
+// Invoice Tabs (multiple carts)
+// ---------------------------------------------------------------------------
+
+function saveActiveTabSnapshot() {
+	if (!invoiceTabsStore.activeTabId) return;
+	const snapshot = cartStore.getSnapshot();
+	invoiceTabsStore.updateTabSnapshot(invoiceTabsStore.activeTabId, snapshot);
+}
+
+function restoreTabSnapshot(tabId) {
+	const snapshot = invoiceTabsStore.getTabSnapshot(tabId);
+	if (snapshot) {
+		cartStore.loadSnapshot(snapshot);
+	} else {
+		cartStore.clearCart();
+	}
+}
+
+function handleAddInvoiceTab() {
+	saveActiveTabSnapshot();
+	cartStore.clearCart();
+	const newId = invoiceTabsStore.addTab();
+	invoiceTabsStore.setActiveTab(newId);
+}
+
+function handleInvoiceTabClick(tabId) {
+	if (tabId === invoiceTabsStore.activeTabId) return;
+	saveActiveTabSnapshot();
+	restoreTabSnapshot(tabId);
+	invoiceTabsStore.setActiveTab(tabId);
+}
+
+function handleCloseInvoiceTab(tabId) {
+	const isActive = tabId === invoiceTabsStore.activeTabId;
+	if (isActive) {
+		saveActiveTabSnapshot();
+	}
+	const nextActiveId = invoiceTabsStore.closeTab(tabId);
+	if (isActive) {
+		restoreTabSnapshot(nextActiveId);
+	}
 }
 
 function formatCurrency(amount) {

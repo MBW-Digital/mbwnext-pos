@@ -308,7 +308,6 @@
 								:cart-items="cartStore.invoiceItems"
 								:currency="shiftStore.profileCurrency"
 								@item-selected="handleItemSelected"
-								@add-cold-storage-fee-line="handleAddColdStorageFeeLine"
 							/>
 						</div>
 					</keep-alive>
@@ -1244,13 +1243,6 @@ const {
 // Initialize toast
 const { showSuccess, showError, showWarning } = useToast();
 
-// Item code dịch vụ làm nóng lạnh: lấy từ POS Profile (service_surcharge_item), fallback "Phí bảo quản lạnh"
-const serviceSurchargeItemCode = computed(
-	() =>
-		shiftStore.currentProfile?.service_surcharge_item ||
-		"Phí bảo quản lạnh"
-);
-
 // Initialize logger
 const log = logger.create("POSSale");
 
@@ -1259,6 +1251,13 @@ const { userName, userImage } = useUserData();
 
 // Locale composable for RTL support
 const { isRTL } = useLocale();
+
+// Item code dịch vụ làm nóng/lạnh: lấy từ POS Profile (service_surcharge_item), fallback "Phí bảo quản lạnh"
+const serviceSurchargeItemCode = computed(
+	() =>
+		shiftStore.currentProfile?.service_surcharge_item ||
+		'Phí bảo quản lạnh'
+);
 
 // Component refs
 const itemsSelectorRef = ref(null);
@@ -2237,29 +2236,36 @@ function handleShiftClosed() {
 async function handleAddColdStorageFeeLine(count = 1) {
 	const n = Math.max(0, Math.floor(Number(count) || 0));
 	if (n <= 0) return;
+
 	try {
 		const itemCode = serviceSurchargeItemCode.value;
 		if (!itemCode) return;
+
 		const itemDetails = await cartStore.getItemDetailsResource.submit({
 			item_code: itemCode,
 			pos_profile: shiftStore.profileName,
 			customer: cartStore.customer?.name || cartStore.customer,
 			qty: n,
 		});
+
 		if (!itemDetails || itemDetails.item_code !== itemCode) {
-			showError(__("Could not load item: {0}", [itemCode]));
+			showError(__('Could not load item: {0}', [itemCode]));
 			return;
 		}
+
 		const item = {
 			...itemDetails,
 			item_code: itemDetails.item_code || itemCode,
-			item_name: itemDetails.item_name || __("Dịch vụ làm nóng lạnh"),
+			item_name: itemDetails.item_name || __('Dịch vụ làm nóng lạnh'),
 		};
+
 		// Gộp vào một dòng: cộng số lượng (merge: true)
-		cartStore.addItem(item, n, true, shiftStore.currentProfile, { merge: true });
+		cartStore.addItem(item, n, true, shiftStore.currentProfile, {
+			merge: true,
+		});
 	} catch (error) {
-		log.error("Error adding service item:", error);
-		showError(__("Failed to add item. Check that the item exists."));
+		log.error('Error adding service item:', error);
+		showError(__('Failed to add item. Check that the item exists.'));
 	}
 }
 
@@ -2267,13 +2273,16 @@ function handleRemoveColdStorageFeeLine(count = 1) {
 	const n = Math.max(0, Math.floor(Number(count) || 0));
 	const itemCode = serviceSurchargeItemCode.value;
 	if (!itemCode) return;
+
 	const serviceLine = cartStore.invoiceItems.find(
 		(i) => i.item_code === itemCode
 	);
 	if (!serviceLine) return;
+
 	const currentQty = Number(serviceLine.quantity) || 0;
 	const newQty = Math.max(0, currentQty - n);
 	const uom = serviceLine.uom || serviceLine.stock_uom;
+
 	if (newQty <= 0) {
 		cartStore.removeItem(itemCode, uom);
 	} else {

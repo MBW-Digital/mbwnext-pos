@@ -246,7 +246,7 @@ export default defineConfig({
 		port: 8080,
 		proxy: {
 			"^/(app|api|assets|files|printview)": {
-				target: "http://127.0.0.1:8010",
+				target: "http://127.0.0.1:8040",
 				ws: true,
 				changeOrigin: true,
 				secure: false,
@@ -259,7 +259,7 @@ export default defineConfig({
 					const isNgrok = site_name.endsWith(".ngrok-free.app") || site_name.endsWith(".ngrok.io")
 					const isTunnel = site_name.endsWith(".loca.lt") || site_name.includes("localtunnel")
 					const targetHost = isLocalhost || isNgrok || isTunnel ? "127.0.0.1" : site_name
-					return `http://${targetHost}:8010`
+					return `http://${targetHost}:8040`
 				},
 			},
 		},

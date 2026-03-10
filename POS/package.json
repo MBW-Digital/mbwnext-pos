@@ -5,6 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"dev:ngrok": "ngrok http 8080",
+		"dev:tunnel": "lt --port 8080",
 		"build": "vite build --base=/assets/pos_next/pos/",
 		"preview": "vite preview",
 		"lint": "biome check .",
@@ -30,6 +32,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "1.9.4",
+		"localtunnel": "^2.0.2",
 		"@iconify-json/lucide": "^1.2.79",
 		"@vitejs/plugin-vue": "^5.1.4",
 		"@vitest/coverage-v8": "^2.1.8",

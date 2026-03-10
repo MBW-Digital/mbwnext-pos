@@ -465,7 +465,7 @@
 					<p class="mt-2 text-sm text-gray-500">
 						{{ __("Please open a shift to start making sales") }}
 					</p>
-					<!-- Trạng thái chấm công + nút thao tác -->
+					<!-- Trạng thái chấm công + nút thao tác (hình tròn, icon vân tay) -->
 					<div class="mt-4 space-y-3">
 						<div
 							class="inline-flex items-center px-3 py-1 rounded-full text-xs"
@@ -491,25 +491,66 @@
 								{{ attendanceStatusLabel }}
 							</span>
 						</div>
-						<div class="flex items-center justify-center gap-3">
-							<Button
+						<div class="flex items-center justify-center gap-8">
+							<button
 								v-if="showCheckInButton"
-								variant="outline"
-								theme="gray"
-								:loading="isAttendanceActionLoading"
+								type="button"
+								:disabled="isAttendanceActionLoading"
 								@click="handleCheckIn"
+								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-red-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
 							>
-								{{ __("Check In") }}
-							</Button>
-							<Button
+								<span
+									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 active:scale-[0.98] transition-all duration-200 border-2 border-red-100"
+								>
+									<!-- Icon đồng hồ (chấm công vào) -->
+									<svg
+										class="w-8 h-8"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										viewBox="0 0 24 24"
+										aria-hidden="true"
+									>
+										<circle cx="12" cy="12" r="9" />
+										<path d="M12 7v5l3 3" />
+									</svg>
+								</span>
+								<span class="text-sm font-semibold text-gray-800">
+									{{ __("Check In") }}
+								</span>
+							</button>
+							<button
 								v-if="showCheckOutButton"
-								variant="outline"
-								theme="gray"
-								:loading="isAttendanceActionLoading"
+								type="button"
+								:disabled="isAttendanceActionLoading"
 								@click="handleCheckOut"
+								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-gray-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
 							>
-								{{ __("Check Out") }}
-							</Button>
+								<span
+									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-gray-600 to-gray-700 text-white hover:from-gray-700 hover:to-gray-800 active:scale-[0.98] transition-all duration-200 border-2 border-gray-100"
+								>
+									<!-- Icon ra cửa / kết thúc ca -->
+									<svg
+										class="w-8 h-8"
+										fill="none"
+										stroke="currentColor"
+										stroke-width="2"
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										viewBox="0 0 24 24"
+										aria-hidden="true"
+									>
+										<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+										<polyline points="16 17 21 12 16 7" />
+										<line x1="21" y1="12" x2="9" y2="12" />
+									</svg>
+								</span>
+								<span class="text-sm font-semibold text-gray-800">
+									{{ __("Check Out") }}
+								</span>
+							</button>
 						</div>
 					</div>
 					<Button
@@ -751,6 +792,60 @@
 							@click="confirmClearCart"
 						>
 							{{ __("Clear All") }}
+						</Button>
+					</div>
+				</template>
+			</Dialog>
+
+			<!-- Dialog chụp ảnh chấm công (đính kèm Attendance) -->
+			<Dialog
+				v-model="showPhotoDialog"
+				:options="{ title: __('Attendance Photo'), size: 'sm' }"
+				@after-close="stopAttendancePhotoCamera"
+			>
+				<template #body-content>
+					<div class="py-3 space-y-3">
+						<p class="text-sm text-gray-600">
+							{{ __("Take a photo to save to the attendance record (optional).") }}
+						</p>
+						<div class="relative bg-gray-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center">
+							<video
+								ref="attendancePhotoVideoRef"
+								autoplay
+								playsinline
+								muted
+								class="absolute inset-0 w-full h-full object-cover object-center"
+							/>
+							<canvas ref="attendancePhotoCanvasRef" class="hidden" />
+							<div
+								v-if="attendancePhotoError"
+								class="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-sm p-4"
+							>
+								{{ attendancePhotoError }}
+							</div>
+						</div>
+					</div>
+				</template>
+				<template #actions>
+					<div class="flex gap-2 w-full">
+						<Button
+							class="flex-1"
+							variant="subtle"
+							:loading="attendancePhotoSkipping"
+							:disabled="attendancePhotoUploading"
+							@click="skipAttendancePhoto"
+						>
+							{{ __("Skip") }}
+						</Button>
+						<Button
+							class="flex-1"
+							variant="solid"
+							theme="blue"
+							:loading="attendancePhotoUploading"
+							:disabled="attendancePhotoSkipping"
+							@click="captureAndUploadAttendancePhoto"
+						>
+							{{ __("Take Photo") }}
 						</Button>
 					</div>
 				</template>
@@ -1104,7 +1199,7 @@ import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sy
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
 import { Button, Dialog, createResource } from "frappe-ui";
 import { call } from "@/utils/apiWrapper";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useToast } from "@/composables/useToast";
 
 import { useCustomerSearchStore } from "@/stores/customerSearch";
@@ -1214,6 +1309,16 @@ const attendanceStatus = ref(null);
 const shiftTypes = ref([]);
 const showShiftDialog = ref(false);
 const tempSelectedShiftType = ref("");
+
+// Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
+const showPhotoDialog = ref(false);
+const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
+const attendancePhotoVideoRef = ref(null);
+const attendancePhotoCanvasRef = ref(null);
+const attendancePhotoStream = ref(null);
+const attendancePhotoError = ref("");
+const attendancePhotoUploading = ref(false);
+const attendancePhotoSkipping = ref(false);
 const pendingAttendanceAction = ref(null);
 
 const attendanceStatusResource = createResource({
@@ -1392,24 +1497,154 @@ async function confirmShiftSelection() {
 	}
 
 	showShiftDialog.value = false;
+	const action = pendingAttendanceAction.value;
+	pendingAttendanceAction.value = null;
 
-	try {
-		if (pendingAttendanceAction.value === "check_in") {
-			await attendanceCheckInResource.submit({
-				pos_profile: shiftStore.profileName,
-				shift: chosenShift,
-			});
-		} else if (pendingAttendanceAction.value === "check_out") {
-			await attendanceCheckOutResource.submit({
-				pos_profile: shiftStore.profileName,
-			});
-		}
-	} catch (error) {
-		log.error("confirmShiftSelection error:", error);
-	} finally {
-		pendingAttendanceAction.value = null;
+	// Luồng mới: chọn ca → chụp ảnh (hoặc bỏ qua) → rồi mới gọi API
+	attendancePhotoError.value = "";
+	pendingAttendanceParams.value = { shift: chosenShift, action };
+	showPhotoDialog.value = true;
+}
+
+/** Gọi API check-in hoặc check-out theo pendingAttendanceParams. */
+async function doAttendanceSubmit() {
+	const p = pendingAttendanceParams.value;
+	if (!p) return;
+	if (p.action === "check_in") {
+		await attendanceCheckInResource.submit({
+			pos_profile: shiftStore.profileName,
+			shift: p.shift,
+		});
+	} else if (p.action === "check_out") {
+		await attendanceCheckOutResource.submit({
+			pos_profile: shiftStore.profileName,
+		});
 	}
 }
+
+// Bật/tắt camera khi mở/đóng dialog chụp ảnh chấm công
+watch(showPhotoDialog, async (isOpen) => {
+	if (isOpen) {
+		await nextTick();
+		startAttendancePhotoCamera();
+	} else {
+		stopAttendancePhotoCamera();
+		pendingAttendanceParams.value = null;
+	}
+});
+
+async function startAttendancePhotoCamera() {
+	attendancePhotoError.value = "";
+	try {
+		// Tỷ lệ 16:9 để khớp ô xem, giảm lệch khi crop
+		const stream = await navigator.mediaDevices.getUserMedia({
+			video: {
+				facingMode: "user",
+				width: { ideal: 640 },
+				height: { ideal: 360 },
+				aspectRatio: { ideal: 16 / 9 },
+			},
+		});
+		attendancePhotoStream.value = stream;
+		await nextTick();
+		const video = attendancePhotoVideoRef.value;
+		if (video && stream) {
+			video.srcObject = stream;
+		}
+	} catch (err) {
+		attendancePhotoError.value =
+			err.message || __("Cannot access camera. You can skip or use a device with camera.");
+	}
+
+}
+
+function stopAttendancePhotoCamera() {
+	const stream = attendancePhotoStream.value;
+	if (stream) {
+		stream.getTracks().forEach((t) => t.stop());
+		attendancePhotoStream.value = null;
+	}
+	const video = attendancePhotoVideoRef.value;
+	if (video) {
+		video.srcObject = null;
+	}
+	attendancePhotoError.value = "";
+}
+
+async function skipAttendancePhoto() {
+	const p = pendingAttendanceParams.value;
+	if (!p) {
+		showPhotoDialog.value = false;
+		return;
+	}
+	attendancePhotoSkipping.value = true;
+	try {
+		await doAttendanceSubmit();
+		showPhotoDialog.value = false;
+	} catch (e) {
+		// Lỗi đã được resource onError xử lý
+	} finally {
+		attendancePhotoSkipping.value = false;
+	}
+}
+
+function blobToBase64(blob) {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onloadend = () => {
+			const dataUrl = reader.result;
+			const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+			resolve(base64);
+		};
+		reader.onerror = reject;
+		reader.readAsDataURL(blob);
+	});
+}
+
+async function captureAndUploadAttendancePhoto() {
+	const video = attendancePhotoVideoRef.value;
+	const canvas = attendancePhotoCanvasRef.value;
+	const p = pendingAttendanceParams.value;
+	if (!video || !canvas || !p) {
+		showWarning(__("Cannot capture photo. Please try again or skip."));
+		return;
+	}
+	if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+		showWarning(__("Camera not ready. Please wait or skip."));
+		return;
+	}
+	attendancePhotoUploading.value = true;
+	try {
+		canvas.width = video.videoWidth;
+		canvas.height = video.videoHeight;
+		const ctx = canvas.getContext("2d");
+		ctx.drawImage(video, 0, 0);
+		const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+		if (!blob) {
+			showWarning(__("Failed to capture image."));
+			return;
+		}
+		const imageBase64 = await blobToBase64(blob);
+		// Gọi check-in/check-out trước để có attendance_name, sau đó đính kèm ảnh
+		await doAttendanceSubmit();
+		const attendanceName = attendanceStatus.value?.attendance_name;
+		if (attendanceName) {
+			await call("pos_next.api.attendance.upload_attendance_photo", {
+				attendance_name: attendanceName,
+				image_base64: imageBase64,
+				photo_type: p.action || "check_in",
+			});
+			showSuccess(__("Photo saved to attendance."));
+		}
+		showPhotoDialog.value = false;
+	} catch (err) {
+		log.error("captureAndUploadAttendancePhoto error:", err);
+		showError(parseError(err));
+	} finally {
+		attendancePhotoUploading.value = false;
+	}
+}
+
 const selectedInvoiceForView = ref(null);
 
 // Invoice history data (used by InvoiceManagement component)

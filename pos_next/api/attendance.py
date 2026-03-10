@@ -4,6 +4,9 @@
 
 from __future__ import unicode_literals
 
+import base64
+import re
+
 import frappe
 from frappe import _
 from frappe.utils import nowdate, now_datetime
@@ -224,4 +227,55 @@ def get_shift_types():
 		ignore_permissions=True,
 	)
 	return shifts
+
+
+def _decode_base64_image(image_base64):
+	"""Chuẩn hoá base64 từ data URL hoặc raw base64, trả về (bytes, ext)."""
+	if not image_base64:
+		frappe.throw(_("Không có dữ liệu ảnh."))
+	data = image_base64.strip()
+	# Data URL: data:image/jpeg;base64,xxxx
+	if "," in data:
+		data = data.split(",", 1)[1]
+	# Chỉ lấy ký tự base64
+	data = re.sub(r"\s+", "", data)
+	raw = base64.b64decode(data, validate=True)
+	if len(raw) > 10 * 1024 * 1024:  # 10 MB
+		frappe.throw(_("Kích thước ảnh vượt quá 10 MB."))
+	ext = "jpg"
+	if raw[:8] == b"\x89PNG\r\n\x1a\n":
+		ext = "png"
+	elif raw[:2] in (b"\xff\xd8",):
+		ext = "jpg"
+	return raw, ext
+
+
+@frappe.whitelist()
+def upload_attendance_photo(attendance_name, image_base64, photo_type="check_in"):
+	"""Đính kèm ảnh chấm công vào bản ghi Attendance (lưu thành File)."""
+	if not attendance_name:
+		frappe.throw(_("Thiếu tên bản ghi Attendance."))
+	if not frappe.db.exists("Attendance", attendance_name):
+		frappe.throw(_("Không tìm thấy bản ghi Attendance {0}.").format(frappe.bold(attendance_name)))
+	attendance = frappe.get_doc("Attendance", attendance_name)
+	# Kiểm tra quyền: chỉ user thuộc employee của attendance hoặc có quyền Attendance
+	if attendance.employee:
+		emp_user = frappe.db.get_value("Employee", attendance.employee, "user_id")
+		if emp_user != frappe.session.user and not frappe.has_permission("Attendance", "write"):
+			frappe.throw(_("Bạn không có quyền đính kèm ảnh cho bản ghi này."))
+	content, ext = _decode_base64_image(image_base64)
+	suffix = now_datetime().strftime("%Y-%m-%d_%H%M%S")
+	file_name = "attendance_{0}_{1}.{2}".format(photo_type, suffix, ext)
+	file_doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"attached_to_doctype": "Attendance",
+			"attached_to_name": attendance_name,
+			"file_name": file_name,
+			"content": content,
+			"decode": False,
+		}
+	)
+	file_doc.save(ignore_permissions=False)
+	return {"file_name": file_doc.file_name, "file_url": file_doc.file_url}
 

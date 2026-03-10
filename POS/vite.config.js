@@ -252,11 +252,13 @@ export default defineConfig({
 				secure: false,
 				cookieDomainRewrite: "localhost",
 				router: (req) => {
-					const site_name = req.headers.host.split(":")[0]
-					// Support both localhost and 127.0.0.1
+					const site_name = (req.headers.host || "").split(":")[0]
+					// Khi truy cập qua ngrok/domain ngoài, API luôn gửi về backend local
 					const isLocalhost =
 						site_name === "localhost" || site_name === "127.0.0.1"
-					const targetHost = isLocalhost ? "127.0.0.1" : site_name
+					const isNgrok = site_name.endsWith(".ngrok-free.app") || site_name.endsWith(".ngrok.io")
+					const isTunnel = site_name.endsWith(".loca.lt") || site_name.includes("localtunnel")
+					const targetHost = isLocalhost || isNgrok || isTunnel ? "127.0.0.1" : site_name
 					return `http://${targetHost}:8010`
 				},
 			},

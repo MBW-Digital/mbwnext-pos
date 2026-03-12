@@ -23,8 +23,8 @@ class POSStaticRenderer(BaseRenderer):
 	def render(self):
 		path = getattr(frappe.local, "path", "") or ""
 		app_path = frappe.get_app_path("pos_next", "public", "pos")
-		basename = path.split("/")[-1]  # sw.js hoặc workbox-xxx.js
-		file_path = os.path.join(app_path, basename)
+		filename = "pos_entry_sw.js" if path == "pos/sw.js" else path.split("/")[-1]
+		file_path = os.path.join(app_path, filename)
 
 		if not os.path.isfile(file_path):
 			return Response("Not Found", status=404)

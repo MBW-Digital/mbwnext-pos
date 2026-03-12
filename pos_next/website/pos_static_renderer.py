@@ -1,5 +1,5 @@
 # Copyright (c) 2025, pos_next contributors
-# Serve /pos/sw.js and /pos/workbox-*.js from app public/pos for offline-first scope.
+# Serve sw.js and workbox-*.js at /pos/ scope so offline F5 works.
 
 import os
 import re
@@ -10,7 +10,7 @@ from werkzeug.wrappers import Response
 
 
 class POSStaticRenderer(BaseRenderer):
-	"""Serves pos_entry_sw.js at /pos/sw.js and workbox-*.js at /pos/workbox-*.js so SW scope can be /pos/."""
+	"""Serves sw.js at /pos/sw.js and workbox-*.js at /pos/workbox-*.js so SW scope can be /pos/."""
 
 	def can_render(self):
 		path = getattr(frappe.local, "path", "") or ""
@@ -23,17 +23,18 @@ class POSStaticRenderer(BaseRenderer):
 	def render(self):
 		path = getattr(frappe.local, "path", "") or ""
 		app_path = frappe.get_app_path("pos_next", "public", "pos")
-		if path == "pos/sw.js":
-			file_path = os.path.join(app_path, "pos_entry_sw.js")
-		else:
-			# pos/workbox-xxx.js -> workbox-xxx.js
-			basename = path.split("/")[-1]
-			file_path = os.path.join(app_path, basename)
+		basename = path.split("/")[-1]  # sw.js hoặc workbox-xxx.js
+		file_path = os.path.join(app_path, basename)
 
 		if not os.path.isfile(file_path):
 			return Response("Not Found", status=404)
 
 		with open(file_path, "rb") as f:
 			body = f.read()
-		mimetype = "application/javascript"
-		return Response(body, mimetype=mimetype)
+
+		headers = {
+			"Content-Type": "application/javascript",
+			"Service-Worker-Allowed": "/",
+			"Cache-Control": "no-cache",
+		}
+		return Response(body, status=200, headers=headers)

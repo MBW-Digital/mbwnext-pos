@@ -320,8 +320,10 @@ scheduler_events = {
 # }
 
 
-website_route_rules = [{'from_route': '/pos/<path:app_path>', 'to_route': 'pos'},]
+website_route_rules = [{'from_route': '/pos/<path:app_path>', 'to_route': 'pos'}]
 
+# Serve /pos/sw.js (and workbox-*.js) from public/pos so SW scope can be /pos/ for offline F5
+page_renderer = ["pos_next.website.pos_static_renderer.POSStaticRenderer"]
 
 fixtures = [
     {

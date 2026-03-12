@@ -27,6 +27,12 @@ const router = createRouter({
 })
 
 router.beforeEach((to, from, next) => {
+	// Khi đang offline thì không ép người dùng về màn đăng nhập,
+	// vì đăng nhập cũng không thực hiện được. Cho phép vào mọi route.
+	if (typeof navigator !== "undefined" && !navigator.onLine) {
+		return next()
+	}
+
 	// Check authentication status (session.user is already set in main.js before app mount)
 	const isLoggedIn = session.isLoggedIn
 

@@ -23,6 +23,7 @@ import {
 	onCSRFTokenRefresh,
 } from "./utils/csrf"
 import { logger } from "./utils/logger"
+import { getSetting, setSetting } from "./utils/offline/db"
 import { offlineWorker } from "./utils/offline/workerClient"
 import translationPlugin from "./utils/translation"
 
@@ -169,7 +170,17 @@ async function initializeApp() {
 	})()
 
 	const [, user] = await Promise.all([csrfPromise, userPromise])
-	session.user = user
+	if (user) {
+		session.user = user
+		try {
+			await setSetting("pos_offline_user", user)
+		} catch (_) {}
+	} else {
+		try {
+			const stored = await getSetting("pos_offline_user", null)
+			if (stored) session.user = stored
+		} catch (_) {}
+	}
 	log.info(`User authenticated: ${session.user}`)
 
 	// -------------------------------------------------------------------------

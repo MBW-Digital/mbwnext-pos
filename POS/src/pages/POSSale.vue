@@ -1193,6 +1193,7 @@ import { useLocale } from "@/composables/useLocale";
 import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
+import { getSetting } from "@/utils/offline/db";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
@@ -1872,6 +1873,17 @@ onMounted(async () => {
 
 		if (!hasShift) {
 			uiStore.showOpenShiftDialog = true;
+			// Offline: use last profile from IndexedDB and load items from cache
+			if (offlineStore.isOffline) {
+				try {
+					const lastProfile = await getSetting("pos_last_profile", null);
+					if (lastProfile) {
+						cartStore.posProfile = lastProfile;
+						await nextTick();
+						await itemStore.loadAllItems(lastProfile);
+					}
+				} catch (_) {}
+			}
 		} else {
 			// Set POS profile and load tax rules
 			if (shiftStore.currentProfile) {

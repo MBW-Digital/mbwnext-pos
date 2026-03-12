@@ -1,7 +1,8 @@
 import { call } from "@/utils/apiWrapper"
+import { getSetting, setSetting } from "@/utils/offline/db"
 import { isOffline } from "@/utils/offline"
 import { offlineWorker } from "@/utils/offline/workerClient"
-import { cacheItems, getCachedVariants, updateItemBatchSerialData } from "@/utils/offline/items"
+import { cacheItems, getCachedVariants, updateItemBatchSerialData, searchCachedItems as searchCachedItemsMain } from "@/utils/offline/items"
 import { performanceConfig } from "@/utils/performanceConfig"
 import { logger } from "@/utils/logger"
 import { createResource } from "frappe-ui"
@@ -12,6 +13,7 @@ import { usePOSShiftStore } from "./posShift"
 import { useRealtimePosProfile } from "@/composables/useRealtimePosProfile"
 
 const log = logger.create('ItemSearch')
+const POS_LAST_PROFILE_KEY = "pos_last_profile"
 
 /**
  * Fetch and cache variants for all template items
@@ -697,10 +699,19 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 	 * // Result: Bypasses cache, fetches fresh from server
 	 */
 	async function loadAllItems(profile, forceServerFetch = false) {
+		// Offline: use last profile from IndexedDB so we can load items from cache
+		if (!profile && isOffline()) {
+			try {
+				profile = (await getSetting(POS_LAST_PROFILE_KEY, null)) || ""
+			} catch (_) {}
+		}
 		if (!profile) {
 			return
 		}
 
+		try {
+			if (profile) await setSetting(POS_LAST_PROFILE_KEY, profile)
+		} catch (_) {}
 		posProfile.value = profile
 		loading.value = true
 
@@ -759,57 +770,55 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 			// - WITHOUT filters: Load first batch (limit: itemsPerPage)
 			if (offline) {
 				log.info("Offline mode - loading from cache")
+				const limit = hasFilters ? 10000 : itemsPerPage.value
+				let cached = []
+
+				// Try worker cache first
 				if (stats.cacheReady && stats.items > 0) {
 					try {
-						// Determine cache load limit based on filter presence
-						// Filters active: Load everything (client-side filtering needs all data)
-						// No filters: Load first page only (infinite scroll will load more)
-						const limit = hasFilters ? 10000 : itemsPerPage.value
-						const cached = await offlineWorker.searchCachedItems("", limit)
-
-						if (cached && cached.length > 0) {
-							replaceAllItems(cached)
-							totalItemsLoaded.value = cached.length
-							currentOffset.value = cached.length
-							// Disable infinite scroll if filters active (all data loaded)
-							hasMore.value = hasFilters ? false : cached.length >= itemsPerPage.value
-							log.success(`Loaded ${cached.length} items from cache (offline mode)`)
-
-							// Eager variant verification: Check if template items have cached variants
-							const templateItems = cached.filter(item => item.has_variants)
-							if (templateItems.length > 0) {
-								log.info(`Verifying variants for ${templateItems.length} template items`)
-								const missingVariants = []
-
-								for (const template of templateItems) {
-									const variants = await getCachedVariants(template.item_code)
-									if (!variants || variants.length === 0) {
-										missingVariants.push(template.item_code)
-									} else {
-										log.debug(`Template ${template.item_code} has ${variants.length} cached variants`)
-									}
-								}
-
-								if (missingVariants.length > 0) {
-									log.warn(`${missingVariants.length} template items missing variants in offline cache:`, missingVariants)
-								} else {
-									log.success(`All ${templateItems.length} template items have variants cached`)
-								}
-							}
-						} else {
-							replaceAllItems([])
-							log.warn("No items in cache")
-						}
+						cached = await offlineWorker.searchCachedItems("", limit) || []
 					} catch (cacheError) {
-						log.error("Cache load failed in offline mode", cacheError)
-						replaceAllItems([])
+						log.warn("Worker cache read failed, trying main-thread cache", cacheError)
+					}
+				}
+
+				// Fallback: main-thread IndexedDB (same DB, works when worker not ready)
+				if (!cached || cached.length === 0) {
+					try {
+						cached = await searchCachedItemsMain("", limit)
+						if (cached && cached.length > 0) {
+							log.info(`Loaded ${cached.length} items from main-thread cache (offline fallback)`)
+						}
+					} catch (e) {
+						log.warn("Main-thread cache read failed", e)
+					}
+				}
+
+				if (cached && cached.length > 0) {
+					replaceAllItems(cached)
+					totalItemsLoaded.value = cached.length
+					currentOffset.value = cached.length
+					hasMore.value = hasFilters ? false : cached.length >= itemsPerPage.value
+					log.success(`Loaded ${cached.length} items from cache (offline mode)`)
+
+					const templateItems = cached.filter(item => item.has_variants)
+					if (templateItems.length > 0) {
+						log.info(`Verifying variants for ${templateItems.length} template items`)
+						const missingVariants = []
+						for (const template of templateItems) {
+							const variants = await getCachedVariants(template.item_code)
+							if (!variants || variants.length === 0) missingVariants.push(template.item_code)
+						}
+						if (missingVariants.length > 0) {
+							log.warn(`${missingVariants.length} template items missing variants in offline cache:`, missingVariants)
+						}
 					}
 				} else {
-					log.warn("Cache not ready in offline mode")
 					replaceAllItems([])
+					log.warn("No items in cache (worker and main-thread)")
 				}
 				loading.value = false
-				return // Exit early - offline mode complete
+				return
 			}
 
 			// ====================================================================
@@ -1529,11 +1538,23 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 	async function setPosProfile(profile, autoLoadItems = true) {
 		posProfile.value = profile
 		serverDataFresh.value = false // Reset fresh flag when profile changes
+		if (profile) {
+			try {
+				await setSetting(POS_LAST_PROFILE_KEY, profile)
+			} catch (_) {}
+		}
 
 		// Clean up previous real-time handler
 		if (posProfileUpdateCleanup) {
 			posProfileUpdateCleanup()
 			posProfileUpdateCleanup = null
+		}
+
+		// Offline: skip API, load items from cache only
+		if (profile && isOffline()) {
+			profileItemGroups.value = []
+			if (autoLoadItems) await loadAllItems(profile)
+			return
 		}
 
 		// Fetch item groups from POS Profile FIRST
@@ -1568,6 +1589,8 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 			} catch (error) {
 				log.error("Error fetching POS Profile item groups", error)
 				profileItemGroups.value = []
+				// Still try to load items (from server or cache) so user sees list
+				if (autoLoadItems) await loadAllItems(profile)
 			}
 		} else {
 			profileItemGroups.value = []

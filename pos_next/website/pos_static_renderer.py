@@ -11,7 +11,7 @@ from werkzeug.wrappers import Response
 # Inline SW: caches /pos/ navigation so offline F5 works.
 # Embedded to avoid dependency on build artifacts being present.
 _POS_ENTRY_SW = b"""
-const CACHE_NAME = "pos-shell-v3";
+const CACHE_NAME = "pos-shell-v4";
 const POS_URL = "/pos/";
 
 self.addEventListener("install", (event) => {
@@ -20,13 +20,22 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((k) => k.startsWith("pos-shell-") && k !== CACHE_NAME)
-          .map((k) => caches.delete(k))
-      )
-    )
+    Promise.all([
+      caches.keys().then((keys) =>
+        Promise.all(
+          keys
+            .filter((k) => k.startsWith("pos-shell-") && k !== CACHE_NAME)
+            .map((k) => caches.delete(k))
+        )
+      ),
+      fetch(POS_URL, { credentials: "include" })
+        .then((res) => {
+          if (res.ok && res.type === "basic") {
+            return caches.open(CACHE_NAME).then((c) => c.put(POS_URL, res));
+          }
+        })
+        .catch(() => {}),
+    ])
   );
   self.clients.claim();
 });
@@ -37,12 +46,10 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.mode === "navigate" && path.startsWith("/pos")) {
     event.respondWith(
-      // Use redirect:'follow' to avoid opaqueredirect being cached
-      fetch(new Request(event.request, { redirect: "follow" }))
+      fetch(event.request)
         .then((response) => {
-          if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(POS_URL, clone));
+          if (response.ok && response.type === "basic") {
+            caches.open(CACHE_NAME).then((c) => c.put(POS_URL, response.clone()));
           }
           return response;
         })
@@ -56,8 +63,7 @@ self.addEventListener("fetch", (event) => {
       fetch(event.request)
         .then((response) => {
           if (response.ok) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, response.clone()));
           }
           return response;
         })

@@ -1491,25 +1491,42 @@ async function loadPaymentMethods() {
 
 	loadingPaymentMethods.value = true
 
+	const applyMethods = (list) => {
+		if (list && list.length > 0) {
+			paymentMethods.value = list
+			const defaultMethod = list.find((m) => m.default)
+			lastSelectedMethod.value = defaultMethod || list[0]
+		}
+	}
+
 	try {
 		if (props.isOffline) {
 			// Load from cache when offline using worker
-			const cached = await offlineWorker.getCachedPaymentMethods(
-				props.posProfile,
-			)
+			const cached = await offlineWorker.getCachedPaymentMethods(props.posProfile)
 			if (cached && cached.length > 0) {
-				paymentMethods.value = cached
-				if (paymentMethods.value.length > 0) {
-					const defaultMethod = paymentMethods.value.find((m) => m.default)
-					lastSelectedMethod.value = defaultMethod || paymentMethods.value[0]
-				}
+				applyMethods(cached)
+			} else {
+				// Cache empty — try server as fallback (may be briefly online)
+				await paymentMethodsResource.fetch()
 			}
 		} else {
 			// Load from server when online
 			await paymentMethodsResource.fetch()
+			// If server returned empty, try IndexedDB cache as fallback
+			if (paymentMethods.value.length === 0) {
+				const cached = await offlineWorker.getCachedPaymentMethods(props.posProfile)
+				applyMethods(cached)
+			}
 		}
 	} catch (error) {
 		log.error("Error loading payment methods:", error)
+		// API failed — try IndexedDB cache as last resort
+		try {
+			const cached = await offlineWorker.getCachedPaymentMethods(props.posProfile)
+			applyMethods(cached)
+		} catch {
+			// ignore
+		}
 	} finally {
 		loadingPaymentMethods.value = false
 	}

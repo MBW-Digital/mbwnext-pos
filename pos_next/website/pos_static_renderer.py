@@ -11,8 +11,14 @@ from werkzeug.wrappers import Response
 # Inline SW: caches /pos/ navigation so offline F5 works.
 # Embedded to avoid dependency on build artifacts being present.
 _POS_ENTRY_SW = b"""
-const CACHE_NAME = "pos-shell-v6";
+const CACHE_NAME = "pos-shell-v7";
 const POS_URL = "/pos/";
+const OFFLINE_HTML = "<html><head><title>POS</title><meta http-equiv='refresh' content='5'></head><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>Offline</h2><p>Vui long ket noi mang va tai lai trang.</p></body></html>";
+
+function isHtmlResponse(response) {
+  const ct = response.headers.get("Content-Type") || "";
+  return response.ok && response.type === "basic" && ct.includes("text/html");
+}
 
 self.addEventListener("install", (event) => {
   self.skipWaiting();
@@ -30,7 +36,7 @@ self.addEventListener("activate", (event) => {
       ),
       fetch(POS_URL, { credentials: "include" })
         .then((res) => {
-          if (res.ok && res.type === "basic") {
+          if (isHtmlResponse(res)) {
             return caches.open(CACHE_NAME).then((c) => c.put(POS_URL, res));
           }
         })
@@ -45,23 +51,24 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.mode === "navigate" && path.startsWith("/pos")) {
     event.respondWith(
-      fetch(event.request, { redirect: "follow" })
-        .then((response) => {
-          if (response.ok && response.type === "basic") {
-            const toCache = response.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(POS_URL, toCache));
-          }
-          return response;
-        })
-        .catch(() =>
-          caches.match(POS_URL).then((cached) => {
-            if (cached) return cached;
-            return new Response(
-              "<html><head><title>POS</title><meta http-equiv='refresh' content='5'></head><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>Offline</h2><p>Vui long ket noi mang va tai lai trang.</p></body></html>",
-              { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }
+      caches.open(CACHE_NAME).then((cache) =>
+        fetch(event.request, { redirect: "follow" })
+          .then((response) => {
+            if (isHtmlResponse(response)) {
+              cache.put(POS_URL, response.clone());
+              return response;
+            }
+            // Server returned non-HTML (wrong redirect, JS, etc.) -- serve from cache
+            return cache.match(POS_URL).then(
+              (cached) => cached || new Response(OFFLINE_HTML, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
             );
           })
-        )
+          .catch(() =>
+            cache.match(POS_URL).then(
+              (cached) => cached || new Response(OFFLINE_HTML, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
+            )
+          )
+      )
     );
     return;
   }
@@ -71,7 +78,8 @@ self.addEventListener("fetch", (event) => {
       fetch(event.request)
         .then((response) => {
           if (response.ok) {
-            caches.open(CACHE_NAME).then((c) => c.put(event.request, response.clone()));
+            const toCache = response.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(event.request, toCache));
           }
           return response;
         })
@@ -104,7 +112,7 @@ class POSStaticRenderer(BaseRenderer):
 		if path == "pos/sw.js":
 			return Response(_POS_ENTRY_SW, status=200, headers=headers)
 
-		# workbox-xxx.js — serve from built assets
+		# workbox-xxx.js -- serve from built assets
 		app_path = frappe.get_app_path("pos_next", "public", "pos")
 		file_path = os.path.join(app_path, path.split("/")[-1])
 		if not os.path.isfile(file_path):

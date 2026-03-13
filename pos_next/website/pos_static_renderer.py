@@ -11,7 +11,7 @@ from werkzeug.wrappers import Response
 # Inline SW: caches /pos/ navigation so offline F5 works.
 # Embedded to avoid dependency on build artifacts being present.
 _POS_ENTRY_SW = b"""
-const CACHE_NAME = "pos-shell-v5";
+const CACHE_NAME = "pos-shell-v6";
 const POS_URL = "/pos/";
 
 self.addEventListener("install", (event) => {
@@ -45,10 +45,11 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.mode === "navigate" && path.startsWith("/pos")) {
     event.respondWith(
-      fetch(event.request)
+      fetch(event.request, { redirect: "follow" })
         .then((response) => {
           if (response.ok && response.type === "basic") {
-            caches.open(CACHE_NAME).then((c) => c.put(POS_URL, response.clone()));
+            const toCache = response.clone();
+            caches.open(CACHE_NAME).then((c) => c.put(POS_URL, toCache));
           }
           return response;
         })

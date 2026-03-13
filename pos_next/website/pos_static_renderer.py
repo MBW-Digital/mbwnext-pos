@@ -11,7 +11,7 @@ from werkzeug.wrappers import Response
 # Inline SW: caches /pos/ navigation so offline F5 works.
 # Embedded to avoid dependency on build artifacts being present.
 _POS_ENTRY_SW = b"""
-const CACHE_NAME = "pos-shell-v4";
+const CACHE_NAME = "pos-shell-v5";
 const POS_URL = "/pos/";
 
 self.addEventListener("install", (event) => {
@@ -35,9 +35,8 @@ self.addEventListener("activate", (event) => {
           }
         })
         .catch(() => {}),
-    ])
+    ]).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -53,7 +52,15 @@ self.addEventListener("fetch", (event) => {
           }
           return response;
         })
-        .catch(() => caches.match(POS_URL))
+        .catch(() =>
+          caches.match(POS_URL).then((cached) => {
+            if (cached) return cached;
+            return new Response(
+              "<html><head><title>POS</title><meta http-equiv='refresh' content='5'></head><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>Offline</h2><p>Vui long ket noi mang va tai lai trang.</p></body></html>",
+              { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } }
+            );
+          })
+        )
     );
     return;
   }

@@ -19,7 +19,7 @@
   <title>MBW Next POS</title>
   <script>
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/pos/sw.js", { scope: "/pos/" }).catch(function () {});
+      navigator.serviceWorker.register("/pos/sw.js", { scope: "/pos/" }).catch(function (err) { console.warn("[POS SW]", err); });
     }
   </script>
   <script type="module" crossorigin src="/assets/pos_next/pos/assets/index-azd_B8xY.js"></script>

@@ -11,7 +11,7 @@ from werkzeug.wrappers import Response
 # Inline SW: caches /pos/ navigation so offline F5 works.
 # Embedded to avoid dependency on build artifacts being present.
 _POS_ENTRY_SW = b"""
-const CACHE_NAME = "pos-shell-v8";
+const CACHE_NAME = "pos-shell-v9";
 const POS_URL = "/pos/";
 const OFFLINE_HTML = "<html><head><title>POS</title><meta http-equiv='refresh' content='5'></head><body style='font-family:sans-serif;text-align:center;padding:40px'><h2>Offline</h2><p>Vui long ket noi mang va tai lai trang.</p></body></html>";
 
@@ -52,7 +52,7 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate" && path.startsWith("/pos") && path !== "/pos/sw.js") {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>
-        fetch(event.request, { redirect: "follow" })
+        fetch(event.request.url, { credentials: "include", redirect: "follow" })
           .then((response) => {
             if (isHtmlResponse(response)) {
               cache.put(POS_URL, response.clone());

@@ -1194,6 +1194,7 @@ import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
 import { getSetting } from "@/utils/offline/db";
+import { getItemWithPrice } from "@/utils/offline/items";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
@@ -2253,12 +2254,24 @@ async function handleAddColdStorageFeeLine(count = 1) {
 		const itemCode = serviceSurchargeItemCode.value;
 		if (!itemCode) return;
 
-		const itemDetails = await cartStore.getItemDetailsResource.submit({
-			item_code: itemCode,
-			pos_profile: shiftStore.profileName,
-			customer: cartStore.customer?.name || cartStore.customer,
-			qty: n,
-		});
+		let itemDetails;
+
+		if (offlineStore.isOffline) {
+			// Offline: use cached item (preloaded via preloadDataForOffline)
+			const priceList = shiftStore.currentProfile?.selling_price_list || null;
+			itemDetails = await getItemWithPrice(itemCode, priceList);
+			if (!itemDetails) {
+				showError(__('Service item not available offline. Please load items when online first.'));
+				return;
+			}
+		} else {
+			itemDetails = await cartStore.getItemDetailsResource.submit({
+				item_code: itemCode,
+				pos_profile: shiftStore.profileName,
+				customer: cartStore.customer?.name || cartStore.customer,
+				qty: n,
+			});
+		}
 
 		if (!itemDetails || itemDetails.item_code !== itemCode) {
 			showError(__('Could not load item: {0}', [itemCode]));
@@ -2683,20 +2696,16 @@ async function handleOptionSelected(option) {
 			}
 		} else if (option.type === "uom") {
 			const qty = option.quantity || cartStore.pendingItemQty;
-			const itemDetails = await cartStore.getItemDetailsResource.submit({
-				item_code: cartStore.pendingItem.item_code,
-				pos_profile: cartStore.posProfile,
-				customer: cartStore.customer?.name || cartStore.customer,
-				qty: qty,
-				uom: option.uom,
-			});
+			// Use option.rate from dialog (no API call) - works offline, avoids get_item_details
+			const rate = option.rate ?? 0;
+			const priceListRate = option.rate ?? 0;
 
 			const itemToAdd = {
 				...cartStore.pendingItem,
 				uom: option.uom,
 				conversion_factor: option.conversion_factor,
-				rate: itemDetails.price_list_rate || itemDetails.rate,
-				price_list_rate: itemDetails.price_list_rate,
+				rate,
+				price_list_rate: priceListRate,
 			};
 
 			if (itemToAdd.has_batch_no || itemToAdd.has_serial_no) {

@@ -23,6 +23,7 @@ import {
 	cacheUnpaidInvoices,
 	cacheUnpaidSummary,
 } from "@/utils/offline"
+import { cacheItems } from "@/utils/offline/items"
 import { call } from "@/utils/apiWrapper"
 import { logger } from "@/utils/logger"
 import { offlineState } from "@/utils/offline/offlineState"
@@ -255,6 +256,22 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 			const cacheReady = await checkCacheReady()
 			const stats = await getCacheStats()
 			const needsRefresh = !stats.lastSync || Date.now() - stats.lastSync > 24 * 60 * 60 * 1000
+
+			// Preload service surcharge item (Dịch vụ làm nóng lạnh) for offline
+			const serviceItemCode = currentProfile?.service_surcharge_item || 'Phí bảo quản lạnh'
+			try {
+				const serviceItemRes = await call("pos_next.api.items.get_item_details", {
+					item_code: serviceItemCode,
+					pos_profile: currentProfile.name,
+					qty: 1,
+				})
+				if (serviceItemRes && serviceItemRes.item_code) {
+					await cacheItems([serviceItemRes])
+					log.success(`Cached service surcharge item: ${serviceItemCode}`)
+				}
+			} catch (err) {
+				log.debug('Could not preload service surcharge item', err)
+			}
 
 			// Always load payment methods for reliable offline support
 			log.info('Loading payment methods for offline use')

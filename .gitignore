@@ -6,9 +6,9 @@ tags
 node_modules
 __pycache__
 
-# Build artifacts - ignore folder but track pos.html for cloud deploy
-pos_next/public/pos/*
-pos_next/www/*
+# Build artifacts - do not push built POS assets
+pos_next/public/pos/
+pos_next/www/
 yarn.lock
 package-lock.json
 

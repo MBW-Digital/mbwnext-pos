@@ -78,6 +78,25 @@ async function cacheVariantsForTemplates(items, posProfile) {
 }
 
 /**
+ * Fetch and cache Service Surcharge Item from POS Profile for offline use
+ * @param {string} profile - POS Profile name
+ */
+async function cacheServiceSurchargeItemForOffline(profile) {
+	if (!profile) return
+	try {
+		const serviceItem = await call("pos_next.api.items.get_service_surcharge_item_details", {
+			pos_profile: profile,
+		})
+		if (serviceItem && serviceItem.item_code) {
+			await cacheItems([serviceItem])
+			log.success(`Cached service surcharge item for offline: ${serviceItem.item_code}`)
+		}
+	} catch (err) {
+		log.debug("Could not cache service surcharge item:", err?.message)
+	}
+}
+
+/**
  * Fetch and cache batch/serial data for items with batch or serial tracking
  * This ensures batch/serial selection works offline
  * @param {Array} items - Items array to check for batch/serial items
@@ -908,6 +927,11 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 							log.warn("Background batch/serial caching failed:", err.message)
 						})
 					}
+
+					// Cache Service Surcharge Item from POS Profile for offline
+					cacheServiceSurchargeItemForOffline(profile).catch(err => {
+						log.warn("Background service surcharge item caching failed:", err.message)
+					})
 				} else {
 					log.info('No items found for the selected filter groups')
 				}
@@ -962,6 +986,11 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 							log.warn("Background batch/serial caching failed:", err.message)
 						})
 					}
+
+					// Cache Service Surcharge Item from POS Profile for offline
+					cacheServiceSurchargeItemForOffline(profile).catch(err => {
+						log.warn("Background service surcharge item caching failed:", err.message)
+					})
 				}
 
 				// Start background sync to cache remaining items over time

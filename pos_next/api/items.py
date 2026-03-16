@@ -1339,6 +1339,18 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):  #
 
 
 @frappe.whitelist()
+def get_service_surcharge_item_details(pos_profile):
+	"""Get item details for POS Profile's Service Surcharge Item (for offline cache)."""
+	try:
+		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+		item_code = pos_profile_doc.get("service_surcharge_item") or "Phí bảo quản lạnh"
+		return get_item_details(item_code, pos_profile, qty=1)
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Get Service Surcharge Item Error")
+		return None
+
+
+@frappe.whitelist()
 def get_item_groups(pos_profile):
 	"""Get item groups for filtering"""
 	try:

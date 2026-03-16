@@ -196,6 +196,35 @@ export const getItemWithPrice = async (itemCode, priceList) => {
 	}
 };
 
+/**
+ * Get cached item by item_code or item_name (for service surcharge etc.)
+ * POS Profile Link field may store either; tries item_code first, then item_name.
+ */
+export const getCachedItemByCodeOrName = async (itemCodeOrName, priceList = null) => {
+	try {
+		let item = await db.items.get(itemCodeOrName);
+		if (!item) {
+			item = await db.items.where("item_name").equals(itemCodeOrName).first();
+		}
+		if (!item) return null;
+
+		if (priceList) {
+			const price = await db.item_prices.get({
+				price_list: priceList,
+				item_code: item.item_code,
+			});
+			if (price) {
+				item.rate = price.rate;
+				item.price_list_rate = price.rate;
+			}
+		}
+		return item;
+	} catch (error) {
+		console.error("Error getting cached item by code or name:", error);
+		return null;
+	}
+};
+
 // Cache customers
 export const cacheCustomers = async (customers) => {
 	try {

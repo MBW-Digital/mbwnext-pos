@@ -1194,7 +1194,7 @@ import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
 import { getSetting } from "@/utils/offline/db";
-import { getItemWithPrice } from "@/utils/offline/items";
+import { getCachedItemByCodeOrName, cacheItems } from "@/utils/offline/items";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
@@ -2257,9 +2257,9 @@ async function handleAddColdStorageFeeLine(count = 1) {
 		let itemDetails;
 
 		if (offlineStore.isOffline) {
-			// Offline: use cached item (preloaded via preloadDataForOffline)
+			// Offline: use cached item (by item_code or item_name - POS Profile Link may store either)
 			const priceList = shiftStore.currentProfile?.selling_price_list || null;
-			itemDetails = await getItemWithPrice(itemCode, priceList);
+			itemDetails = await getCachedItemByCodeOrName(itemCode, priceList);
 			if (!itemDetails) {
 				showError(__('Service item not available offline. Please load items when online first.'));
 				return;
@@ -2271,6 +2271,10 @@ async function handleAddColdStorageFeeLine(count = 1) {
 				customer: cartStore.customer?.name || cartStore.customer,
 				qty: n,
 			});
+			// Cache for offline use (in case preload missed it)
+			if (itemDetails?.item_code) {
+				cacheItems([itemDetails]).catch((err) => log.debug('Cache service item:', err));
+			}
 		}
 
 		if (!itemDetails || itemDetails.item_code !== itemCode) {

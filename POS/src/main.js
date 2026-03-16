@@ -48,26 +48,9 @@ import "./mbw-custom.css"
 const log = logger.create("Main")
 
 // =============================================================================
-// PWA Service Worker Registration
+// SW registered in pos.html: /pos/sw.js (scope /pos/) - served by pos_static_renderer
+// which returns VitePWA built sw.js when available
 // =============================================================================
-
-if ("serviceWorker" in navigator) {
-	window.addEventListener(
-		"load",
-		() => {
-			import("virtual:pwa-register").then(({ registerSW }) => {
-				registerSW({
-					immediate: true,
-					onNeedRefresh: () => log.info("New content available, reloading..."),
-					onOfflineReady: () => log.info("App ready to work offline"),
-					onRegistered: (reg) => log.info("Service Worker registered", reg),
-					onRegisterError: (err) => log.error("Service Worker registration error", err),
-				})
-			})
-		},
-		{ passive: true },
-	)
-}
 
 // =============================================================================
 // Global Components (available in all templates without import)

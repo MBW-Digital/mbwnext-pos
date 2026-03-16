@@ -69,8 +69,10 @@ export default defineConfig({
 		}),
 		VitePWA({
 			registerType: "autoUpdate",
+			injectRegister: null,
 			includeAssets: ["favicon.png", "icon.svg", "icon-maskable.svg"],
 			manifest: {
+				id: "/pos/",
 				name: "MBW Next POS",
 				short_name: "MBW Next POS",
 				description:
@@ -78,7 +80,7 @@ export default defineConfig({
 				theme_color: "#c4161c",
 				background_color: "#ffffff",
 				display: "standalone",
-				scope: "/assets/pos_next/pos/",
+				scope: "/pos/",
 				start_url: "/pos",
 				icons: [
 					{
@@ -190,9 +192,23 @@ export default defineConfig({
 							cacheName: "pos-page-cache",
 							networkTimeoutSeconds: 3,
 							expiration: {
-								maxEntries: 1,
+								maxEntries: 3,
 								maxAgeSeconds: 60 * 60 * 24, // 24 hours
 							},
+							plugins: [
+								{
+									cachedResponseWillBeUsed: async ({ cachedResponse }) => {
+										if (cachedResponse?.redirected) {
+											return new Response(await cachedResponse.clone().arrayBuffer(), {
+												status: cachedResponse.status,
+												statusText: cachedResponse.statusText,
+												headers: cachedResponse.headers,
+											})
+										}
+										return cachedResponse
+									},
+								},
+							],
 						},
 					},
 				],

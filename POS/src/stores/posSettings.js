@@ -63,6 +63,8 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		allow_negative_stock: 0,
 		// Sales Persons
 		enable_sales_persons: "Disabled",
+		// SePay
+		enable_sepay: 0,
 	})
 
 	const isLoading = ref(false)
@@ -214,6 +216,9 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	const enableSalesPersons = computed(() =>
 		settings.value.enable_sales_persons !== "Disabled"
 	)
+
+	// Computed - SePay
+	const enableSepay = computed(() => Boolean(settings.value.enable_sepay))
 	const salesPersonsMode = computed(() =>
 		settings.value.enable_sales_persons || "Disabled"
 	)
@@ -321,6 +326,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			input_qty: 0,
 			allow_negative_stock: 0,
 			enable_sales_persons: "Disabled",
+			enable_sepay: 0,
 		}
 		isLoaded.value = false
 	}
@@ -449,6 +455,9 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		salesPersonsMode,
 		isSingleSalesPerson,
 		isMultipleSalesPersons,
+
+		// Computed - SePay
+		enableSepay,
 
 		// Actions
 		loadSettings,

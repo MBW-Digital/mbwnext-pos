@@ -48,6 +48,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SelectField: typeof import('./src/components/settings/SelectField.vue')['default']
     SelectInput: typeof import('./src/components/common/SelectInput.vue')['default']
+    SePayBankTransferDialog: typeof import('./src/components/sale/SePayBankTransferDialog.vue')['default']
     SettingsSection: typeof import('./src/components/settings/SettingsSection.vue')['default']
     ShiftClosingDialog: typeof import('./src/components/ShiftClosingDialog.vue')['default']
     ShiftOpeningDialog: typeof import('./src/components/ShiftOpeningDialog.vue')['default']

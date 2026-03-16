@@ -99,6 +99,7 @@ def get_initial_data():
 
 	result["pos_settings"] = _get_pos_settings(pos_profile)
 	result["payment_methods"] = _get_payment_methods(pos_profile_name)
+	result["sepay_enabled"] = cint(result["pos_settings"].get("enable_sepay") or 0)
 
 	return result
 

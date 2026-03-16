@@ -957,6 +957,61 @@ export function useInvoice() {
 	}
 
 	/**
+	 * Create draft invoice for SePay bank transfer (no submit).
+	 * Used when customer pays via VietQR - webhook will submit when payment received.
+	 *
+	 * @param {string} targetDoctype - Sales Invoice or Sales Order
+	 * @param {string|null} deliveryDate - For Sales Order
+	 * @returns {Promise<{name: string, grand_total: number}>} Invoice name and amount
+	 */
+	async function createDraftForSePay(
+		targetDoctype = "Sales Invoice",
+		deliveryDate = null,
+	) {
+		const rawItems = toRaw(invoiceItems.value)
+		const rawSalesTeam = toRaw(salesTeam.value)
+
+		const invoiceData = {
+			doctype: targetDoctype,
+			pos_profile: posProfile.value,
+			posa_pos_opening_shift: posOpeningShift.value,
+			customer: customer.value?.name || customer.value,
+			items: formatItemsForSubmission(rawItems),
+			payments: [], // No payment yet - webhook will add when customer transfers
+			discount_amount: additionalDiscount.value || 0,
+			coupon_code: couponCode.value,
+			is_pos: 1,
+			update_stock: 1,
+		}
+
+		if (targetDoctype === "Sales Order" && deliveryDate) {
+			invoiceData.delivery_date = deliveryDate
+		}
+
+		if (rawSalesTeam && rawSalesTeam.length > 0) {
+			invoiceData.sales_team = rawSalesTeam.map((member) => ({
+				sales_person: member.sales_person,
+				allocated_percentage: member.allocated_percentage || 0,
+			}))
+		}
+
+		const draftInvoice = await updateInvoiceResource.submit({ data: invoiceData })
+		let invoiceDoc = draftInvoice
+		if (draftInvoice && typeof draftInvoice === "object" && "data" in draftInvoice) {
+			invoiceDoc = draftInvoice.data
+		}
+
+		if (!invoiceDoc || !invoiceDoc.name) {
+			throw new Error("Failed to create draft invoice for bank transfer")
+		}
+
+		return {
+			name: invoiceDoc.name,
+			grand_total: invoiceDoc.grand_total || grandTotal.value,
+		}
+	}
+
+	/**
 	 * Sets the default customer from POS Profile if available.
 	 * This is called when resetting/clearing the cart to auto-select
 	 * the default customer configured in the POS Profile.
@@ -1129,6 +1184,7 @@ export function useInvoice() {
 		validateStock,
 		saveDraft,
 		submitInvoice,
+		createDraftForSePay,
 		resetInvoice,
 		clearCart,
 		setDefaultCustomer,

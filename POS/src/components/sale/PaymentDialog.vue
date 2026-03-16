@@ -580,8 +580,31 @@
 						</div>
 					</div>
 
-					<!-- Quick Amounts Area (Desktop) - Consistent layout for all payment methods -->
+					<!-- Desktop: SePay + Quick Amounts (show both when Chuyển khoản selected) -->
 					<div v-if="lastSelectedMethod && remainingAmount > 0" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
+						<!-- SePay Bank Transfer Button - shown when Chuyển khoản + SePay enabled -->
+						<div v-if="isSePayPaymentMethod(lastSelectedMethod)" class="mb-3">
+							<button
+								@click="initiateSePayPayment"
+								:disabled="isSubmitting"
+								:class="[
+									'w-full font-bold rounded-lg py-3 flex items-center justify-center gap-2',
+									isSubmitting ? 'bg-green-300 text-white cursor-not-allowed' : 'bg-green-500 text-white hover:bg-green-600'
+								]"
+							>
+								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+								</svg>
+								<span>{{ __('Pay') }} {{ formatCurrency(remainingAmount) }} {{ __('via Bank Transfer') }}</span>
+							</button>
+						</div>
+						<!-- Hint when Chuyển khoản selected but SePay not enabled -->
+						<div v-else-if="isBankTransferMethod(lastSelectedMethod) && !settingsStore.enableSepay" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+							<p class="text-xs text-amber-700">
+								{{ __('Enable SePay in POS Settings to pay via Bank Transfer (VietQR)') }}
+							</p>
+						</div>
+						<!-- Quick Amounts -->
 						<div class="text-start text-xs font-medium text-gray-600 mb-1.5">
 							{{ (isExactAmountModeActive && !isCashPaymentMethod(lastSelectedMethod))
 								? __('Exact amount only')
@@ -681,11 +704,28 @@
 						</div>
 
 						<!-- Mobile Action Buttons - Always visible at bottom -->
-						<div :class="['flex-shrink-0', isSmallMobile ? 'space-y-1' : 'space-y-1.5']">
-							<!-- Two buttons side by side when both needed -->
-							<div v-if="lastSelectedMethod && remainingAmount > 0 && allowCreditSale && paymentEntries.length === 0"
+							<div :class="['flex-shrink-0', isSmallMobile ? 'space-y-1' : 'space-y-1.5']">
+							<!-- SePay Bank Transfer - shown first when Chuyển khoản selected -->
+							<button
+								v-if="lastSelectedMethod && remainingAmount > 0 && isSePayPaymentMethod(lastSelectedMethod)"
+								@click="initiateSePayPayment"
+								:disabled="isSubmitting"
+								:class="[
+									'w-full font-bold rounded-lg flex items-center justify-center',
+									isSubmitting
+										? 'bg-green-300 text-white cursor-not-allowed'
+										: 'bg-green-500 text-white active:bg-green-600',
+									mobileButtonSize.height, mobileButtonSize.text, mobileButtonSize.gap
+								]"
+							>
+								<svg :class="mobileButtonSize.icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+								</svg>
+								<span>{{ __('Pay') }} {{ formatCurrency(remainingAmount) }} {{ __('via Bank Transfer') }}</span>
+							</button>
+							<!-- Two buttons side by side when credit sale and no payments yet -->
+							<div v-else-if="lastSelectedMethod && remainingAmount > 0 && allowCreditSale && paymentEntries.length === 0"
 								class="grid grid-cols-2" :class="isSmallMobile ? 'gap-1' : 'gap-1.5'">
-								<!-- Pay Full Amount Button -->
 								<button
 									@click="addCustomPayment(lastSelectedMethod, remainingAmount)"
 									:class="[
@@ -698,7 +738,6 @@
 									</svg>
 									<span class="truncate">{{ formatCurrency(remainingAmount) }}</span>
 								</button>
-								<!-- Pay on Account Button -->
 								<button
 									@click="addCreditAccountPayment"
 									:disabled="isSubmitting"
@@ -720,8 +759,7 @@
 									<span class="truncate">{{ isSubmitting ? __('Processing...') : __('On Account') }}</span>
 								</button>
 							</div>
-
-							<!-- Single Pay button (when no credit sale option) -->
+							<!-- Single Pay button (when no SePay, no credit sale) -->
 							<button
 								v-else-if="lastSelectedMethod && remainingAmount > 0"
 								@click="addCustomPayment(lastSelectedMethod, remainingAmount)"
@@ -1300,6 +1338,27 @@ async function identifyWalletPaymentMethods() {
 // Check if a payment method is a wallet payment
 function isWalletPaymentMethod(methodName) {
 	return walletPaymentMethods.value.has(methodName)
+}
+
+// Check if payment method name is bank transfer (Bank Draft = chuyển khoản)
+function isBankTransferMethod(method) {
+	if (!method) return false
+	const name = (method.mode_of_payment || "").toLowerCase()
+	return (
+		name === "bank draft" ||
+		name === "chuyển khoản" ||
+		name === "bank transfer" ||
+		name === "wire transfer" ||
+		name.includes("chuyển") ||
+		name.includes("transfer")
+	)
+}
+
+// Check if payment method is SePay bank transfer (async payment via VietQR)
+function isSePayPaymentMethod(method) {
+	if (!method || !settingsStore.enableSepay) return false
+	if (method.is_sepay === true) return true
+	return isBankTransferMethod(method)
 }
 
 // Check if a payment method is a cash payment (allows overpayment/change)
@@ -2190,6 +2249,25 @@ function applyCustomerCredit() {
 }
 
 // Add "Pay on Account" - Credit Sale (invoice with outstanding amount)
+function initiateSePayPayment() {
+	log.debug("[PaymentDialog] Initiate SePay bank transfer:", {
+		grandTotal: props.grandTotal,
+		remainingAmount: remainingAmount.value,
+	})
+	emit("payment-completed", {
+		payments: [],
+		change_amount: 0,
+		is_partial_payment: false,
+		is_sepay_pending: true,
+		paid_amount: 0,
+		outstanding_amount: props.grandTotal,
+		grand_total: props.grandTotal,
+		sales_team: selectedSalesPersons.value.length > 0 ? selectedSalesPersons.value : null,
+		delivery_date: isSalesOrder.value ? deliveryDate.value : null,
+	})
+	show.value = false
+}
+
 function addCreditAccountPayment() {
 	log.debug("[PaymentDialog] Add credit account payment (Pay Later):", {
 		grandTotal: props.grandTotal,

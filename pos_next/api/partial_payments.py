@@ -445,28 +445,35 @@ def create_payment_entry(
             frappe.throw(_("Payment account {0} does not exist").format(payment_account))
         pe.paid_to = payment_account
     else:
-        # Get account from Mode of Payment using ERPNext standard method
+        # Get account: try ERPNext get_bank_cash_account first, then pos_next get_payment_account (more fallbacks)
+        account = None
         try:
             from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
                 get_bank_cash_account,
             )
 
             account_info = get_bank_cash_account(mode_of_payment, invoice.company)
-            if not account_info or not account_info.get("account"):
-                frappe.throw(
-                    _("Could not determine payment account for {0}. Please specify payment_account parameter.").format(
-                        mode_of_payment
-                    )
-                )
-            pe.paid_to = account_info.get("account")
-        except Exception as e:
-            frappe.log_error(
-                title="Failed to get payment account",
-                message=f"Mode of Payment: {mode_of_payment}, Company: {invoice.company}, Error: {str(e)}"
-            )
+            account = account_info.get("account") if account_info else None
+        except Exception:
+            pass
+
+        if not account:
+            try:
+                from pos_next.api.invoices import get_payment_account
+
+                account_info = get_payment_account(mode_of_payment, invoice.company)
+                account = account_info.get("account") if account_info else None
+            except Exception:
+                pass
+
+        if not account:
             frappe.throw(
-                _("Could not determine payment account. Please specify payment_account parameter.")
+                _(
+                    "Please set default Cash or Bank account in Mode of Payment {0}, or set default accounts in Company {1}"
+                ).format(mode_of_payment, invoice.company),
+                title=_("Missing Account"),
             )
+        pe.paid_to = account
 
     # Set amounts
     pe.paid_amount = amount
@@ -525,11 +532,12 @@ def create_payment_entry(
         )
         raise
     except Exception as e:
+        err_msg = str(e) or type(e).__name__
         frappe.log_error(
             title=f"Payment Entry Creation Failed for {invoice_name}",
-            message=frappe.get_traceback()
+            message=f"{err_msg}\n\n{frappe.get_traceback()}"
         )
-        frappe.throw(_("Failed to create payment entry: {0}").format(str(e)))
+        frappe.throw(_("Failed to create payment entry: {0}").format(err_msg))
 
 
 # ==========================================

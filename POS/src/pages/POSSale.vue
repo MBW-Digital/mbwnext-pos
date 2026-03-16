@@ -608,6 +608,16 @@
 				@shift-closed="handleShiftClosed"
 			/>
 
+			<!-- SePay Bank Transfer Dialog -->
+			<SePayBankTransferDialog
+				v-model="uiStore.showSePayDialog"
+				:invoice-name="sePayInvoiceName"
+				:invoice-amount="sePayInvoiceAmount"
+				:pos-profile="shiftStore.profileName"
+				:currency="shiftStore.profileCurrency"
+				@payment-received="handleSePayPaymentReceived"
+			/>
+
 			<!-- Draft Invoices Dialog -->
 			<DraftInvoicesDialog
 				v-model="uiStore.showDraftDialog"
@@ -1183,6 +1193,7 @@ import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
 import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
+import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";
 import InvoiceManagement from "@/components/invoices/InvoiceManagement.vue";
@@ -1313,6 +1324,8 @@ const tempSelectedShiftType = ref("");
 
 // Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
 const showPhotoDialog = ref(false);
+const sePayInvoiceName = ref("");
+const sePayInvoiceAmount = ref(0);
 const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
 const attendancePhotoVideoRef = ref(null);
 const attendancePhotoCanvasRef = ref(null);
@@ -2506,6 +2519,21 @@ async function handlePaymentCompleted(paymentData) {
 			return;
 		}
 
+		// SePay bank transfer flow: create draft, show QR, wait for webhook
+		if (paymentData.is_sepay_pending) {
+			if (paymentData.sales_team?.length) cartStore.salesTeam = paymentData.sales_team;
+			if (paymentData.delivery_date) cartStore.setDeliveryDate(paymentData.delivery_date);
+
+			const draft = await cartStore.createDraftForSePay(
+				cartStore.targetDoctype,
+				paymentData.delivery_date || cartStore.deliveryDate
+			);
+			sePayInvoiceName.value = draft.name;
+			sePayInvoiceAmount.value = draft.grand_total;
+			uiStore.showSePayDialog = true;
+			return;
+		}
+
 		cartStore.payments = [];
 		if (paymentData.payments && Array.isArray(paymentData.payments)) {
 			paymentData.payments.forEach((p) => {
@@ -2635,6 +2663,40 @@ async function handlePaymentCompleted(paymentData) {
 		} else {
 			showWarning(errorContext.message);
 		}
+	}
+}
+
+async function handleSePayPaymentReceived() {
+	const invoiceName = sePayInvoiceName.value;
+	const invoiceAmount = sePayInvoiceAmount.value;
+	const soldItemCodes = cartStore.invoiceItems.map((item) => item.item_code);
+
+	uiStore.showSePayDialog = false;
+	cartStore.clearCart();
+	previousCartHash = "";
+	sePayInvoiceName.value = "";
+	sePayInvoiceAmount.value = 0;
+
+	if (cartStore.currentDraftId) {
+		draftsStore.deleteDraft(cartStore.currentDraftId);
+	}
+
+	await stockStore.refresh(soldItemCodes, shiftStore.profileWarehouse);
+	loadInvoiceHistoryData().catch((err) =>
+		log.debug("Background invoice cache refresh failed:", err)
+	);
+
+	if (shiftStore.autoPrintEnabled) {
+		try {
+			await handlePrintInvoice({ name: invoiceName });
+			showSuccess(__("Invoice {0} created and sent to printer", [invoiceName]));
+		} catch (error) {
+			log.error("Auto-print error:", error);
+			showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+		}
+	} else {
+		uiStore.showSuccess(invoiceName, invoiceAmount, invoiceAmount);
+		showSuccess(__("Invoice {0} created successfully", [invoiceName]));
 	}
 }
 

@@ -130,6 +130,16 @@ def get_payment_methods(pos_profile):
 		)
 
 		payment_methods = query.run(as_dict=True)
+
+		# Mark Bank Draft (and other bank transfer modes) as SePay when enabled
+		# User uses "Bank Draft" for chuyển khoản - no need to inject "Chuyển khoản"
+		from pos_next.api.sepay import _get_sepay_settings
+		if _get_sepay_settings(pos_profile):
+			for m in payment_methods:
+				name = (m.mode_of_payment or "").lower()
+				if name in ("bank draft", "chuyển khoản", "bank transfer", "wire transfer") or "transfer" in name or "chuyển" in name:
+					m["is_sepay"] = True
+
 		return payment_methods
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Payment Methods Error")

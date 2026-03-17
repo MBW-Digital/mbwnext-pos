@@ -37,11 +37,11 @@ SePay cho phép khách hàng thanh toán qua chuyển khoản ngân hàng bằng
 ## Luồng thanh toán
 
 1. Khách chọn sản phẩm, nhấn **Thanh toán**
-2. Chọn phương thức **Bank Draft** (chuyển khoản)
-3. Nhấn **Pay via Bank Transfer**
-4. Hệ thống tạo hóa đơn nháp và hiển thị mã QR
-5. Khách quét QR bằng app ngân hàng và chuyển tiền
-6. SePay nhận giao dịch → gửi webhook → hệ thống tự động submit hóa đơn
+2. Có thể thanh toán hỗn hợp: thêm tiền mặt (hoặc phương thức khác) trước, phần còn lại chọn **Bank Draft** → **Pay via Bank Transfer**
+3. Nhấn **Pay via Bank Transfer** (hiển thị số tiền còn lại cần chuyển)
+4. Hệ thống tạo hóa đơn nháp (đã ghi nhận các khoản thanh toán trước) và hiển thị mã QR với số tiền còn lại
+5. Khách quét QR bằng app ngân hàng và chuyển đúng số tiền hiển thị
+6. SePay nhận giao dịch → gửi webhook → hệ thống tự động submit hóa đơn và ghi nhận thanh toán chuyển khoản
 7. Giao diện polling phát hiện thanh toán → hiển thị thành công
 
 ## API Endpoints
@@ -54,6 +54,7 @@ SePay cho phép khách hàng thanh toán qua chuyển khoản ngân hàng bằng
 
 ## Lưu ý
 
+- **Thanh toán hỗn hợp**: Đơn 5000 VND có thể chia 3000 tiền mặt + 2000 chuyển khoản. Thêm tiền mặt trước, chọn Bank Draft, nhấn "Pay via Bank Transfer" — QR sẽ hiển thị 2000 VND.
 - **Mã đơn hàng**: Nội dung chuyển khoản phải chứa `DH` + số (vd: `DH1` cho SINV-00001)
 - **Chống trùng**: Webhook xử lý deduplication bằng `sepay_id` và kiểm tra invoice đã submit
 - **Môi trường test**: Dùng [my.dev.sepay.vn](https://my.dev.sepay.vn) để giả lập giao dịch

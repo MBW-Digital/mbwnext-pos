@@ -53,34 +53,34 @@ def get_sepay_banks():
 
 
 def _get_sepay_settings(pos_profile=None):
-	"""Get SePay config from POS Settings. Returns dict or None if disabled."""
+	"""Get SePay config from POS Profile. Returns dict or None if disabled."""
 	if not pos_profile:
 		return None
 
-	enabled = cint(
-		frappe.db.get_value(
-			"POS Settings",
-			{"pos_profile": pos_profile, "enabled": 1},
-			"enable_sepay"
-		) or 0
+	# Fetch fields - support both naming conventions (custom_field may vary)
+	doc = frappe.get_cached_doc("POS Profile", pos_profile)
+	# Check enable: payment_gateway==SePay + checkbox, or just checkbox if no payment_gateway
+	payment_gateway = doc.get("payment_gateway")
+	enable_check = cint(
+		doc.get("enable_sepay_bank_transfer_check")
+		or doc.get("enable_sepay_bank_transfer_check_bank_transfer_check")
 	)
-	if not enabled:
+	if payment_gateway is not None and payment_gateway != "SePay":
+		return None
+	if not enable_check:
 		return None
 
-	settings = frappe.db.get_value(
-		"POS Settings",
-		{"pos_profile": pos_profile, "enabled": 1},
-		[
-			"sepay_bank_account",
-			"sepay_bank_code",
-			"sepay_account_holder",
-		],
-		as_dict=True
-	)
-	if not settings or not settings.get("sepay_bank_account") or not settings.get("sepay_bank_code"):
+	bank_account = doc.get("bank_account_number") or doc.get("sepay_bank_account")
+	bank_code = doc.get("bank_code") or doc.get("sepay_bank_code")
+	account_holder = doc.get("account_holder_name") or doc.get("sepay_account_holder") or ""
+	if not bank_account or not bank_code:
 		return None
 
-	return settings
+	return frappe._dict(
+		sepay_bank_account=bank_account,
+		sepay_bank_code=bank_code,
+		sepay_account_holder=account_holder,
+	)
 
 
 @frappe.whitelist()
@@ -359,11 +359,11 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
 		return
 
-	# Validate amount
-	grand_total = flt(doc.grand_total, 2)
-	if abs(flt(amount, 2) - grand_total) > 0.01:
+	# Validate amount: must match outstanding (supports mixed payments: cash + bank transfer)
+	outstanding = flt(doc.outstanding_amount, 2)
+	if abs(flt(amount, 2) - outstanding) > 0.01:
 		frappe.log_error(
-			f"SePay amount mismatch: invoice={invoice_name} expected={grand_total} got={amount}",
+			f"SePay amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}",
 			"SePay Webhook"
 		)
 		return
@@ -383,24 +383,12 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		doc.submit()
 		frappe.db.commit()  # Ensure submit is committed before Payment Entry
 
-	# Step 2: Add payment via Payment Entry (correct way for submitted invoices)
-	from pos_next.api.partial_payments import create_payment_entry
-
-	try:
-		create_payment_entry(
-			invoice_name=invoice_name,
-			amount=amount,
-			mode_of_payment=mode_of_payment,
-			reference_no=reference_code or str(sepay_id),
-			remarks=f"SePay bank transfer - ref {reference_code or sepay_id}",
-		)
-	except Exception as e:
-		import traceback
-		frappe.log_error(
-			f"SePay webhook process error: {invoice_name}: {e}\n{traceback.format_exc()}\nData: {data}",
-			"SePay Webhook"
-		)
-		raise
+	# Step 2: Add payment via Sales Invoice Payment + direct GL entries (like POS, no Payment Entry)
+	_add_sepay_payment_direct(
+		doc, amount, mode_of_payment,
+		reference_no=reference_code or str(sepay_id),
+		transaction_id=sepay_id,
+	)
 
 	# Log for deduplication and audit
 	_log_sepay_transaction(
@@ -410,6 +398,130 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		reference_code=reference_code,
 		data=data,
 	)
+
+
+def _add_sepay_payment_direct(doc, amount, mode_of_payment, reference_no, transaction_id=None):
+	"""
+	Add Chuyển khoản payment via Sales Invoice Payment + direct GL entries (like POS).
+	No Payment Entry - GL entries are created directly against Sales Invoice.
+	"""
+	from erpnext.accounts.utils import get_account_currency, update_voucher_outstanding
+	from erpnext.accounts.general_ledger import make_gl_entries
+
+	invoice_name = doc.name
+	company = doc.company
+	conversion_rate = flt(doc.conversion_rate) or 1
+	precision = doc.precision("base_paid_amount")
+	base_amount = flt(amount * conversion_rate, precision)
+
+	# Get account for mode of payment
+	from pos_next.api.invoices import get_payment_account
+	account_info = get_payment_account(mode_of_payment, company)
+	account = account_info.get("account") if account_info else None
+	if not account:
+		frappe.throw(_("No account found for Mode of Payment {0}").format(mode_of_payment))
+
+	payment_type = frappe.db.get_value("Mode of Payment", mode_of_payment, "type") or "Bank"
+
+	# 1. Add Sales Invoice Payment child row
+	max_idx = frappe.db.sql(
+		"SELECT COALESCE(MAX(idx), 0) + 1 FROM `tabSales Invoice Payment` WHERE parent = %s",
+		(invoice_name,),
+	)
+	idx = max_idx[0][0] if max_idx else 1
+
+	payment_row = {
+		"doctype": "Sales Invoice Payment",
+		"parent": invoice_name,
+		"parenttype": "Sales Invoice",
+		"parentfield": "payments",
+		"idx": idx,
+		"mode_of_payment": mode_of_payment,
+		"amount": amount,
+		"base_amount": base_amount,
+		"account": account,
+		"type": payment_type,
+		"reference_no": reference_no or "",
+	}
+	if transaction_id:
+		payment_row["transaction_id"] = str(transaction_id)
+	frappe.get_doc(payment_row).insert(ignore_permissions=True)
+
+	# 2. Update paid_amount, base_paid_amount on Sales Invoice
+	total_paid = frappe.db.sql(
+		"SELECT COALESCE(SUM(amount), 0), COALESCE(SUM(base_amount), 0) FROM `tabSales Invoice Payment` WHERE parent = %s",
+		(invoice_name,),
+	)
+	if total_paid and total_paid[0]:
+		frappe.db.set_value(
+			"Sales Invoice",
+			invoice_name,
+			{"paid_amount": total_paid[0][0], "base_paid_amount": total_paid[0][1]},
+			update_modified=False,
+		)
+
+	# 3. Create GL entries (same logic as make_pos_gl_entries)
+	against_voucher = doc.name
+	if doc.is_return and doc.return_against and not doc.update_outstanding_for_self:
+		against_voucher = doc.return_against
+
+	payment_mode_account_currency = get_account_currency(account)
+
+	gl_entries = []
+	# Credit Receivable (reduce debt)
+	gl_entries.append(
+		doc.get_gl_dict(
+			{
+				"account": doc.debit_to,
+				"party_type": "Customer",
+				"party": doc.customer,
+				"against": account,
+				"credit": base_amount,
+				"credit_in_account_currency": base_amount
+				if doc.party_account_currency == doc.company_currency
+				else amount,
+				"credit_in_transaction_currency": amount,
+				"against_voucher": against_voucher,
+				"against_voucher_type": doc.doctype,
+				"cost_center": doc.cost_center,
+			},
+			doc.party_account_currency,
+			item=doc,
+		)
+	)
+	# Debit Bank/Cash (receive money)
+	gl_entries.append(
+		doc.get_gl_dict(
+			{
+				"account": account,
+				"against": doc.customer,
+				"debit": base_amount,
+				"debit_in_account_currency": base_amount
+				if payment_mode_account_currency == doc.company_currency
+				else amount,
+				"debit_in_transaction_currency": amount,
+				"cost_center": doc.cost_center,
+			},
+			payment_mode_account_currency,
+			item=doc,
+		)
+	)
+
+	# 4. Post GL entries (update_outstanding=No like POS, then call update_voucher_outstanding)
+	make_gl_entries(
+		gl_entries,
+		update_outstanding="No",
+		merge_entries=False,
+		from_repost=0,
+	)
+	update_voucher_outstanding(
+		voucher_type=doc.doctype,
+		voucher_no=against_voucher,
+		account=doc.debit_to,
+		party_type="Customer",
+		party=doc.customer,
+	)
+	frappe.db.commit()
 
 
 def _log_sepay_transaction(sepay_id, invoice_name, amount, reference_code, data):

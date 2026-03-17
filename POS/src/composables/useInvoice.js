@@ -959,17 +959,26 @@ export function useInvoice() {
 	/**
 	 * Create draft invoice for SePay bank transfer (no submit).
 	 * Used when customer pays via VietQR - webhook will submit when payment received.
+	 * Supports mixed payments: existing payments (cash, etc.) are included; VietQR shows remaining amount.
 	 *
 	 * @param {string} targetDoctype - Sales Invoice or Sales Order
 	 * @param {string|null} deliveryDate - For Sales Order
-	 * @returns {Promise<{name: string, grand_total: number}>} Invoice name and amount
+	 * @param {Array} existingPayments - Payments already made (e.g. cash) - [{mode_of_payment, amount, type}]
+	 * @returns {Promise<{name: string, grand_total: number, sepay_amount: number}>} Invoice name, total, and amount for VietQR
 	 */
 	async function createDraftForSePay(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
+		existingPayments = [],
 	) {
 		const rawItems = toRaw(invoiceItems.value)
 		const rawSalesTeam = toRaw(salesTeam.value)
+
+		const paymentsForInvoice = (existingPayments || []).map((p) => ({
+			mode_of_payment: p.mode_of_payment,
+			amount: p.amount,
+			type: p.type,
+		}))
 
 		const invoiceData = {
 			doctype: targetDoctype,
@@ -977,7 +986,7 @@ export function useInvoice() {
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
 			items: formatItemsForSubmission(rawItems),
-			payments: [], // No payment yet - webhook will add when customer transfers
+			payments: paymentsForInvoice,
 			discount_amount: additionalDiscount.value || 0,
 			coupon_code: couponCode.value,
 			is_pos: 1,
@@ -1005,9 +1014,14 @@ export function useInvoice() {
 			throw new Error("Failed to create draft invoice for bank transfer")
 		}
 
+		const grandTotal = invoiceDoc.grand_total || grandTotal.value
+		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
+		const sepayAmount = grandTotal - paidAmount
+
 		return {
 			name: invoiceDoc.name,
-			grand_total: invoiceDoc.grand_total || grandTotal.value,
+			grand_total: grandTotal,
+			sepay_amount: sepayAmount,
 		}
 	}
 

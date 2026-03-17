@@ -2519,17 +2519,18 @@ async function handlePaymentCompleted(paymentData) {
 			return;
 		}
 
-		// SePay bank transfer flow: create draft, show QR, wait for webhook
+		// SePay bank transfer flow: create draft (with existing payments if mixed), show QR for remaining, wait for webhook
 		if (paymentData.is_sepay_pending) {
 			if (paymentData.sales_team?.length) cartStore.salesTeam = paymentData.sales_team;
 			if (paymentData.delivery_date) cartStore.setDeliveryDate(paymentData.delivery_date);
 
 			const draft = await cartStore.createDraftForSePay(
 				cartStore.targetDoctype,
-				paymentData.delivery_date || cartStore.deliveryDate
+				paymentData.delivery_date || cartStore.deliveryDate,
+				paymentData.payments || []
 			);
 			sePayInvoiceName.value = draft.name;
-			sePayInvoiceAmount.value = draft.grand_total;
+			sePayInvoiceAmount.value = draft.sepay_amount ?? draft.grand_total;
 			uiStore.showSePayDialog = true;
 			return;
 		}

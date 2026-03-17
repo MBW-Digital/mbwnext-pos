@@ -99,7 +99,10 @@ def get_initial_data():
 
 	result["pos_settings"] = _get_pos_settings(pos_profile)
 	result["payment_methods"] = _get_payment_methods(pos_profile_name)
-	result["sepay_enabled"] = cint(result["pos_settings"].get("enable_sepay") or 0)
+	# SePay config is on POS Profile - add to pos_settings for frontend
+	from pos_next.api.sepay import _get_sepay_settings
+	sepay_ok = _get_sepay_settings(pos_profile_name) is not None
+	result["pos_settings"]["enable_sepay_bank_transfer_check"] = 1 if sepay_ok else 0
 
 	return result
 

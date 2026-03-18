@@ -51,8 +51,7 @@ export async function printInvoice(
 		return true
 	} catch (error) {
 		log.error("Error printing with Frappe print format:", error)
-		// Fallback to custom print format
-		return printInvoiceCustom(invoiceData)
+		return printInvoiceCustom(invoiceData, { paperWidth: 58 })
 	}
 }
 
@@ -60,27 +59,15 @@ export async function printInvoice(
  * Generates and prints a custom POS receipt using a thermal printer layout.
  *
  * This fallback printer is used when Frappe's standard print format is unavailable.
- * The receipt is optimized for 80mm thermal printers with clean, readable formatting.
- *
- * Receipt Structure:
- * - Header: Company name and invoice type
- * - Info: Invoice number, date, customer, payment status
- * - Items: Each item shows quantity × original price = subtotal
- * - Discounts: Displayed as separate line items with negative amounts
- * - Totals: Subtotal, tax, and grand total
- * - Payments: Payment methods and amounts, change, outstanding balance
- * - Footer: Thank you message and branding
+ * Supports 58mm (P103) and 80mm thermal printers. Can include SePay VietQR for bank transfer.
  *
  * @param {Object} invoiceData - The invoice document data from ERPNext
- * @param {string} invoiceData.name - Invoice number
- * @param {string} invoiceData.company - Company name
- * @param {Array} invoiceData.items - Invoice line items
- * @param {Array} invoiceData.payments - Payment records
- * @param {number} invoiceData.grand_total - Invoice total amount
+ * @param {Object} options - Optional: { sepayQr: {...}, paperWidth: 58|80 }
  */
-export function printInvoiceCustom(invoiceData) {
-	// Open print window with receipt size dimensions (80mm ≈ 302px at 96 DPI)
-	const printWindow = window.open("", "_blank", "width=350,height=600")
+export function printInvoiceCustom(invoiceData, options = {}) {
+	const { sepayQr, paperWidth = 80 } = options
+	const widthPx = paperWidth === 58 ? 220 : 302 // 58mm≈220px, 80mm≈302px at 96 DPI
+	const printWindow = window.open("", "_blank", `width=${widthPx + 50},height=700`)
 
 	const printContent = `
 		<!DOCTYPE html>
@@ -97,10 +84,10 @@ export function printInvoiceCustom(invoiceData) {
 
 				body {
 					font-family: 'Courier New', monospace;
-					padding: 10px;
-					width: 80mm;
+					padding: 8px;
+					width: ${paperWidth}mm;
 					margin: 0;
-					max-width: 80mm;
+					max-width: ${paperWidth}mm;
 					font-weight: bold;
 					color: black;
 				}
@@ -255,19 +242,44 @@ export function printInvoiceCustom(invoiceData) {
 
 				@media print {
 					@page {
-						size: 80mm auto;
+						size: ${paperWidth}mm auto;
 						margin: 0;
 					}
 
 					body {
-						width: 80mm;
-						padding: 5mm;
+						width: ${paperWidth}mm;
+						padding: 4mm;
 						margin: 0;
 					}
 
 					.no-print {
 						display: none;
 					}
+				}
+
+				.sepay-qr-section {
+					text-align: center;
+					margin: 12px 0;
+					padding: 10px 0;
+					border-top: 1px dashed #000;
+					border-bottom: 1px dashed #000;
+				}
+				.sepay-qr-title {
+					font-size: 11px;
+					font-weight: bold;
+					margin-bottom: 8px;
+				}
+				.sepay-qr-img {
+					max-width: 120px;
+					max-height: 120px;
+					display: block;
+					margin: 0 auto 8px;
+				}
+				.sepay-qr-detail {
+					font-size: 10px;
+					margin: 2px 0;
+					text-align: left;
+					padding: 0 4px;
 				}
 			</style>
 		</head>
@@ -442,10 +454,27 @@ export function printInvoiceCustom(invoiceData) {
 						: ""
 				}
 
+				${
+					sepayQr
+						? `
+				<!-- SePay VietQR - Scan to pay via bank transfer -->
+				<div class="sepay-qr-section">
+					<div class="sepay-qr-title">${__('BANK TRANSFER - Scan QR')}</div>
+					<img src="${sepayQr.qr_url}" alt="VietQR" class="sepay-qr-img" />
+					<div class="sepay-qr-detail"><strong>${__('Bank')}:</strong> ${sepayQr.bank_code}</div>
+					<div class="sepay-qr-detail"><strong>${__('Account')}:</strong> ${sepayQr.account_number}</div>
+					<div class="sepay-qr-detail"><strong>${__('Holder')}:</strong> ${sepayQr.account_holder || ''}</div>
+					<div class="sepay-qr-detail"><strong>${__('Amount')}:</strong> ${formatCurrency(sepayQr.amount)}</div>
+					<div class="sepay-qr-detail"><strong>${__('Content')}:</strong> ${sepayQr.content || ''}</div>
+				</div>
+				`
+						: ""
+				}
+
 				<!-- Footer -->
 				<div class="footer">
 					<div style="margin-bottom: 5px;">${__('Thank you for your business!')}</div>
-					<div style="font-size: 10px;">Powered by <a href="https://nexus.brainwise.me" target="_blank" style="color: #3b82f6; text-decoration: none; font-weight: 600;">BrainWise</a></div>
+					<div style="font-size: 10px;">Powered by <span style="color: #000; font-weight: 600;">MBWNext POS</span></div>
 				</div>
 			</div>
 
@@ -477,24 +506,39 @@ function formatCurrency(amount) {
 }
 
 /**
- * Print invoice by name, fetching print format from POS Profile
+ * Print invoice by name, fetching print format from POS Profile.
+ * Uses get_print_receipt_data to include SePay VietQR when applicable.
+ * For POS receipts with SePay QR, uses custom thermal layout (58mm/80mm).
+ *
  * @param {string} invoiceName - The name of the invoice to print
  * @param {string} printFormat - Optional print format override
  * @param {string} letterhead - Optional letterhead override
+ * @param {number} paperWidth - Receipt paper width in mm (58 for P103, 80 default)
  */
 export async function printInvoiceByName(
 	invoiceName,
 	printFormat = null,
 	letterhead = null,
+	paperWidth = 58,
 ) {
 	try {
-		// Fetch the invoice document using proper POS API endpoint
-		const invoiceDoc = await call("pos_next.api.invoices.get_invoice", {
+		// Fetch invoice with SePay QR data when applicable (for bank transfer receipts)
+		const invoiceDoc = await call("pos_next.api.invoices.get_print_receipt_data", {
 			invoice_name: invoiceName,
+			include_sepay_qr: 1,
 		})
 
 		if (!invoiceDoc) {
 			throw new Error("Invoice not found")
+		}
+
+		// Use custom thermal receipt when we have SePay QR (customer can scan to pay)
+		// or when explicitly using receipt format - supports 58mm (P103) and 80mm
+		if (invoiceDoc.sepay_qr) {
+			return printInvoiceCustom(invoiceDoc, {
+				sepayQr: invoiceDoc.sepay_qr,
+				paperWidth: paperWidth || 58,
+			})
 		}
 
 		// If no print format specified and invoice has a POS Profile, fetch its print settings
@@ -511,11 +555,9 @@ export async function printInvoiceByName(
 				}
 			} catch (error) {
 				log.warn("Could not fetch POS Profile print settings:", error)
-				// Continue with default print format
 			}
 		}
 
-		// Print the invoice
 		return await printInvoice(invoiceDoc, printFormat, letterhead)
 	} catch (error) {
 		log.error("Error fetching invoice for print:", error)

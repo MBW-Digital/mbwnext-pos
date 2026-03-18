@@ -1180,6 +1180,37 @@ def get_invoice(invoice_name):
 
 
 @frappe.whitelist()
+def get_print_receipt_data(invoice_name, include_sepay_qr=True):
+	"""
+	Get invoice data for printing receipt, with optional SePay VietQR for bank transfer.
+
+	Returns invoice dict plus sepay_qr when SePay is enabled and invoice has amount to pay.
+	Used by POS to print receipt with QR code for customer to scan and pay.
+	"""
+	data = get_invoice(invoice_name)
+	if not cint(include_sepay_qr) or not data.get("pos_profile"):
+		return data
+
+	amount = flt(data.get("outstanding_amount")) or flt(data.get("grand_total"))
+	if amount <= 0:
+		return data
+
+	try:
+		from pos_next.api.sepay import get_vietqr_url
+		qr = get_vietqr_url(
+			pos_profile=data["pos_profile"],
+			amount=amount,
+			invoice_id=data["name"],
+			template="compact",
+		)
+		if qr and qr.get("enabled") and qr.get("qr_url"):
+			data["sepay_qr"] = qr
+	except Exception:
+		pass
+	return data
+
+
+@frappe.whitelist()
 def get_invoices(pos_profile, limit=100):
 	"""
 	Get list of invoices for a POS Profile.

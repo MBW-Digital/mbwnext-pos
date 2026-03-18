@@ -47,6 +47,17 @@
 						</div>
 					</div>
 
+					<!-- Print Receipt with QR (for thermal printer) -->
+					<button
+						@click="printReceipt"
+						class="w-full py-2 px-3 text-sm font-medium rounded-lg border border-blue-300 bg-blue-50 text-blue-800 hover:bg-blue-100 flex items-center justify-center gap-2"
+					>
+						<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+						</svg>
+						{{ __('Print Receipt with QR') }}
+					</button>
+
 					<!-- Status -->
 					<div v-if="polling" class="space-y-3">
 						<div class="flex items-center gap-2 text-sm text-blue-600">
@@ -87,6 +98,7 @@ import { computed, ref, watch } from "vue"
 import { formatCurrency as formatCurrencyUtil } from "@/utils/currency"
 import { DEFAULT_CURRENCY } from "@/utils/currency"
 import { logger } from "@/utils/logger"
+import { printInvoiceByName } from "@/utils/printInvoice"
 
 const log = logger.create("SePayBankTransferDialog")
 
@@ -162,6 +174,15 @@ async function checkPaymentStatus() {
 		}
 	} catch (e) {
 		log.debug("Error checking payment status:", e)
+	}
+}
+
+async function printReceipt() {
+	if (!props.invoiceName) return
+	try {
+		await printInvoiceByName(props.invoiceName, null, null, 58)
+	} catch (e) {
+		log.error("Print receipt error:", e)
 	}
 }
 

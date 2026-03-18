@@ -1,8 +1,9 @@
 <template>
 	<!-- Icon-Only Sidebar - Hidden on Mobile, Visible on Desktop -->
 	<div class="hidden lg:flex w-16 flex-shrink-0 bg-white border-e border-gray-200 flex-col items-center py-4 flex flex-col gap-2">
-		<!-- Dashboard -->
+		<!-- Dashboard (temporarily hidden - set HIDE_DASHBOARD_AND_REPORTS to false to show) -->
 		<button
+			v-if="!HIDE_DASHBOARD_AND_REPORTS"
 			@click="handleMenuClick('dashboard')"
 			:class="[
 				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
@@ -52,8 +53,9 @@
 			</div>
 		</button>
 
-		<!-- Reports -->
+		<!-- Reports (temporarily hidden - set HIDE_DASHBOARD_AND_REPORTS to false to show) -->
 		<button
+			v-if="!HIDE_DASHBOARD_AND_REPORTS"
 			@click="handleMenuClick('reports')"
 			:class="[
 				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
@@ -111,6 +113,9 @@
 <script setup>
 import { FeatherIcon } from "frappe-ui"
 import { ref } from "vue"
+
+// Temporarily hide Dashboard and Reports in sidebar (set to false to show again)
+const HIDE_DASHBOARD_AND_REPORTS = true
 
 const emit = defineEmits(["menu-clicked"])
 

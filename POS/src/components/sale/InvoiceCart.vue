@@ -1107,8 +1107,8 @@
 								<label class="flex items-center gap-1.5 cursor-pointer select-none">
 									<input
 										type="checkbox"
-										:checked="isColdStorageCheckedForItem(index)"
-										@change="toggleColdStorageForItem(index, $event.target.checked, item.quantity)"
+										:checked="isColdStorageCheckedForItem(item)"
+										@change="toggleColdStorageForItem(item, $event.target.checked, item.quantity)"
 										class="w-3.5 h-3.5 sm:w-4 sm:h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
 										:aria-label="__('Add hot/cold service for this item')"
 									/>
@@ -1585,14 +1585,39 @@ const totalQuantity = computed(() => {
 });
 
 /**
- * Dịch vụ làm nóng/lạnh: phân bổ số dòng dịch vụ theo số lượng item.
- * Item dịch vụ được xác định bằng coldStorageFeeItemCode.
+ * Dịch vụ làm nóng/lạnh: lưu per-item (item_code + uom) thay vì phân bổ theo thứ tự.
+ * Tránh lỗi: tích item thứ 2 thì item đầu cũng tích theo.
  */
 const coldStorageFeeItemCode = computed(
 	() => props.coldStorageFeeItemCode || 'Phí bảo quản lạnh'
 );
 
-// Tổng số lượng dịch vụ (cộng quantity của tất cả dòng dịch vụ)
+// Map: key (item_code|uom) -> quantity đã chọn dịch vụ cho dòng đó
+const coldStorageItems = ref({});
+
+function getItemKey(item) {
+	return `${item.item_code}|${item.uom || item.stock_uom || ''}`;
+}
+
+// Sync coldStorageItems khi có fee lines sẵn (load từ cart cũ) - phân bổ theo thứ tự
+function syncColdStorageFromCart() {
+	const code = coldStorageFeeItemCode.value;
+	const items = (props.items || []).filter((i) => i.item_code !== code);
+	const totalFee = (props.items || [])
+		.filter((i) => i.item_code === code)
+		.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
+	let remaining = totalFee;
+	const next = {};
+	for (const item of items) {
+		const qty = Math.max(0, Math.floor(Number(item.quantity) || 0));
+		const share = Math.min(qty, remaining);
+		remaining -= share;
+		if (share > 0) next[getItemKey(item)] = share;
+	}
+	coldStorageItems.value = next;
+}
+
+// Khởi tạo khi có fee lines nhưng coldStorageItems rỗng (ví dụ: mở cart đã lưu)
 const coldStorageServiceLineCount = computed(() => {
 	const code = coldStorageFeeItemCode.value;
 	return (props.items || [])
@@ -1600,36 +1625,66 @@ const coldStorageServiceLineCount = computed(() => {
 		.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);
 });
 
-// Số "slot" dịch vụ gán cho item tại index (phân bổ tuần tự theo thứ tự dòng)
-function getColdStorageShare(index) {
-	const code = coldStorageFeeItemCode.value;
-	const items = props.items || [];
-	let remaining = coldStorageServiceLineCount.value;
+// Khi items thay đổi: xóa key không còn trong cart, emit remove cho phần dư
+watch(
+	() => props.items,
+	(newItems) => {
+		const code = coldStorageFeeItemCode.value;
+		const keysInCart = new Set(
+			(newItems || [])
+				.filter((i) => i.item_code !== code)
+				.map((i) => getItemKey(i))
+		);
+		const map = { ...coldStorageItems.value };
+		let changed = false;
+		for (const key of Object.keys(map)) {
+			if (!keysInCart.has(key)) {
+				emit('remove-cold-storage-fee-line', map[key]);
+				delete map[key];
+				changed = true;
+			}
+		}
+		if (changed) coldStorageItems.value = map;
+	},
+	{ deep: true }
+);
 
-	for (let i = 0; i < items.length; i++) {
-		if (items[i].item_code === code) continue;
-		const qty = Math.max(0, Math.floor(Number(items[i].quantity) || 0));
-		const share = Math.min(qty, remaining);
-		remaining -= share;
-		if (i === index) return share;
-	}
+// Sync lần đầu khi có fee lines
+watch(
+	coldStorageServiceLineCount,
+	(count) => {
+		if (count > 0 && Object.keys(coldStorageItems.value).length === 0) {
+			syncColdStorageFromCart();
+		}
+	},
+	{ immediate: true }
+);
 
-	return 0;
+function isColdStorageCheckedForItem(item) {
+	const key = getItemKey(item);
+	return (coldStorageItems.value[key] || 0) > 0;
 }
 
-function isColdStorageCheckedForItem(index) {
-	return getColdStorageShare(index) > 0;
-}
-
-function toggleColdStorageForItem(index, checked, quantity) {
+function toggleColdStorageForItem(item, checked, quantity) {
 	const qty = Math.max(0, Math.floor(Number(quantity) || 0));
 	if (qty <= 0) return;
 
+	const key = getItemKey(item);
+	const map = coldStorageItems.value;
+
 	if (checked) {
+		map[key] = (map[key] || 0) + qty;
 		emit('add-cold-storage-fee-line', qty);
 	} else {
-		emit('remove-cold-storage-fee-line', qty);
+		const current = map[key] || 0;
+		const remove = Math.min(current, qty);
+		if (remove > 0) {
+			map[key] = current - remove;
+			if (map[key] <= 0) delete map[key];
+			emit('remove-cold-storage-fee-line', remove);
+		}
 	}
+	coldStorageItems.value = { ...map };
 }
 
 /**

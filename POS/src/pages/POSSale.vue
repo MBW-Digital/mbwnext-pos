@@ -142,6 +142,27 @@
 						</svg>
 						<span>{{ __("Return Invoice") }}</span>
 					</button>
+					<a
+						:href="externalAppUrl"
+						target="_blank"
+						rel="noopener noreferrer"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-cyan-50 flex items-center gap-3 transition-colors"
+					>
+						<svg
+							class="w-5 h-5 text-cyan-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+							/>
+						</svg>
+						<span>{{ __("Back to Desk") }}</span>
+					</a>
 				</template>
 				<template #additional-actions>
 					<button
@@ -1220,6 +1241,7 @@ import { useStockStore } from "@/stores/stock";
 // Pinia Stores
 import { usePOSCartStore } from "@/stores/posCart";
 import { useInvoiceTabsStore } from "@/stores/invoiceTabs";
+import { useBootstrapStore } from "@/stores/bootstrap";
 import { usePOSDraftsStore } from "@/stores/posDrafts";
 import { usePOSSettingsStore } from "@/stores/posSettings";
 import { usePOSShiftStore } from "@/stores/posShift";
@@ -1271,6 +1293,15 @@ const serviceSurchargeItemCode = computed(
 		shiftStore.currentProfile?.service_surcharge_item ||
 		'Phí bảo quản lạnh'
 );
+
+// External app URL for "Open App" menu (default: site_url/app; override via site_config.json: pos_external_app_url)
+const bootstrapStore = useBootstrapStore();
+const externalAppUrl = computed(() => {
+	const fromBootstrap = bootstrapStore.getPreloadedExternalAppUrl();
+	const fromBoot = window.frappe?.boot?.pos_external_app_url;
+	const siteApp = typeof window !== "undefined" ? `${window.location.origin}/app` : "/app";
+	return fromBootstrap || fromBoot || siteApp;
+});
 
 // Component refs
 const itemsSelectorRef = ref(null);

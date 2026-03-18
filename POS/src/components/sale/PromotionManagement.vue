@@ -83,8 +83,7 @@
 									</template>
 								</FormControl>
 
-								<FormControl
-									type="select"
+								<SelectInput
 									v-model="filterStatus"
 									:options="[
 										{ label: __('All Status'), value: 'all' },
@@ -93,6 +92,7 @@
 										{ label: __('Not Started'), value: 'not_started' },
 										{ label: __('Disabled Only'), value: 'disabled' }
 									]"
+									:placeholder="__('All Status')"
 								/>
 							</div>
 

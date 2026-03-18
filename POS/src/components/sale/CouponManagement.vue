@@ -16,8 +16,7 @@
 				</FormControl>
 
 				<div class="grid grid-cols-2 gap-2">
-					<FormControl
-						type="select"
+					<SelectInput
 						v-model="filterStatus"
 						:options="[
 							{ label: __('All Status'), value: 'all' },
@@ -27,15 +26,16 @@
 							{ label: __('Exhausted'), value: 'exhausted' },
 							{ label: __('Disabled'), value: 'disabled' }
 						]"
+						:placeholder="__('All Status')"
 					/>
-					<FormControl
-						type="select"
+					<SelectInput
 						v-model="filterType"
 						:options="[
 							{ label: __('All Types'), value: 'all' },
 							{ label: __('Promotional'), value: 'Promotional' },
 							{ label: __('Gift Card'), value: 'Gift Card' }
 						]"
+						:placeholder="__('All Types')"
 					/>
 				</div>
 			</div>
@@ -565,6 +565,7 @@ import { Badge, Button, Card, FormControl, LoadingIndicator, createResource } fr
 import { FeatherIcon } from "frappe-ui"
 import { storeToRefs } from "pinia"
 import { computed, onMounted, ref, watch } from "vue"
+import SelectInput from "../common/SelectInput.vue"
 import TranslatedHTML from "../common/TranslatedHTML.vue"
 
 const { showSuccess, showError, showWarning } = useToast()

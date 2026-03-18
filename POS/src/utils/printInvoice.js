@@ -409,13 +409,26 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 					</div>
 				</div>
 
-				<!-- Payments -->
+				<!-- Payments: include existing + bank transfer (SePay) when applicable -->
 				${
-					invoiceData.payments && invoiceData.payments.length > 0
-						? `
+					(() => {
+						const existing = invoiceData.payments || []
+						// Khi có sepayQr: bỏ qua các dòng chuyển khoản có amount = 0 (tránh trùng "Chuyển khoản: 0")
+						const isBankTransfer = (p) => {
+							const name = (p.mode_of_payment || '').toLowerCase()
+							return name.includes('chuyển khoản') || name.includes('bank draft') || name === 'bank'
+						}
+						const filtered = sepayQr && sepayQr.amount > 0
+							? existing.filter((p) => !(isBankTransfer(p) && p.amount <= 0))
+							: existing
+						const withBankTransfer = sepayQr && sepayQr.amount > 0
+							? [...filtered, { mode_of_payment: __('Bank Transfer'), amount: sepayQr.amount }]
+							: filtered
+						if (withBankTransfer.length === 0 && !(invoiceData.paid_amount > 0) && !(invoiceData.outstanding_amount > 0)) return ""
+						return `
 				<div class="payments">
-					<div style="font-weight: bold; margin-bottom: 5px; font-size: 12px;">Payments:</div>
-					${invoiceData.payments
+					<div style="font-weight: bold; margin-bottom: 5px; font-size: 12px;">${__('Payments:')}</div>
+					${withBankTransfer
 						.map(
 							(payment) => `
 						<div class="payment-row">
@@ -451,7 +464,7 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 					}
 				</div>
 				`
-						: ""
+					})()
 				}
 
 				${

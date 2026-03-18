@@ -112,6 +112,13 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
 	}
 
 	/**
+	 * Get external app URL for "Open App" menu (from site_config.json: pos_external_app_url)
+	 */
+	function getPreloadedExternalAppUrl() {
+		return data.value?.pos_external_app_url || null
+	}
+
+	/**
 	 * Get preloaded precision settings or defaults if not available
 	 * Settings from Date and Number Format section in System Settings
 	 * @returns {{ currency: number, float: number, rounding_method: string, number_format: string }}
@@ -156,6 +163,7 @@ export const useBootstrapStore = defineStore("bootstrap", () => {
 		getPreloadedPOSProfile,
 		getPreloadedPOSSettings,
 		getPreloadedPaymentMethods,
+		getPreloadedExternalAppUrl,
 		getPreloadedPrecision,
 		hasBootstrapData,
 		reset,

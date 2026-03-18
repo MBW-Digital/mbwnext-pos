@@ -65,6 +65,7 @@ def get_initial_data():
 		"pos_profile": None,
 		"pos_settings": None,
 		"payment_methods": [],
+		"pos_external_app_url": frappe.conf.get("pos_external_app_url") or frappe.utils.get_url("/app"),
 	}
 
 	# Get open shift - if no shift, return early with defaults

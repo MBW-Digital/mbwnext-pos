@@ -2117,7 +2117,7 @@
   "columns": 0,
   "default": null,
   "depends_on": "eval:doc.payment_gateway===\"SePay\"",
-  "description": "llow customers to pay via bank transfer (VietQR). Configure webhook at my.sepay.vn",
+  "description": "Allow customers to pay via bank transfer (VietQR). Configure webhook at my.sepay.vn",
   "docstatus": 0,
   "doctype": "Custom Field",
   "dt": "POS Profile",

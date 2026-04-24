@@ -59,13 +59,13 @@ export async function printInvoice(
  * Generates and prints a custom POS receipt using a thermal printer layout.
  *
  * This fallback printer is used when Frappe's standard print format is unavailable.
- * Supports 58mm (P103) and 80mm thermal printers. Can include SePay VietQR for bank transfer.
+ * Supports 58mm (P103) and 80mm thermal printers. Can include VNPost Pay VietQR for bank transfer.
  *
  * @param {Object} invoiceData - The invoice document data from ERPNext
- * @param {Object} options - Optional: { sepayQr: {...}, paperWidth: 58|80 }
+ * @param {Object} options - Optional: { vnpostQr: {...}, paperWidth: 58|80 }
  */
 export function printInvoiceCustom(invoiceData, options = {}) {
-	const { sepayQr, paperWidth = 80 } = options
+	const { vnpostQr, paperWidth = 80 } = options
 	const widthPx = paperWidth === 58 ? 220 : 302 // 58mm≈220px, 80mm≈302px at 96 DPI
 	const printWindow = window.open("", "_blank", `width=${widthPx + 50},height=700`)
 
@@ -257,25 +257,25 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 					}
 				}
 
-				.sepay-qr-section {
+				.vnp-qr-section {
 					text-align: center;
 					margin: 12px 0;
 					padding: 10px 0;
 					border-top: 1px dashed #000;
 					border-bottom: 1px dashed #000;
 				}
-				.sepay-qr-title {
+				.vnp-qr-title {
 					font-size: 11px;
 					font-weight: bold;
 					margin-bottom: 8px;
 				}
-				.sepay-qr-img {
+				.vnp-qr-img {
 					max-width: 120px;
 					max-height: 120px;
 					display: block;
 					margin: 0 auto 8px;
 				}
-				.sepay-qr-detail {
+				.vnp-qr-detail {
 					font-size: 10px;
 					margin: 2px 0;
 					text-align: left;
@@ -409,20 +409,19 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 					</div>
 				</div>
 
-				<!-- Payments: include existing + bank transfer (SePay) when applicable -->
+				<!-- Payments: include existing + bank transfer (VNPost) when applicable -->
 				${
 					(() => {
 						const existing = invoiceData.payments || []
-						// Khi có sepayQr: bỏ qua các dòng chuyển khoản có amount = 0 (tránh trùng "Chuyển khoản: 0")
 						const isBankTransfer = (p) => {
 							const name = (p.mode_of_payment || '').toLowerCase()
 							return name.includes('chuyển khoản') || name.includes('bank draft') || name === 'bank'
 						}
-						const filtered = sepayQr && sepayQr.amount > 0
+						const filtered = vnpostQr && vnpostQr.amount > 0
 							? existing.filter((p) => !(isBankTransfer(p) && p.amount <= 0))
 							: existing
-						const withBankTransfer = sepayQr && sepayQr.amount > 0
-							? [...filtered, { mode_of_payment: __('Bank Transfer'), amount: sepayQr.amount }]
+						const withBankTransfer = vnpostQr && vnpostQr.amount > 0
+							? [...filtered, { mode_of_payment: __('Bank Transfer'), amount: vnpostQr.amount }]
 							: filtered
 						if (withBankTransfer.length === 0 && !(invoiceData.paid_amount > 0) && !(invoiceData.outstanding_amount > 0)) return ""
 						return `
@@ -468,17 +467,20 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 				}
 
 				${
-					sepayQr
+					vnpostQr
 						? `
-				<!-- SePay VietQR - Scan to pay via bank transfer -->
-				<div class="sepay-qr-section">
-					<div class="sepay-qr-title">${__('BANK TRANSFER - Scan QR')}</div>
-					<img src="${sepayQr.qr_url}" alt="VietQR" class="sepay-qr-img" />
-					<div class="sepay-qr-detail"><strong>${__('Bank')}:</strong> ${sepayQr.bank_code}</div>
-					<div class="sepay-qr-detail"><strong>${__('Account')}:</strong> ${sepayQr.account_number}</div>
-					<div class="sepay-qr-detail"><strong>${__('Holder')}:</strong> ${sepayQr.account_holder || ''}</div>
-					<div class="sepay-qr-detail"><strong>${__('Amount')}:</strong> ${formatCurrency(sepayQr.amount)}</div>
-					<div class="sepay-qr-detail"><strong>${__('Content')}:</strong> ${sepayQr.content || ''}</div>
+				<div class="vnp-qr-section">
+					<div class="vnp-qr-title">${__('BANK TRANSFER - VNPost Pay')}</div>
+					${
+						vnpostQr.qr_url
+							? `<img src="${vnpostQr.qr_url}" alt="VietQR" class="vnp-qr-img" />`
+							: `<p class="vnp-qr-detail">${__('Open payment page on the POS for QR / SDK (VNPost).')}</p>`
+					}
+					<div class="vnp-qr-detail"><strong>${__('Bank')}:</strong> ${vnpostQr.bank_code || ""}</div>
+					<div class="vnp-qr-detail"><strong>${__('Account')}:</strong> ${vnpostQr.account_number || ""}</div>
+					<div class="vnp-qr-detail"><strong>${__('Holder')}:</strong> ${vnpostQr.account_holder || ""}</div>
+					<div class="vnp-qr-detail"><strong>${__('Amount')}:</strong> ${formatCurrency(vnpostQr.amount)}</div>
+					<div class="vnp-qr-detail"><strong>${__('Content')}:</strong> ${vnpostQr.content || ""}</div>
 				</div>
 				`
 						: ""
@@ -520,8 +522,8 @@ function formatCurrency(amount) {
 
 /**
  * Print invoice by name, fetching print format from POS Profile.
- * Uses get_print_receipt_data to include SePay VietQR when applicable.
- * For POS receipts with SePay QR, uses custom thermal layout (58mm/80mm).
+ * Uses get_print_receipt_data to include VNPost data when applicable.
+ * For receipts with VNPost QR, uses custom thermal layout (58mm/80mm).
  *
  * @param {string} invoiceName - The name of the invoice to print
  * @param {string} printFormat - Optional print format override
@@ -535,21 +537,18 @@ export async function printInvoiceByName(
 	paperWidth = 58,
 ) {
 	try {
-		// Fetch invoice with SePay QR data when applicable (for bank transfer receipts)
 		const invoiceDoc = await call("pos_next.api.invoices.get_print_receipt_data", {
 			invoice_name: invoiceName,
-			include_sepay_qr: 1,
+			include_vnpost_qr: 1,
 		})
 
 		if (!invoiceDoc) {
 			throw new Error("Invoice not found")
 		}
 
-		// Use custom thermal receipt when we have SePay QR (customer can scan to pay)
-		// or when explicitly using receipt format - supports 58mm (P103) and 80mm
-		if (invoiceDoc.sepay_qr) {
+		if (invoiceDoc.vnpost_qr) {
 			return printInvoiceCustom(invoiceDoc, {
-				sepayQr: invoiceDoc.sepay_qr,
+				vnpostQr: invoiceDoc.vnpost_qr,
 				paperWidth: paperWidth || 58,
 			})
 		}

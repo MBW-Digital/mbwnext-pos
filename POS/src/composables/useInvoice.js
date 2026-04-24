@@ -957,16 +957,14 @@ export function useInvoice() {
 	}
 
 	/**
-	 * Create draft invoice for SePay bank transfer (no submit).
-	 * Used when customer pays via VietQR - webhook will submit when payment received.
-	 * Supports mixed payments: existing payments (cash, etc.) are included; VietQR shows remaining amount.
+	 * Create draft for VNPost Pay bank transfer (not submitted). Callback confirms payment.
 	 *
 	 * @param {string} targetDoctype - Sales Invoice or Sales Order
 	 * @param {string|null} deliveryDate - For Sales Order
 	 * @param {Array} existingPayments - Payments already made (e.g. cash) - [{mode_of_payment, amount, type}]
-	 * @returns {Promise<{name: string, grand_total: number, sepay_amount: number}>} Invoice name, total, and amount for VietQR
+	 * @returns {Promise<{name: string, grand_total: number, vnpost_amount: number}>}
 	 */
-	async function createDraftForSePay(
+	async function createDraftForVnpostPay(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		existingPayments = [],
@@ -1016,12 +1014,12 @@ export function useInvoice() {
 
 		const grandTotal = invoiceDoc.grand_total || grandTotal.value
 		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
-		const sepayAmount = grandTotal - paidAmount
+		const vnpostAmount = grandTotal - paidAmount
 
 		return {
 			name: invoiceDoc.name,
 			grand_total: grandTotal,
-			sepay_amount: sepayAmount,
+			vnpost_amount: vnpostAmount,
 		}
 	}
 
@@ -1198,7 +1196,7 @@ export function useInvoice() {
 		validateStock,
 		saveDraft,
 		submitInvoice,
-		createDraftForSePay,
+		createDraftForVnpostPay,
 		resetInvoice,
 		clearCart,
 		setDefaultCustomer,

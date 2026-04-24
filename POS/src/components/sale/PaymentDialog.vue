@@ -581,16 +581,16 @@
 					</div>
 
 					<!-- Desktop: SePay + Quick Amounts (show when Chuyển khoản selected) -->
-					<div v-if="lastSelectedMethod && (remainingAmount > 0 || showSePayButton)" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
+					<div v-if="lastSelectedMethod && (remainingAmount > 0 || showVnpostPayButton)" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
 						<!-- SePay Bank Transfer - require full allocation first (add remaining Cash before QR) -->
-						<div v-if="showSePayButton" class="mb-3">
+						<div v-if="showVnpostPayButton" class="mb-3">
 							<div v-if="remainingAmount > 0" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
 								<p class="text-xs text-amber-700">
 									{{ __('Add remaining {0} (Cash or other method) first, then Pay via Bank Transfer', [formatCurrency(remainingAmount)]) }}
 								</p>
 							</div>
 							<button
-								@click="initiateSePayPayment"
+								@click="initiateVnpostPayPayment"
 								:disabled="isSubmitting || remainingAmount > 0"
 								:class="[
 									'w-full font-bold rounded-lg py-3 flex items-center justify-center gap-2',
@@ -600,13 +600,13 @@
 								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
 								</svg>
-								<span>{{ __('Pay') }} {{ formatCurrency(sepayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
+								<span>{{ __('Pay') }} {{ formatCurrency(vnpostPayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
 							</button>
 						</div>
 						<!-- Hint when Chuyển khoản selected but SePay not enabled -->
-						<div v-else-if="isBankTransferMethod(lastSelectedMethod) && !settingsStore.enableSepay" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+						<div v-else-if="isBankTransferMethod(lastSelectedMethod) && !settingsStore.enableVnpostPay" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
 							<p class="text-xs text-amber-700">
-								{{ __('Enable SePay in POS Profile to pay via Bank Transfer (VietQR)') }}
+								{{ __('Enable VNPost Pay in POS Profile to pay via Bank Transfer (VietQR)') }}
 							</p>
 						</div>
 						<!-- Quick Amounts - only when remaining to pay -->
@@ -711,14 +711,14 @@
 						<!-- Mobile Action Buttons - Always visible at bottom -->
 							<div :class="['flex-shrink-0', isSmallMobile ? 'space-y-1' : 'space-y-1.5']">
 							<!-- SePay Bank Transfer - require full allocation first (add remaining Cash before QR) -->
-							<template v-if="lastSelectedMethod && showSePayButton">
+							<template v-if="lastSelectedMethod && showVnpostPayButton">
 								<div v-if="remainingAmount > 0" class="p-2 bg-amber-50 border border-amber-200 rounded-lg mb-1">
 									<p class="text-xs text-amber-700">
 										{{ __('Add remaining {0} first', [formatCurrency(remainingAmount)]) }}
 									</p>
 								</div>
 								<button
-									@click="initiateSePayPayment"
+									@click="initiateVnpostPayPayment"
 									:disabled="isSubmitting || remainingAmount > 0"
 									:class="[
 										'w-full font-bold rounded-lg flex items-center justify-center',
@@ -731,7 +731,7 @@
 									<svg :class="mobileButtonSize.icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
 									</svg>
-									<span>{{ __('Pay') }} {{ formatCurrency(sepayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
+									<span>{{ __('Pay') }} {{ formatCurrency(vnpostPayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
 								</button>
 							</template>
 							<!-- Two buttons side by side when credit sale and no payments yet -->
@@ -791,7 +791,7 @@
 
 							<!-- Complete Payment Button - hidden when Chuyển khoản pending (use Pay via Bank Transfer) -->
 							<button
-								v-if="(remainingAmount === 0 || (applyWriteOff && canWriteOff)) && totalPaid > 0 && !showSePayButton"
+								v-if="(remainingAmount === 0 || (applyWriteOff && canWriteOff)) && totalPaid > 0 && !showVnpostPayButton"
 								@click="completePayment"
 								:disabled="isSubmitting || !canComplete"
 								:class="[
@@ -938,7 +938,7 @@
 
 						<!-- Complete/Partial Payment Button - hidden when Chuyển khoản pending (use Pay via Bank Transfer) -->
 						<button
-							v-if="!showSePayButton"
+							v-if="!showVnpostPayButton"
 							@click="completePayment"
 							:disabled="!canComplete || isSubmitting"
 							:class="[
@@ -1366,13 +1366,6 @@ function isBankTransferMethod(method) {
 	)
 }
 
-// Check if payment method is SePay bank transfer (async payment via VietQR)
-function isSePayPaymentMethod(method) {
-	if (!method || !settingsStore.enableSepay) return false
-	if (method.is_sepay === true) return true
-	return isBankTransferMethod(method)
-}
-
 // Check if a payment method is a cash payment (allows overpayment/change)
 function isCashPaymentMethod(method) {
 	if (!method) return false
@@ -1655,14 +1648,14 @@ const bankTransferTotalInPayments = computed(() => {
 })
 
 // SePay button amount: Chuyển khoản total from payment entries, else remaining
-const sepayButtonAmount = computed(() => {
+const vnpostPayButtonAmount = computed(() => {
 	const bankTotal = bankTransferTotalInPayments.value
 	return bankTotal > 0 ? bankTotal : remainingAmount.value
 })
 
 // Show Pay via Bank Transfer when payment entries contain Chuyển khoản (regardless of selected method)
-const showSePayButton = computed(() => {
-	if (!settingsStore.enableSepay || bankTransferTotalInPayments.value <= 0) {
+const showVnpostPayButton = computed(() => {
+	if (!settingsStore.enableVnpostPay || bankTransferTotalInPayments.value <= 0) {
 		return false
 	}
 	return remainingAmount.value > 0 || bankTransferTotalInPayments.value > 0
@@ -2282,17 +2275,17 @@ function applyCustomerCredit() {
 }
 
 // SePay bank transfer - amount follows Add / Quick amounts for Chuyển khoản
-function initiateSePayPayment() {
-	const sepayAmount = sepayButtonAmount.value
+function initiateVnpostPayPayment() {
+	const vnpostAmount = vnpostPayButtonAmount.value
 
 	// Exclude Chuyển khoản from draft payments - that part comes via webhook
 	const otherPayments = paymentEntries.value.filter(
 		(p) => !isBankTransferMethod({ mode_of_payment: p.mode_of_payment })
 	)
 
-	log.debug("[PaymentDialog] Initiate SePay bank transfer:", {
+	log.debug("[PaymentDialog] Initiate VNPost Pay bank transfer:", {
 		grandTotal: props.grandTotal,
-		sepayAmount,
+		vnpostAmount,
 		otherPayments: otherPayments.length,
 	})
 	emit("payment-completed", {
@@ -2303,10 +2296,10 @@ function initiateSePayPayment() {
 		})),
 		change_amount: 0,
 		is_partial_payment: otherPayments.length > 0,
-		is_sepay_pending: true,
-		sepay_amount: sepayAmount,
+		is_vnpost_pending: true,
+		vnpost_amount: vnpostAmount,
 		paid_amount: otherPayments.reduce((s, p) => s + (p.amount || 0), 0),
-		outstanding_amount: sepayAmount,
+		outstanding_amount: vnpostAmount,
 		grand_total: props.grandTotal,
 		sales_team: selectedSalesPersons.value.length > 0 ? selectedSalesPersons.value : null,
 		delivery_date: isSalesOrder.value ? deliveryDate.value : null,

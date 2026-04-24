@@ -629,14 +629,13 @@
 				@shift-closed="handleShiftClosed"
 			/>
 
-			<!-- SePay Bank Transfer Dialog -->
-			<SePayBankTransferDialog
-				v-model="uiStore.showSePayDialog"
-				:invoice-name="sePayInvoiceName"
-				:invoice-amount="sePayInvoiceAmount"
+			<VNPostPayBankTransferDialog
+				v-model="uiStore.showVnpostPayDialog"
+				:invoice-name="vnpostPayInvoiceName"
+				:invoice-amount="vnpostPayInvoiceAmount"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
-				@payment-received="handleSePayPaymentReceived"
+				@payment-received="handleVnpostPayPaymentReceived"
 			/>
 
 			<!-- Draft Invoices Dialog -->
@@ -1214,7 +1213,7 @@ import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
 import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
-import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
+import VNPostPayBankTransferDialog from "@/components/sale/VNPostPayBankTransferDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";
 import InvoiceManagement from "@/components/invoices/InvoiceManagement.vue";
@@ -1355,8 +1354,8 @@ const tempSelectedShiftType = ref("");
 
 // Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
 const showPhotoDialog = ref(false);
-const sePayInvoiceName = ref("");
-const sePayInvoiceAmount = ref(0);
+const vnpostPayInvoiceName = ref("");
+const vnpostPayInvoiceAmount = ref(0);
 const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
 const attendancePhotoVideoRef = ref(null);
 const attendancePhotoCanvasRef = ref(null);
@@ -2550,19 +2549,18 @@ async function handlePaymentCompleted(paymentData) {
 			return;
 		}
 
-		// SePay bank transfer flow: create draft (with existing payments if mixed), show QR for remaining, wait for webhook
-		if (paymentData.is_sepay_pending) {
+		if (paymentData.is_vnpost_pending) {
 			if (paymentData.sales_team?.length) cartStore.salesTeam = paymentData.sales_team;
 			if (paymentData.delivery_date) cartStore.setDeliveryDate(paymentData.delivery_date);
 
-			const draft = await cartStore.createDraftForSePay(
+			const draft = await cartStore.createDraftForVnpostPay(
 				cartStore.targetDoctype,
 				paymentData.delivery_date || cartStore.deliveryDate,
 				paymentData.payments || []
 			);
-			sePayInvoiceName.value = draft.name;
-			sePayInvoiceAmount.value = draft.sepay_amount ?? draft.grand_total;
-			uiStore.showSePayDialog = true;
+			vnpostPayInvoiceName.value = draft.name;
+			vnpostPayInvoiceAmount.value = draft.vnpost_amount ?? draft.grand_total;
+			uiStore.showVnpostPayDialog = true;
 			return;
 		}
 
@@ -2698,16 +2696,16 @@ async function handlePaymentCompleted(paymentData) {
 	}
 }
 
-async function handleSePayPaymentReceived() {
-	const invoiceName = sePayInvoiceName.value;
-	const invoiceAmount = sePayInvoiceAmount.value;
+async function handleVnpostPayPaymentReceived() {
+	const invoiceName = vnpostPayInvoiceName.value;
+	const invoiceAmount = vnpostPayInvoiceAmount.value;
 	const soldItemCodes = cartStore.invoiceItems.map((item) => item.item_code);
 
-	uiStore.showSePayDialog = false;
+	uiStore.showVnpostPayDialog = false;
 	cartStore.clearCart();
 	previousCartHash = "";
-	sePayInvoiceName.value = "";
-	sePayInvoiceAmount.value = 0;
+	vnpostPayInvoiceName.value = "";
+	vnpostPayInvoiceAmount.value = 0;
 
 	if (cartStore.currentDraftId) {
 		draftsStore.deleteDraft(cartStore.currentDraftId);

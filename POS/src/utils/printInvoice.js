@@ -65,7 +65,7 @@ export async function printInvoice(
  * @param {Object} options - Optional: { vnpostQr: {...}, paperWidth: 58|80 }
  */
 export function printInvoiceCustom(invoiceData, options = {}) {
-	const { vnpostQr, paperWidth = 80 } = options
+	const { vnpostQr, einvoiceSelfServiceQr, paperWidth = 80 } = options
 	const widthPx = paperWidth === 58 ? 220 : 302 // 58mm≈220px, 80mm≈302px at 96 DPI
 	const printWindow = window.open("", "_blank", `width=${widthPx + 50},height=700`)
 
@@ -281,6 +281,70 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 					text-align: left;
 					padding: 0 4px;
 				}
+				.einvoicesrv-section {
+					margin: 12px 0;
+					padding: 10px 0;
+					border-top: 1px dashed #000;
+					border-bottom: 1px dashed #000;
+				}
+				.einvoicesrv-heading {
+					font-size: 12px;
+					font-weight: bold;
+					text-align: center;
+					margin-bottom: 8px;
+					text-transform: uppercase;
+				}
+				.einvoicesrv-wrap {
+					display: flex;
+					flex-direction: row;
+					align-items: flex-start;
+					gap: 10px;
+				}
+				.einvoicesrv-qr-col {
+					flex: 0 0 auto;
+				}
+				.einvoicesrv-copy-col {
+					flex: 1;
+					font-size: 9px;
+					line-height: 1.35;
+					text-align: left;
+				}
+				.einvoicesrv-copy-col p {
+					margin: 0 0 6px 0;
+				}
+				.einvoicesrv-strong {
+					font-size: 9px;
+					word-break: break-all;
+					margin: 0 0 4px 0;
+				}
+				.einvoicesrv-fine {
+					font-size: 8px;
+					margin: 0;
+				}
+				.einvoicesrv-qr-img {
+					width: 92px;
+					height: 92px;
+					display: block;
+				}
+				.einvoicesrv-footer-meta {
+					margin-top: 10px;
+					padding-top: 8px;
+					border-top: 1px dashed #ccc;
+					text-align: center;
+					font-size: 10px;
+				}
+				.einvoicesrv-barcode-img {
+					max-width: 100%;
+					height: 36px;
+					object-fit: contain;
+					margin: 6px auto 2px;
+					display: block;
+				}
+				.einvoicesrv-barcode-txt {
+					font-size: 9px;
+					font-family: monospace;
+					letter-spacing: 0.5px;
+				}
 			</style>
 		</head>
 		<body>
@@ -486,6 +550,35 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 						: ""
 				}
 
+				${
+					einvoiceSelfServiceQr?.url
+						? `
+				<div class="einvoicesrv-section">
+					<div class="einvoicesrv-heading">${__('Sales slip — e-invoice')}</div>
+					<div class="einvoicesrv-wrap">
+						<div class="einvoicesrv-qr-col">
+							${einvoiceSelfServiceQr.qr_image_url ? `<img src="${einvoiceSelfServiceQr.qr_image_url}" alt="" class="einvoicesrv-qr-img" />` : ""}
+						</div>
+						<div class="einvoicesrv-copy-col">
+							<p>${__('Scan the QR code to issue an e-invoice or open the link below within 2 hours.')}</p>
+							<p class="einvoicesrv-strong">${einvoiceSelfServiceQr.url ? einvoiceSelfServiceQr.url.replace(/^https?:\/\//, "") : ""}</p>
+							<p class="einvoicesrv-fine">${__('We are not responsible if buyer information is incorrect.')}</p>
+						</div>
+					</div>
+					<div class="einvoicesrv-footer-meta">
+						<div>${__('Invoice ref.')}: <strong>${einvoiceSelfServiceQr.hd_display_code || "—"}</strong></div>
+						${
+							einvoiceSelfServiceQr.barcode_text
+								? `<img class="einvoicesrv-barcode-img" src="https://barcode.tec-it.com/barcode.ashx?code=Code128&dpi=96&imagetype=Gif&translate-esc=off&data=${encodeURIComponent(einvoiceSelfServiceQr.barcode_text)}" alt="" />`
+								: ""
+						}
+						<div class="einvoicesrv-barcode-txt">${einvoiceSelfServiceQr.barcode_text || ""}</div>
+					</div>
+				</div>
+				`
+						: ""
+				}
+
 				<!-- Footer -->
 				<div class="footer">
 					<div style="margin-bottom: 5px;">${__('Thank you for your business!')}</div>
@@ -546,9 +639,13 @@ export async function printInvoiceByName(
 			throw new Error("Invoice not found")
 		}
 
-		if (invoiceDoc.vnpost_qr) {
+		const needsThermalCustom =
+			invoiceDoc.vnpost_qr || invoiceDoc.einvoice_self_service_qr
+
+		if (needsThermalCustom) {
 			return printInvoiceCustom(invoiceDoc, {
 				vnpostQr: invoiceDoc.vnpost_qr,
+				einvoiceSelfServiceQr: invoiceDoc.einvoice_self_service_qr,
 				paperWidth: paperWidth || 58,
 			})
 		}

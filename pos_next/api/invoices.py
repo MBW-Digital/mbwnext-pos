@@ -507,6 +507,17 @@ def update_invoice(data):
                 invoice_doc.customer_name = cust.customer_name
             except Exception as e:
                 frappe.log_error(f"Failed to create customer {customer_name}: {e}")
+                frappe.throw(
+                    _("Could not create Customer from POS: {0}. Please choose another customer or fix naming.")
+                    .format(str(e))
+                )
+
+        # set_missing_values → set_pos_fields expects Customer to exist (ERPNext unpacks get_value result)
+        if invoice_doc.get("customer") and not frappe.db.exists("Customer", invoice_doc.customer):
+            frappe.throw(
+                _("Invalid Customer link on invoice: {0}. Open Customer master or re-select customer on POS.")
+                .format(invoice_doc.customer)
+            )
 
         # Disable automatic pricing rules (we handle discounts manually from POS)
         invoice_doc.ignore_pricing_rule = 1
@@ -1118,6 +1129,16 @@ def submit_invoice(invoice=None, data=None):
                     indicator="orange"
                 )
 
+        try:
+            from pos_next.api.einvoice_self_service import ensure_self_service_einvoice_token
+
+            ensure_self_service_einvoice_token(invoice_doc.name)
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(),
+                "POS self-service e-invoice token generation",
+            )
+
         # Return complete invoice details
         result = {
             "name": invoice_doc.name,
@@ -1187,6 +1208,16 @@ def get_print_receipt_data(invoice_name, include_vnpost_qr=True, include_sepay_q
 	if include_sepay_qr is not None:
 		include_vnpost_qr = include_sepay_qr
 	data = get_invoice(invoice_name)
+
+	try:
+		from pos_next.api.einvoice_self_service import get_self_service_qr_payload
+
+		es = get_self_service_qr_payload(invoice_name)
+		if es:
+			data["einvoice_self_service_qr"] = es
+	except Exception:
+		pass
+
 	if not cint(include_vnpost_qr) or not data.get("pos_profile"):
 		return data
 

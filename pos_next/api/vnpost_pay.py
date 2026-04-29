@@ -233,6 +233,7 @@ def _get_vnpost_password(pos_profile, doc):
 def _get_vnpost_settings(pos_profile):
 	if not pos_profile:
 		return None
+	
 	doc = frappe.get_cached_doc("POS Profile", pos_profile)
 	if not cint(doc.get("enable_bank_transfer_check")):
 		return None
@@ -249,8 +250,10 @@ def _get_vnpost_settings(pos_profile):
 	acc = (doc.get("vnpost_partner_acc_no") or "").strip()
 	po = (doc.get("vnpost_pocode") or "").strip()
 	pvk = (doc.get("vnpost_rsa_private_key") or "").strip()
+
 	if not (base and user and pwd and service and partner and acc and po and pvk):
 		return None
+	
 	return frappe._dict(
 		base_url=base,
 		username=user,
@@ -274,6 +277,7 @@ def get_auth_token_with_meta(settings, request_id_for_auth):
 	cached = frappe.cache().get_value(cache_key)
 	if isinstance(cached, dict) and cached.get("token") and not cached.get("stale"):
 		return cached
+	
 	raw = "|".join(
 		[
 			settings.partner_code,
@@ -284,6 +288,7 @@ def get_auth_token_with_meta(settings, request_id_for_auth):
 			settings.partner_acc_no,
 		]
 	)
+	
 	sig = _rsa_sign_sha256_b64(raw, settings.private_key_pem)
 	body = {
 		"username": settings.username,

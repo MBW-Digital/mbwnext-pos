@@ -48,7 +48,6 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     SelectField: typeof import('./src/components/settings/SelectField.vue')['default']
     SelectInput: typeof import('./src/components/common/SelectInput.vue')['default']
-    VNPostPayBankTransferDialog: typeof import('./src/components/sale/VNPostPayBankTransferDialog.vue')['default']
     SettingsSection: typeof import('./src/components/settings/SettingsSection.vue')['default']
     ShiftClosingDialog: typeof import('./src/components/ShiftClosingDialog.vue')['default']
     ShiftOpeningDialog: typeof import('./src/components/ShiftOpeningDialog.vue')['default']
@@ -56,6 +55,7 @@ declare module 'vue' {
     Toast: typeof import('./src/components/common/Toast.vue')['default']
     TranslatedHTML: typeof import('./src/components/common/TranslatedHTML.vue')['default']
     UserMenu: typeof import('./src/components/common/UserMenu.vue')['default']
+    VNPostPayBankTransferDialog: typeof import('./src/components/sale/VNPostPayBankTransferDialog.vue')['default']
     WarehouseAvailabilityDialog: typeof import('./src/components/sale/WarehouseAvailabilityDialog.vue')['default']
   }
 }

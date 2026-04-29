@@ -569,18 +569,17 @@ def update_invoice(data):
         # ========================================================================
         # ROUNDING CONFIGURATION
         # ========================================================================
-        # Load rounding preference from POS Settings
-        # When disabled (0): ERPNext rounds to nearest whole number
-        # When enabled (1): Shows exact amount without rounding
+        # ERPNext: disable_rounded_total is on POS Profile (not POS Settings).
+        # When 0: rounded totals; when 1: exact grand total.
         # ========================================================================
         disable_rounded = 1  # Default: disable rounding for POS (show exact amounts)
 
         if pos_profile:
             try:
                 pos_settings_value = frappe.db.get_value(
-                    "POS Settings",
-                    {"pos_profile": pos_profile},
-                    "disable_rounded_total"
+                    "POS Profile",
+                    pos_profile,
+                    "disable_rounded_total",
                 )
                 if pos_settings_value is not None:
                     disable_rounded = cint(pos_settings_value)

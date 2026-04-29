@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2025, BrainWise and contributors
-# VNPost Pay (Open Hub / VNPD) — tài liệu VNPost_Pay.pdf
+# VNPost Pay — luồng SDK (VNPD_SDK): auth + iframe; không gọi partner /pob/payment
 from __future__ import unicode_literals
 
 import base64
 import json
 import re
+from urllib.parse import quote, urlencode, urlparse
 
 import frappe
 import requests
 from frappe import _
-from frappe.utils import cint, flt, get_datetime, now_datetime
+from frappe.utils import cint, flt, now_datetime
 from frappe.utils.password import get_decrypted_password
 
 from pos_next.api.bank_transfer_payment import (
@@ -22,11 +23,12 @@ from pos_next.api.bank_transfer_payment import (
 	resolve_invoice_name,
 )
 
-# Phương thức: 3 = VietQR (theo tài liệu API v1.5)
-PAY_TYPE_VIETQR = 3
 AUTH_PATH = "/og-001/partner/v1/auth"
-PAYMENT_PATH = "/og-001/partner/v1/pob/payment"
 STATUS_PATH = "/og-001/partner/payment/v1/status"
+PAYMENT_PATH = "/og-001/partner/v1/pob/payment"
+PAY_TYPE_VIETQR = 3
+# Mô phỏng callback ngân hàng → PostPay (chỉ Dev), theo hướng dẫn VNPD
+VNPOST_DEV_CALLBACK_QR_PATH = "/cob-partner/account/v1/callbackQR"
 
 
 def _load_crypto():
@@ -76,6 +78,64 @@ def _url_join(base, path):
 	return base + path
 
 
+def _resolve_vnpd_sdk_ui_base(doc):
+	"""
+	Host trang nhúng Web SDK (iframe), khác base API.
+	Xem VNPD_SDK_integration.pdf — ví dụ: https://vnpostpayment-dev.postpay.vn
+	"""
+	explicit = (doc.get("vnpost_sdk_ui_url") or "").strip().rstrip("/")
+	if explicit:
+		return explicit
+	api = (doc.get("vnpost_api_base_url") or "").strip().rstrip("/")
+	if not api:
+		return ""
+	try:
+		p = urlparse(api)
+		host = (p.hostname or "").lower()
+		if not host:
+			return ""
+		if host.startswith("api-bdvn-dev"):
+			new_host = host.replace("api-bdvn-dev", "vnpostpayment-dev", 1)
+		elif host.startswith("api-bdvn"):
+			new_host = host.replace("api-bdvn", "vnpostpayment", 1)
+		else:
+			return ""
+		port = f":{p.port}" if p.port else ""
+		scheme = p.scheme or "https"
+		return f"{scheme}://{new_host}{port}"
+	except Exception:
+		return ""
+
+
+def _build_vnpd_sdk_iframe_url(
+	sdk_ui_base, meta, settings, amount_i, description, request_id, order_code, show_pttt
+):
+	"""Query iframe theo VNPD_SDK_integration.pdf (token, baseUrl, socketUrl, showPTTT, …)."""
+	base_api = (meta.get("baseUrl") or settings.base_url or "").strip().rstrip("/")
+	socket_u = (meta.get("socketUrl") or "").strip().rstrip("/")
+	tok = (meta.get("token") or "").strip()
+	sdk_ui_base = (sdk_ui_base or "").strip().rstrip("/")
+	if not (sdk_ui_base and tok and base_api and socket_u):
+		return ""
+	params = {
+		"token": tok,
+		"baseUrl": base_api,
+		"socketUrl": socket_u,
+		"showPTTT": (show_pttt or "3").strip() or "3",
+		"amount": str(int(amount_i)),
+		"numberPhone": "",
+		"description": description or "",
+		"requestId": request_id,
+		"userid": "",
+		"ordercode": order_code or request_id,
+		"extend": "",
+		"extend2": "",
+		"extend3": "",
+	}
+	query = urlencode(params, quote_via=quote, safe="")
+	return f"{sdk_ui_base}/?{query}"
+
+
 def _http_post_json(url, body, timeout=60):
 	headers = {"Content-Type": "application/json", "Accept": "application/json"}
 	r = requests.post(url, data=json.dumps(body), headers=headers, timeout=timeout)
@@ -84,6 +144,83 @@ def _http_post_json(url, body, timeout=60):
 	except Exception:
 		frappe.log_error(f"VNPost invalid JSON. URL={url} body={repr(r.text)[:2000]}", "VNPost Pay")
 		return {}
+
+
+def _is_vnpost_dev_api_base(base_url):
+	return "api-bdvn-dev" in (base_url or "").lower()
+
+
+def _vnpd_dev_callback_simulation_allowed(settings):
+	if not settings or not settings.base_url:
+		return False
+	if not (
+		cint(frappe.conf.get("developer_mode"))
+		or cint(frappe.conf.get("allow_vnpost_dev_callback_simulation"))
+	):
+		return False
+	return _is_vnpost_dev_api_base(settings.base_url)
+
+
+def extract_vnpost_dev_acc_no_from_qr(qr_emv_string):
+	"""
+	Trích accNo cho API callbackQR Dev từ field `qr` (chuỗi EMV VietQR).
+	Mẫu: 99VP + 6 chữ số + M + 7 ký tự (theo ví dụ đối tác VNPD).
+	"""
+	if not qr_emv_string or not isinstance(qr_emv_string, str):
+		return ""
+	m = re.search(r"(99VP[A-Z0-9]{6}M[A-Z0-9]{7})", qr_emv_string, re.IGNORECASE)
+	return m.group(1).upper() if m else ""
+
+
+@frappe.whitelist()
+def get_vnpd_dev_acc_no_from_qr_emv(qr_emv_string):
+	"""Trích accNo cho callbackQR Dev từ chuỗi `qr` (copy từ Network)."""
+	return {"acc_no": extract_vnpost_dev_acc_no_from_qr(qr_emv_string)}
+
+
+@frappe.whitelist()
+def simulate_vnpd_dev_bank_callback_qr(pos_profile, acc_no, fixed_amount):
+	"""
+	Chỉ Dev: GET .../cob-partner/account/v1/callbackQR?accNo=&fixedAmount=
+	Để PostPay coi như ngân hàng đã báo có tiền; sau đó merchant callback (nếu URL public).
+	Cần developer_mode=1 hoặc site_config allow_vnpost_dev_callback_simulation=1,
+	và POS Profile trỏ tới api-bdvn-dev.
+	"""
+	settings = _get_vnpost_settings(pos_profile)
+	if not settings:
+		return {"success": False, "message": _("VNPost Pay is not fully configured for this POS Profile")}
+	if not _vnpd_dev_callback_simulation_allowed(settings):
+		frappe.throw(
+			_("VNPD bank callback simulation is only allowed on dev API base with developer_mode (or allow_vnpost_dev_callback_simulation)."),
+			frappe.PermissionError,
+		)
+	acc_no = (acc_no or "").strip()
+	if not acc_no:
+		return {"success": False, "message": _("acc_no is required")}
+	try:
+		amt = int(flt(fixed_amount, 0))
+	except Exception:
+		amt = 0
+	if amt <= 0:
+		return {"success": False, "message": _("Invalid fixed_amount")}
+	url = _url_join(settings.base_url, VNPOST_DEV_CALLBACK_QR_PATH)
+	try:
+		r = requests.get(
+			url,
+			params={"accNo": acc_no, "fixedAmount": str(amt)},
+			headers={"accept": "*/*"},
+			timeout=60,
+		)
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "VNPost Dev callbackQR")
+		return {"success": False, "message": str(e)}
+	text = (r.text or "")[:2000]
+	out = {"success": 200 <= r.status_code < 300, "status_code": r.status_code, "body_preview": text}
+	try:
+		out["json"] = r.json()
+	except Exception:
+		out["json"] = None
+	return out
 
 
 def _get_vnpost_password(pos_profile, doc):
@@ -97,11 +234,13 @@ def _get_vnpost_settings(pos_profile):
 	if not pos_profile:
 		return None
 	doc = frappe.get_cached_doc("POS Profile", pos_profile)
-	if not cint(doc.get("enable_sepay_bank_transfer_check")):
+	if not cint(doc.get("enable_bank_transfer_check")):
 		return None
+
 	pg = doc.get("payment_gateway")
 	if pg and pg != "VNPost Pay":
 		return None
+
 	base = (doc.get("vnpost_api_base_url") or "").strip().rstrip("/")
 	user = (doc.get("vnpost_username") or "").strip()
 	pwd = _get_vnpost_password(pos_profile, doc)
@@ -202,8 +341,7 @@ def get_auth_token_with_meta(settings, request_id_for_auth):
 @frappe.whitelist()
 def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 	"""
-	Backward-compatible name. Trả cấu trúc cho UI/ in nhiệt: qr_url, amount, nội dung, thông tin TK (nếu có).
-	Thực hiện: auth + API thanh toán VietQR (type=3).
+	Trả dữ liệu cho UI: SDK iframe (theo VNPD_SDK). Luồng: auth + mở iframe — không gọi /pob/payment.
 	"""
 	_ = template
 	return get_vnpost_payment_qr_data(pos_profile, amount, invoice_id)
@@ -211,95 +349,110 @@ def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 
 @frappe.whitelist()
 def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
+	"""
+	Chỉ SDK (VNPD_SDK_integration): /auth lấy token → build URL iframe.
+	Giao dịch chờ / VietQR do SDK tạo nội bộ; partner /pob/payment không được gọi.
+	"""
 	settings = _get_vnpost_settings(pos_profile)
 	if not settings:
 		return {
 			"enabled": False,
 			"message": _("VNPost Pay is not fully configured for this POS Profile"),
 		}
+
 	amount_i = int(flt(amount, 0))
 	if not amount_i or amount_i < 0:
 		return {"enabled": False, "message": _("Invalid amount")}
+
 	req_auth = f"AUT{frappe.generate_hash(length=10)}"
 	meta = get_auth_token_with_meta(settings, req_auth)
 	if not meta or not meta.get("token"):
 		return {"enabled": False, "message": _("Failed to get VNPost token. Check API URL and keys.")}
+
+	pos_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+	sdk_ui_base = _resolve_vnpd_sdk_ui_base(pos_doc)
+	show_pttt = (pos_doc.get("vnpost_sdk_show_pttt") or "3").strip() or "3"
+
 	if invoice_id:
 		m = re.search(r"(\d+)$", str(invoice_id))
 		note = f"{ORDER_PREFIX}{m.group(1) if m else invoice_id}"
 	else:
 		note = ""
-	request_id = str(invoice_id or "").strip() or f"R{frappe.generate_hash(length=12)}"
-	dt_str = get_datetime(now_datetime()).strftime("%d/%m/%Y %H:%M:%S")
-	raw = "|".join([request_id, str(PAY_TYPE_VIETQR), str(amount_i)])
-	pay_sig = _rsa_sign_sha256_b64(raw, settings.private_key_pem)
-	pbody = {
-		"token": meta["token"],
-		"type": PAY_TYPE_VIETQR,
-		"amount": amount_i,
-		"note": note,
-		"dateTime": dt_str,
-		"requestId": request_id,
-		"signature": pay_sig,
-	}
-	url = _url_join(settings.base_url, PAYMENT_PATH)
-	pres = _http_post_json(url, pbody)
-	pcode = (pres.get("code") or "").strip()
-	pbd = pres.get("body") or pres.get("data") or {}
-	if pcode and pcode not in ("API000", "200", "0") and pbd.get("status") not in (1, 2, 3):
+
+	if invoice_id:
+		inv_num = re.sub(r"[^0-9A-Za-z]", "", str(invoice_id))
+		ts = now_datetime().strftime("%m%d%H%M%S")
+		request_id = f"{inv_num}{ts}"[:32]
+	else:
+		request_id = f"R{frappe.generate_hash(length=20)}"
+
+	order_code = str(invoice_id or request_id).strip()
+	sdk_iframe_url = _build_vnpd_sdk_iframe_url(
+		sdk_ui_base, meta, settings, amount_i, note, request_id, order_code, show_pttt
+	)
+
+	if not sdk_iframe_url:
 		return {
 			"enabled": False,
-			"message": f"{pcode} {pres.get('message', '')}" or _("Payment request failed"),
+			"message": _(
+				"Could not build VNPost SDK URL. Set VNPost SDK UI URL on POS Profile or check API base hostname."
+			),
 		}
-	# Map QR / hiển thị
-	qr_url = _extract_qr_url_from_vnpd(pbd, pres, meta)
-	bank_code = pbd.get("bankCode") or pbd.get("bank_code") or ""
-	account_number = pbd.get("accountNumber") or pbd.get("account") or pbd.get("accountNo") or settings.partner_acc_no
-	account_holder = pbd.get("accountName") or pbd.get("account_name") or pbd.get("accName") or ""
+
+	pbd = {}
+	acc_no_suggestion = ""
+
+	# Trên dev: gọi /pob/payment ngầm để trích accNo từ field `qr` (nếu server trả).
+	# Lỗi từ bước này không chặn iframe — bỏ qua hoàn toàn khi production.
+	if _vnpd_dev_callback_simulation_allowed(settings):
+		try:
+			from frappe.utils import get_datetime as _gdt
+			dt_str = _gdt(now_datetime()).strftime("%d/%m/%Y %H:%M:%S")
+			raw_pay = "|".join([request_id, str(PAY_TYPE_VIETQR), str(amount_i)])
+			pay_sig = _rsa_sign_sha256_b64(raw_pay, settings.private_key_pem)
+			pbody = {
+				"token": meta["token"],
+				"type": PAY_TYPE_VIETQR,
+				"amount": amount_i,
+				"note": note,
+				"dateTime": dt_str,
+				"requestId": request_id,
+				"signature": pay_sig,
+			}
+			pres_dev = _http_post_json(_url_join(settings.base_url, PAYMENT_PATH), pbody)
+			pbd_dev = pres_dev.get("body") or pres_dev.get("data") or {}
+			qr_emv = pbd_dev.get("qr") or "" if isinstance(pbd_dev, dict) else ""
+			acc_no_suggestion = extract_vnpost_dev_acc_no_from_qr(qr_emv)
+		except Exception:
+			pass
+
+	vnpd_dev_simulation = None
+	if _vnpd_dev_callback_simulation_allowed(settings):
+		vnpd_dev_simulation = {
+			"show": True,
+			"acc_no_suggestion": acc_no_suggestion,
+			"fixed_amount": amount_i,
+			"hint": _("Dev-only: PostPay callbackQR."),
+		}
+
 	return {
 		"enabled": True,
-		"qr_url": qr_url or "",
-		"account_number": account_number,
-		"bank_code": bank_code,
-		"account_holder": account_holder,
+		"qr_url": "",
+		"sdk_iframe_url": sdk_iframe_url,
+		"account_number": settings.partner_acc_no or "",
+		"bank_code": "",
+		"account_holder": "",
 		"amount": amount_i,
 		"content": note,
 		"request_id": request_id,
-		"trans_id": pbd.get("transId") or pbd.get("id"),
-		"sdk": {
-			"baseUrl": meta.get("baseUrl") or "",
-			"socketUrl": meta.get("socketUrl") or "",
-		}
-		if not qr_url
-		else None,
+		"trans_id": None,
+		"sdk": None,
 		"raw_body": pbd,
-		"message": pres.get("message") or "",
+		"vnpd_dev_simulation": vnpd_dev_simulation,
+		"message": "",
+		"payment_api_warning": "",
+		"sdk_only": True,
 	}
-
-
-def _extract_qr_url_from_vnpd(body, full_response, token_meta):
-	for key in (
-		"qrUrl",
-		"qrURL",
-		"imageUrl",
-		"url",
-		"qr",
-		"qrcode",
-		"dataQr",
-		"dataQR",
-		"vietqrUrl",
-		"qrCodeUrl",
-	):
-		v = body.get(key) if isinstance(body, dict) else None
-		if v and isinstance(v, str) and (v.startswith("http") or v.startswith("data:")):
-			return v
-	# Có thể trả về mã base64 thuần
-	for key in ("qrData", "qrString", "data"):
-		v = body.get(key) if isinstance(body, dict) else None
-		if v and isinstance(v, str) and len(v) > 40 and not v.startswith("http"):
-			return f"data:image/png;base64,{v}" if not v.startswith("data:") else v
-	_ = full_response, token_meta
-	return ""
 
 
 @frappe.whitelist()
@@ -431,7 +584,7 @@ def receive_callback():
 				amount=amount,
 				gateway_transaction_id=gid,
 				reference_code=ref_id or req_id,
-				remarks="VNPost Pay callback",
+				_remarks="VNPost Pay callback",
 				raw_data=data,
 			)
 		finally:

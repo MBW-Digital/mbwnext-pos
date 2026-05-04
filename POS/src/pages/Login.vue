@@ -97,6 +97,7 @@
 </template>
 
 <script setup>
+import { useInvoiceTabsStore } from "@/stores/invoiceTabs"
 import { usePOSCartStore } from "@/stores/posCart"
 import { usePOSUIStore } from "@/stores/posUI"
 import { FeatherIcon } from "frappe-ui"
@@ -111,6 +112,7 @@ import { offlineWorker } from "../utils/offline/workerClient"
 const router = useRouter()
 const { shiftState } = useShift()
 const cartStore = usePOSCartStore()
+const invoiceTabsStore = useInvoiceTabsStore()
 const uiStore = usePOSUIStore()
 
 const loginForm = reactive({
@@ -138,6 +140,7 @@ onMounted(() => {
 	if (!session.isLoggedIn) {
 		showShiftDialog.value = false
 		cartStore.clearCart()
+		invoiceTabsStore.resetPaymentUiOnAllTabs()
 		uiStore.resetAllDialogs()
 
 		// Clear any stale shift state

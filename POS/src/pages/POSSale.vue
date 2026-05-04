@@ -584,9 +584,9 @@
 				</div>
 			</div>
 
-			<!-- Payment Dialog -->
+			<!-- Payment Dialog (state per invoice tab) -->
 		<PaymentDialog
-			v-model="uiStore.showPaymentDialog"
+			v-model="activeTabPaymentDialogModel"
 			:grand-total="cartStore.grandTotal"
 			:subtotal="cartStore.subtotal"
 			:pos-profile="shiftStore.profileName"
@@ -630,9 +630,9 @@
 			/>
 
 			<VNPostPayBankTransferDialog
-				v-model="uiStore.showVnpostPayDialog"
-				:invoice-name="vnpostPayInvoiceName"
-				:invoice-amount="vnpostPayInvoiceAmount"
+				v-model="activeTabVnpostDialogModel"
+				:invoice-name="invoiceTabsStore.activeTab?.vnpostPayInvoiceName ?? ''"
+				:invoice-amount="invoiceTabsStore.activeTab?.vnpostPayInvoiceAmount ?? 0"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
 				@payment-received="handleVnpostPayPaymentReceived"
@@ -1262,6 +1262,51 @@ const customerSearchStore = useCustomerSearchStore();
 // Note: settingsStore is an alias to posSettingsStore (same Pinia store singleton)
 const settingsStore = posSettingsStore;
 
+// Payment / VNPost: v-model binds to active tab (computed below). Mirror into uiStore for divider / registerDialog.
+const activeTabPaymentDialogModel = computed({
+	get() {
+		return invoiceTabsStore.activeTab?.showPaymentDialog ?? false;
+	},
+	set(v) {
+		const t = invoiceTabsStore.activeTab;
+		if (t) t.showPaymentDialog = v;
+	},
+});
+
+const activeTabVnpostDialogModel = computed({
+	get() {
+		return invoiceTabsStore.activeTab?.showVnpostPayDialog ?? false;
+	},
+	set(v) {
+		const t = invoiceTabsStore.activeTab;
+		if (t) t.showVnpostPayDialog = v;
+	},
+});
+
+watch(
+	() => [
+		invoiceTabsStore.activeTabId,
+		invoiceTabsStore.activeTab?.showPaymentDialog,
+		invoiceTabsStore.activeTab?.showVnpostPayDialog,
+	],
+	() => {
+		const t = invoiceTabsStore.activeTab;
+		uiStore.showPaymentDialog = t?.showPaymentDialog ?? false;
+		uiStore.showVnpostPayDialog = t?.showVnpostPayDialog ?? false;
+	},
+	{ immediate: true },
+);
+
+function setActiveTabPaymentDialog(open) {
+	const t = invoiceTabsStore.activeTab;
+	if (t) t.showPaymentDialog = !!open;
+}
+
+function setActiveTabVnpostDialog(open) {
+	const t = invoiceTabsStore.activeTab;
+	if (t) t.showVnpostPayDialog = !!open;
+}
+
 // Real-time stock updates
 const { onStockUpdate } = useRealtimeStock();
 
@@ -1307,7 +1352,6 @@ const itemsSelectorRef = ref(null);
 const offersDialogRef = ref(null);
 const containerRef = ref(null);
 const dividerRef = ref(null);
-const pendingPaymentAfterCustomer = ref(false);
 const logoutAfterClose = ref(false);
 const editCustomer = ref(null); // Customer being edited (null for create mode)
 const showClearCacheDialog = ref(false);
@@ -1354,8 +1398,6 @@ const tempSelectedShiftType = ref("");
 
 // Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
 const showPhotoDialog = ref(false);
-const vnpostPayInvoiceName = ref("");
-const vnpostPayInvoiceAmount = ref(0);
 const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
 const attendancePhotoVideoRef = ref(null);
 const attendancePhotoCanvasRef = ref(null);
@@ -2279,6 +2321,7 @@ function handleShiftClosed() {
 	// Check if logout should happen after closing shift
 	if (logoutAfterClose.value) {
 		logoutAfterClose.value = false;
+		invoiceTabsStore.resetPaymentUiOnAllTabs();
 		// Clear all dialog states to prevent stale state on next login
 		uiStore.resetAllDialogs();
 		session.logout.submit();
@@ -2474,9 +2517,10 @@ function handleCustomerSelected(selectedCustomer) {
 		uiStore.showCustomerDialog = false;
 		showSuccess(__("{0} selected", [selectedCustomer.customer_name]));
 
-		if (pendingPaymentAfterCustomer.value) {
-			pendingPaymentAfterCustomer.value = false;
-			uiStore.showPaymentDialog = true;
+		const tab = invoiceTabsStore.activeTab;
+		if (tab?.pendingPaymentAfterCustomer) {
+			tab.pendingPaymentAfterCustomer = false;
+			setActiveTabPaymentDialog(true);
 		}
 	} else {
 		cartStore.setCustomer(null);
@@ -2505,11 +2549,12 @@ function handleProceedToPayment() {
 	if (!customerValue && !shiftStore.profileCustomer) {
 		showWarning(__("Please select a customer before proceeding"));
 		uiStore.showCustomerDialog = true;
-		pendingPaymentAfterCustomer.value = true;
+		const tab = invoiceTabsStore.activeTab;
+		if (tab) tab.pendingPaymentAfterCustomer = true;
 		return;
 	}
 
-	uiStore.showPaymentDialog = true;
+	setActiveTabPaymentDialog(true);
 }
 
 async function handleDeleteFailedInvoice() {
@@ -2529,7 +2574,7 @@ async function handleErrorRetry() {
 	uiStore.clearError();
 	if (uiStore.errorRetryAction === "payment") {
 		setTimeout(() => {
-			uiStore.showPaymentDialog = true;
+			setActiveTabPaymentDialog(true);
 		}, 300);
 	} else if (uiStore.errorRetryAction === "sync") {
 		await offlineStore.loadPendingInvoices();
@@ -2544,7 +2589,7 @@ async function handlePaymentCompleted(paymentData) {
 		const customerValue = cartStore.customer?.name || cartStore.customer;
 		if (!customerValue && !shiftStore.profileCustomer) {
 			showWarning(__("Please select a customer before proceeding"));
-			uiStore.showPaymentDialog = false;
+			setActiveTabPaymentDialog(false);
 			uiStore.showCustomerDialog = true;
 			return;
 		}
@@ -2558,9 +2603,12 @@ async function handlePaymentCompleted(paymentData) {
 				paymentData.delivery_date || cartStore.deliveryDate,
 				paymentData.payments || []
 			);
-			vnpostPayInvoiceName.value = draft.name;
-			vnpostPayInvoiceAmount.value = draft.vnpost_amount ?? draft.grand_total;
-			uiStore.showVnpostPayDialog = true;
+			const tab = invoiceTabsStore.activeTab;
+			if (tab) {
+				tab.vnpostPayInvoiceName = draft.name;
+				tab.vnpostPayInvoiceAmount = draft.vnpost_amount ?? draft.grand_total;
+			}
+			setActiveTabVnpostDialog(true);
 			return;
 		}
 
@@ -2620,7 +2668,7 @@ async function handlePaymentCompleted(paymentData) {
 				cartStore.grandTotal,
 				paymentData.paid_amount
 			);
-			uiStore.showPaymentDialog = false;
+			setActiveTabPaymentDialog(false);
 			cartStore.clearCart();
 			// Reset cart hash after successful payment
 			previousCartHash = "";
@@ -2642,7 +2690,7 @@ async function handlePaymentCompleted(paymentData) {
 				const invoiceTotal = result.grand_total || result.total || 0;
 				const paidAmount = paymentData.paid_amount || invoiceTotal;
 
-				uiStore.showPaymentDialog = false;
+				setActiveTabPaymentDialog(false);
 				cartStore.clearCart();
 				// Reset cart hash after successful payment
 				previousCartHash = "";
@@ -2676,7 +2724,7 @@ async function handlePaymentCompleted(paymentData) {
 		}
 	} catch (error) {
 		log.error("Error submitting invoice:", error);
-		uiStore.showPaymentDialog = false;
+		setActiveTabPaymentDialog(false);
 
 		const errorContext = parseError(error);
 		uiStore.showError(
@@ -2697,15 +2745,18 @@ async function handlePaymentCompleted(paymentData) {
 }
 
 async function handleVnpostPayPaymentReceived() {
-	const invoiceName = vnpostPayInvoiceName.value;
-	const invoiceAmount = vnpostPayInvoiceAmount.value;
+	const tab = invoiceTabsStore.activeTab;
+	const invoiceName = tab?.vnpostPayInvoiceName ?? "";
+	const invoiceAmount = tab?.vnpostPayInvoiceAmount ?? 0;
 	const soldItemCodes = cartStore.invoiceItems.map((item) => item.item_code);
 
-	uiStore.showVnpostPayDialog = false;
+	setActiveTabVnpostDialog(false);
 	cartStore.clearCart();
 	previousCartHash = "";
-	vnpostPayInvoiceName.value = "";
-	vnpostPayInvoiceAmount.value = 0;
+	if (tab) {
+		tab.vnpostPayInvoiceName = "";
+		tab.vnpostPayInvoiceAmount = 0;
+	}
 
 	if (cartStore.currentDraftId) {
 		draftsStore.deleteDraft(cartStore.currentDraftId);
@@ -2848,7 +2899,24 @@ function restoreTabSnapshot(tabId) {
 	}
 }
 
+/** Đóng tất cả dialog thanh toán trên tab đang active trước khi rời. */
+function _closeActiveTabDialogs() {
+	const t = invoiceTabsStore.activeTab;
+	if (!t) return;
+	t.showPaymentDialog = false;
+	t.showVnpostPayDialog = false;
+	t.pendingPaymentAfterCustomer = false;
+}
+
+/** Sau khi switch sang tab mới, mở lại VNPost dialog nếu tab đó có giao dịch đang chờ. */
+function _maybeReopenVnpostOnTab(tab) {
+	if (tab?.vnpostPayInvoiceName) {
+		nextTick(() => setActiveTabVnpostDialog(true));
+	}
+}
+
 function handleAddInvoiceTab() {
+	_closeActiveTabDialogs();
 	saveActiveTabSnapshot();
 	cartStore.clearCart();
 	const newId = invoiceTabsStore.addTab();
@@ -2857,19 +2925,24 @@ function handleAddInvoiceTab() {
 
 function handleInvoiceTabClick(tabId) {
 	if (tabId === invoiceTabsStore.activeTabId) return;
+	_closeActiveTabDialogs();
 	saveActiveTabSnapshot();
 	restoreTabSnapshot(tabId);
 	invoiceTabsStore.setActiveTab(tabId);
+	// Mở lại VNPost dialog nếu tab đích đang có giao dịch chờ QR
+	_maybeReopenVnpostOnTab(invoiceTabsStore.activeTab);
 }
 
 function handleCloseInvoiceTab(tabId) {
 	const isActive = tabId === invoiceTabsStore.activeTabId;
 	if (isActive) {
+		_closeActiveTabDialogs();
 		saveActiveTabSnapshot();
 	}
 	const nextActiveId = invoiceTabsStore.closeTab(tabId);
 	if (isActive) {
 		restoreTabSnapshot(nextActiveId);
+		_maybeReopenVnpostOnTab(invoiceTabsStore.activeTab);
 	}
 }
 
@@ -2881,6 +2954,7 @@ function confirmLogout() {
 	logoutAfterClose.value = false;
 	// Clear cart to prevent stale items on next login
 	cartStore.clearCart();
+	invoiceTabsStore.resetPaymentUiOnAllTabs();
 	// Clear all dialog states to prevent stale state on next login
 	uiStore.resetAllDialogs();
 	session.logout.submit();

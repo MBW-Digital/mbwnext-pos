@@ -1,4 +1,8 @@
-import { useDialog, useDialogState } from "@/composables/useDialogState"
+import {
+	registerDialog,
+	useDialog,
+	useDialogState,
+} from "@/composables/useDialogState"
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
@@ -10,13 +14,16 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	const isLoading = ref(true)
 
 	// Dialog states using the dialog composable
-	const { isOpen: showPaymentDialog } = useDialog("payment")
+	// Payment & VNPost: plain refs registered globally — POSSale syncs them per invoice tab
+	const showPaymentDialog = ref(false)
+	const showVnpostPayDialog = ref(false)
+	registerDialog(showPaymentDialog, "payment")
+	registerDialog(showVnpostPayDialog, "vnpost")
 	const { isOpen: showCustomerDialog } = useDialog("customer")
 	const { isOpen: showSuccessDialog } = useDialog("success")
 	const { isOpen: showOpenShiftDialog } = useDialog("openShift")
 	const { isOpen: showCloseShiftDialog } = useDialog("closeShift")
 	const { isOpen: showDraftDialog } = useDialog("draft")
-	const { isOpen: showVnpostPayDialog } = useDialog("vnpost")
 	const { isOpen: showReturnDialog } = useDialog("return")
 	const { isOpen: showCouponDialog } = useDialog("coupon")
 	const { isOpen: showOffersDialog } = useDialog("offers")

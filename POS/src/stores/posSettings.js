@@ -39,6 +39,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		create_only_sales_order: 0,
 		allow_return_without_invoice: 0,
 		allow_free_batch_return: 0,
+		allow_skip_manual_batch_selection: 0,
 		allow_print_draft_invoices: 0,
 		// Pricing & Display
 		decimal_precision: "2",
@@ -158,6 +159,9 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	)
 	const allowPrintDraftInvoices = computed(() =>
 		Boolean(settings.value.allow_print_draft_invoices),
+	)
+	const allowSkipManualBatchSelection = computed(() =>
+		Boolean(settings.value.allow_skip_manual_batch_selection),
 	)
 
 	// Computed - Pricing & Display
@@ -307,6 +311,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			create_only_sales_order: 0,
 			allow_return_without_invoice: 0,
 			allow_free_batch_return: 0,
+			allow_skip_manual_batch_selection: 0,
 			allow_print_draft_invoices: 0,
 			decimal_precision: "2",
 			allow_customer_purchase_order: 0,
@@ -356,6 +361,19 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	 */
 	function shouldEnforceStockValidation() {
 		return isEnabled.value && !Boolean(settings.value.allow_negative_stock)
+	}
+
+	/**
+	 * Whether the POS UI should open Batch/Serial dialog before adding this item.
+	 * Serial items always prompt; batch-only items skip only when POS Settings allow it.
+	 */
+	function itemRequiresBatchSerialDialog(item) {
+		if (!item) return false
+		if (item.has_serial_no) return true
+		const maySkipBatchPickup =
+			isEnabled.value &&
+			Boolean(settings.value.allow_skip_manual_batch_selection)
+		return Boolean(item.has_batch_no && !maySkipBatchPickup)
 	}
 
 	/**
@@ -420,6 +438,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		allowReturnWithoutInvoice,
 		allowFreeBatchReturn,
 		allowPrintDraftInvoices,
+		allowSkipManualBatchSelection,
 
 		// Computed - Pricing & Display
 		decimalPrecision,
@@ -463,5 +482,6 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		validateDiscount,
 		isNegativeStockAllowed,
 		shouldEnforceStockValidation,
+		itemRequiresBatchSerialDialog,
 	}
 })

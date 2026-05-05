@@ -9,7 +9,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_qty
 from erpnext.stock.get_item_details import get_item_details as erpnext_get_item_details
 from frappe import _
 from frappe.query_builder import DocType, functions as fn
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, nowdate, nowtime
 
 ITEM_RESULT_FIELDS = [
 	"name as item_code",
@@ -52,7 +52,46 @@ def get_stock_availability(item_code, warehouse):
 	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
 
 
-def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=None):
+def _apply_pos_pricing_rule_context(doc, company, transaction_date=None, posting_time=None):
+	"""Attach posting_date / posting_time for ERPNext + POS Next time-based Pricing Rules."""
+	if doc is not None:
+		if isinstance(doc, dict) and not isinstance(doc, frappe._dict):
+			doc = frappe._dict(doc)
+
+	def dget(d, key):
+		if d is None:
+			return None
+		if isinstance(d, dict):
+			return d.get(key)
+		return getattr(d, key, None)
+
+	td = transaction_date or dget(doc, "posting_date") or dget(doc, "transaction_date")
+	if not td:
+		td = nowdate()
+
+	tm = posting_time or dget(doc, "posting_time")
+	if not tm:
+		tm = nowtime()
+
+	if not doc and company:
+		doc = frappe._dict({"doctype": "Sales Invoice", "company": company})
+
+	if doc is not None:
+		doc.posting_date = td
+		doc.posting_time = tm
+
+	return doc, td, tm
+
+
+def get_item_detail(
+	item,
+	doc=None,
+	warehouse=None,
+	price_list=None,
+	company=None,
+	transaction_date=None,
+	posting_time=None,
+):
 	"""
 	Get comprehensive item details including batch/serial data, pricing, and stock information.
 
@@ -86,6 +125,9 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 	- Applies conversion factors (plc_conversion_rate)
 	- Falls back to 1:1 if exchange rate unavailable (with error logging)
 
+	Pricing rules (POS):
+	- Transaction date/time default to today and current server time so time-based Pricing Rules apply at the till.
+
 	UOM (Unit of Measure) Handling:
 	================================
 	Returns all UOM conversions for the item:
@@ -103,6 +145,8 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 		warehouse (str, optional): Warehouse for stock/batch/serial lookup
 		price_list (str, optional): Selling price list name
 		company (str, optional): Company for currency conversion
+		transaction_date (str|date, optional): Sales date for Pricing Rule validity (defaults to today)
+		posting_time (str|time, optional): Transaction time for time-window rules (defaults to now)
 
 	Returns:
 		dict: Enriched item details containing:
@@ -248,9 +292,9 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 	if company:
 		item["company"] = company
 
-	# Create a proper doc structure with company
-	if not doc and company:
-		doc = frappe._dict({"doctype": "Sales Invoice", "company": company})
+	doc, pos_transaction_date, pos_posting_time = _apply_pos_pricing_rule_context(
+		doc, company, transaction_date, posting_time
+	)
 
 	# Fetch all needed Item fields in a single query (performance optimization)
 	item_data = frappe.db.get_value(
@@ -272,6 +316,8 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 			"price_list_currency": item.get("price_list_currency"),
 			"plc_conversion_rate": item.get("plc_conversion_rate"),
 			"conversion_rate": item.get("conversion_rate"),
+			"transaction_date": pos_transaction_date,
+			"posting_time": pos_posting_time,
 		}
 	)
 
@@ -1289,7 +1335,15 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 
 
 @frappe.whitelist()
-def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):  # noqa: ARG001 - customer reserved for future use
+def get_item_details(
+	item_code,
+	pos_profile,
+	customer=None,
+	qty=1,
+	uom=None,
+	transaction_date=None,
+	posting_time=None,
+):  # noqa: ARG001 - customer reserved for future use
 	"""Get detailed item info including price, tax, stock"""
 	try:
 		# Parse pos_profile if it's a JSON string
@@ -1332,6 +1386,8 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):  #
 			warehouse=pos_profile_doc.warehouse,
 			price_list=pos_profile_doc.selling_price_list,
 			company=pos_profile_doc.company,
+			transaction_date=transaction_date,
+			posting_time=posting_time,
 		)
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Item Details Error")

@@ -106,7 +106,10 @@ fixtures = [
 					"POS Profile-posa_cash_mode_of_payment",
 					"POS Profile-posa_allow_delete",
 					"POS Profile-posa_block_sale_beyond_available_qty",
-					"Mode of Payment-is_wallet_payment"
+					"Mode of Payment-is_wallet_payment",
+					"Pricing Rule-apply_time_window",
+					"Pricing Rule-valid_time_from",
+					"Pricing Rule-valid_time_to",
 				]
 			]
 		]
@@ -196,7 +199,8 @@ standard_queries = {
 # Override standard doctype classes
 
 override_doctype_class = {
-	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice"
+	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice",
+	"Pricing Rule": "pos_next.overrides.pricing_rule.PricingRule",
 }
 
 # Document Events

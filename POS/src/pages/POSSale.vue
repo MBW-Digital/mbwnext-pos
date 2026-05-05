@@ -2408,6 +2408,13 @@ function handleRemoveColdStorageFeeLine(count = 1) {
 function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
+		const autoQty =
+			item.resolved_qty && item.resolved_barcode_type ? item.resolved_qty : 1;
+		if (settingsStore.itemRequiresBatchSerialDialog(item)) {
+			cartStore.setPendingItem(item, autoQty);
+			uiStore.showBatchSerialDialog = true;
+			return;
+		}
 		try {
 			// Check if item has resolved barcode data (weighted/priced)
 			if (item.resolved_qty && item.resolved_barcode_type) {
@@ -2441,11 +2448,16 @@ function handleItemSelected(item, autoAdd = false) {
 	// - batch/serial items (they have their own validation in the dialog)
 	// - template items with variants (variants carry their own stock)
 	// Product Bundles have calculated stock based on component availability
+	const allowsSkipBatchOnly =
+		settingsStore.isEnabled &&
+		settingsStore.allowSkipManualBatchSelection &&
+		item.has_batch_no &&
+		!item.has_serial_no;
 	if (
 		settingsStore.shouldEnforceStockValidation() &&
 		(item.is_stock_item || item.is_bundle) &&
 		!item.has_serial_no &&
-		!item.has_batch_no &&
+		(!(item.has_batch_no) || allowsSkipBatchOnly) &&
 		!item.has_variants
 	) {
 		const actualQty = Math.floor(item.actual_qty ?? item.stock_qty ?? 0);
@@ -2480,8 +2492,8 @@ function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
-	// Check for batch/serial
-	if (item.has_batch_no || item.has_serial_no) {
+	// Check for batch / serial selection (manual); batch-only can be skipped via POS Settings
+	if (settingsStore.itemRequiresBatchSerialDialog(item)) {
 		cartStore.setPendingItem(item, 1);
 		uiStore.showBatchSerialDialog = true;
 		return;
@@ -2802,11 +2814,16 @@ async function handleOptionSelected(option) {
 			const variant = option.data;
 
 			// Stock validation for variants (same as regular items)
+			const variantAllowsSkipBatchOnly =
+				settingsStore.isEnabled &&
+				settingsStore.allowSkipManualBatchSelection &&
+				variant.has_batch_no &&
+				!variant.has_serial_no;
 			if (
 				settingsStore.shouldEnforceStockValidation() &&
 				variant.is_stock_item &&
 				!variant.has_serial_no &&
-				!variant.has_batch_no
+				(!(variant.has_batch_no) || variantAllowsSkipBatchOnly)
 			) {
 				const actualQty = Math.floor(variant.actual_qty ?? 0);
 				if (actualQty <= 0) {
@@ -2822,7 +2839,7 @@ async function handleOptionSelected(option) {
 				return;
 			}
 
-			if (variant.has_batch_no || variant.has_serial_no) {
+			if (settingsStore.itemRequiresBatchSerialDialog(variant)) {
 				cartStore.setPendingItem(variant, cartStore.pendingItemQty);
 				uiStore.showItemSelectionDialog = false;
 				uiStore.showBatchSerialDialog = true;
@@ -2855,7 +2872,7 @@ async function handleOptionSelected(option) {
 				price_list_rate: priceListRate,
 			};
 
-			if (itemToAdd.has_batch_no || itemToAdd.has_serial_no) {
+			if (settingsStore.itemRequiresBatchSerialDialog(itemToAdd)) {
 				cartStore.setPendingItem(itemToAdd, qty);
 				uiStore.showItemSelectionDialog = false;
 				uiStore.showBatchSerialDialog = true;

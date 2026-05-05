@@ -181,9 +181,18 @@ export function useInvoice() {
 		const itemUom = item.uom || item.stock_uom
 		const shouldMerge = options.merge !== false
 		const existingItem = shouldMerge
-			? invoiceItems.value.find(
-					(i) => i.item_code === item.item_code && i.uom === itemUom,
-			  )
+			? invoiceItems.value.find((i) => {
+					if (i.item_code !== item.item_code || i.uom !== itemUom) {
+						return false
+					}
+					// Batch lines with different batches (or populated vs unset) stay separate rows
+					if (!(i.has_serial_no || item.has_serial_no)) {
+						return (
+							String(i.batch_no ?? "") === String(item.batch_no ?? "")
+						)
+					}
+					return true
+				})
 			: null
 
 		if (existingItem) {

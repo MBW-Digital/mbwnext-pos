@@ -1158,7 +1158,15 @@ function selectItem(item, autoAdd = false) {
 	if (!item) return false
 
 	// Skip stock validation for: variants (template), serial items, batch items (they have own validation)
-	const skipValidation = item.has_variants || item.has_serial_no || item.has_batch_no
+	const skipManualBatchPick =
+		settingsStore.isEnabled &&
+		settingsStore.allowSkipManualBatchSelection &&
+		item.has_batch_no &&
+		!item.has_serial_no
+	const skipValidation =
+		item.has_variants ||
+		item.has_serial_no ||
+		(item.has_batch_no && !skipManualBatchPick)
 	const isStockTracked = item.is_stock_item || item.is_bundle
 	const qty = Math.floor(item.actual_qty ?? item.stock_qty ?? 0)
 

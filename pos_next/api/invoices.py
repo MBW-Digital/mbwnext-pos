@@ -283,6 +283,192 @@ def _auto_set_return_batches(invoice_doc):
                 )
 
 
+def _fifo_allocate_batches_for_stock_qty(item_code, warehouse, stock_qty_needed):
+    """
+    Split stock_qty_needed across batches in ERPNext FIFO order until covered.
+
+    Returns:
+        List of dicts [{"batch_no", "stock_qty"}, ...] if fully covered,
+        None if insufficient stock.
+    """
+    if stock_qty_needed <= 1e-9:
+        return []
+
+    batches = get_batch_qty(item_code=item_code, warehouse=warehouse) or []
+    batches = [b for b in batches if flt(b.get("qty")) > 1e-9]
+
+    remaining = flt(stock_qty_needed)
+    out = []
+    for b in batches:
+        aq = flt(b.get("qty"))
+        if aq <= 0:
+            continue
+        take = min(aq, remaining)
+        if take <= 0:
+            continue
+        out.append({"batch_no": b.get("batch_no"), "stock_qty": take})
+        remaining -= take
+        if remaining <= 1e-9:
+            return out
+
+    return None
+
+
+def _si_item_row_clone_dict(template_row):
+    """Copy child row dict for Sales Invoice Item, stripping identity fields."""
+    d = template_row.as_dict()
+    for k in list(d.keys()):
+        ks = str(k)
+        if ks.startswith("_"):
+            d.pop(k, None)
+            continue
+        if k in (
+            "name",
+            "parent",
+            "parentfield",
+            "creation",
+            "modified",
+            "modified_by",
+            "owner",
+            "idx",
+            "docstatus",
+        ):
+            d.pop(k, None)
+    return d
+
+
+def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
+    """
+    When POS Settings ``allow_skip_manual_batch_selection`` is enabled:
+    Assign FIFO batches for batch-only Items missing ``batch_no`` (split rows if needed).
+
+    Serial-controlled Items always require picking serial numbers in the POS UI.
+    """
+    if getattr(invoice_doc, "doctype", None) != "Sales Invoice":
+        return
+
+    if invoice_doc.get("is_return"):
+        return
+
+    if not cint(getattr(invoice_doc, "update_stock", 0)):
+        return
+
+    pos_profile = invoice_doc.get("pos_profile")
+    if not pos_profile:
+        return
+
+    ps_flags = frappe.db.get_value(
+        "POS Settings",
+        {"pos_profile": pos_profile},
+        ["enabled", "allow_skip_manual_batch_selection"],
+        as_dict=True,
+    ) or {}
+
+    if not cint(ps_flags.get("enabled")):
+        return
+
+    if not cint(ps_flags.get("allow_skip_manual_batch_selection")):
+        return
+
+    inv_qty_prec = frappe.get_precision("Sales Invoice Item", "qty")
+
+    indexes_to_extend = []
+
+    for idx, d in enumerate(invoice_doc.items):
+        if not d.item_code or not d.get("warehouse"):
+            continue
+
+        if flt(getattr(d, "qty", 0)) <= 0:
+            continue
+
+        if d.batch_no:
+            continue
+
+        flags = frappe.db.get_value(
+            "Item", d.item_code, ["has_batch_no", "has_serial_no"], as_dict=True
+        )
+        if not flags:
+            continue
+        if flags.get("has_serial_no"):
+            frappe.throw(
+                _(
+                    "Item {0} requires serial numbers. Skipping manual batch applies "
+                    "only to batch-only items; enter serial numbers for this line."
+                ).format(frappe.bold(d.item_code))
+            )
+
+        if not flags.get("has_batch_no"):
+            continue
+
+        cf = flt(d.conversion_factor or 1) or 1
+
+        stock_need = (
+            flt(d.stock_qty)
+            if getattr(d, "stock_qty", None) not in (None, "")
+            else flt(d.qty) * cf
+        )
+
+        allocations = _fifo_allocate_batches_for_stock_qty(
+            d.item_code, d.warehouse, stock_need
+        )
+        if allocations is None:
+            frappe.throw(
+                _(
+                    "Cannot assign batches automatically for {0}: insufficient quantity "
+                    "in FIFO batches at warehouse {1}."
+                ).format(frappe.bold(d.item_code), frappe.bold(d.warehouse)),
+                title=_("Batch Allocation"),
+            )
+
+        seg_sq_sum = sum(flt(seg["stock_qty"]) for seg in allocations)
+        if allocations and abs(seg_sq_sum - stock_need) > 1e-6:
+            allocations[-1]["stock_qty"] = flt(
+                flt(allocations[-1]["stock_qty"]) + (stock_need - seg_sq_sum)
+            )
+
+        original_qty = flt(d.qty)
+        inv_segments = []
+        accumulated_inv = 0
+        last_j = len(allocations) - 1
+
+        for j, seg in enumerate(allocations):
+            sq = flt(seg["stock_qty"])
+
+            if j == last_j:
+                iq = flt(max(original_qty - accumulated_inv, 0), inv_qty_prec)
+            else:
+                iq = flt((sq / cf) if cf else sq, inv_qty_prec)
+                accumulated_inv = flt(accumulated_inv + iq, inv_qty_prec)
+
+            inv_segments.append(
+                {"qty": iq, "stock_qty": sq, "batch_no": seg["batch_no"]}
+            )
+
+        if len(inv_segments) == 1:
+            seg0 = inv_segments[0]
+            d.batch_no = seg0["batch_no"]
+            d.stock_qty = seg0["stock_qty"]
+            d.qty = seg0["qty"]
+            continue
+
+        indexes_to_extend.append((idx, inv_segments))
+
+    for idx, inv_segments in sorted(indexes_to_extend, key=lambda x: -x[0]):
+        row = invoice_doc.items[idx]
+
+        seg0 = inv_segments[0]
+        row.batch_no = seg0["batch_no"]
+        row.stock_qty = seg0["stock_qty"]
+        row.qty = seg0["qty"]
+
+        for seg in inv_segments[1:]:
+            clone = _si_item_row_clone_dict(row)
+            clone["batch_no"] = seg["batch_no"]
+            clone["qty"] = seg["qty"]
+            clone["stock_qty"] = seg["stock_qty"]
+            invoice_doc.append("items", clone)
+
+
 # ==========================================
 # Validation Functions
 # ==========================================
@@ -1049,6 +1235,9 @@ def submit_invoice(invoice=None, data=None):
 
         # Auto-set batch numbers for returns
         _auto_set_return_batches(invoice_doc)
+
+        # POS: optional auto FIFO batch assignment for skipped batch-picker lines
+        _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
 
         # Handle write-off amount if provided
         write_off_amount = flt(data.get("write_off_amount") or invoice.get("write_off_amount") or 0)
@@ -2335,6 +2524,7 @@ def apply_offers(invoice_data, selected_offers=None):
                 "company": profile.company,
                 "transaction_date": invoice.get("posting_date") or nowdate(),
                 "posting_date": invoice.get("posting_date") or nowdate(),
+                "posting_time": invoice.get("posting_time") or nowtime(),
                 "currency": invoice.get("currency")
                 or profile.get("currency")
                 or company_currency,

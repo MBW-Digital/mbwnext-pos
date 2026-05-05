@@ -193,7 +193,20 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		const hasActualQty = item.actual_qty !== undefined || item.stock_qty !== undefined
 		const shouldValidateStock = !isNonStockItem && (item.is_stock_item || item.is_bundle || hasActualQty)
 
-		if (currentProfile && !autoAdd && settingsStore.shouldEnforceStockValidation() && shouldValidateStock && !item.has_serial_no && !item.has_batch_no) {
+		const allowsSkipManualBatchPick =
+			settingsStore.isEnabled &&
+			settingsStore.allowSkipManualBatchSelection &&
+			item.has_batch_no &&
+			!item.has_serial_no
+
+		if (
+			currentProfile &&
+			!autoAdd &&
+			settingsStore.shouldEnforceStockValidation() &&
+			shouldValidateStock &&
+			!item.has_serial_no &&
+			(!(item.has_batch_no) || allowsSkipManualBatchPick)
+		) {
 			const warehouse = item.warehouse || currentProfile.warehouse
 			const actualQty =
 				item.actual_qty !== undefined ? item.actual_qty : item.stock_qty || 0

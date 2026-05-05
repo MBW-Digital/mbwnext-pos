@@ -10,10 +10,11 @@ Promotional Schemes and standalone Pricing Rules.
 """
 
 from typing import Dict, List, Optional
+import datetime
 from dataclasses import dataclass, asdict
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, nowdate
+from frappe.utils import flt, getdate, nowdate, cint
 
 
 # ============================================================================
@@ -86,10 +87,49 @@ class Offer:
 	is_recursive: int = 0  # 1 if offer applies recursively (e.g., buy 2 get 1 free for every 2)
 	recurse_for: float = 0  # Give free item for every N quantity (used when is_recursive=1)
 	apply_recursion_over: float = 0  # Qty for which recursion isn't applicable
+	# POS Next: daily time window on Pricing Rule (custom fields)
+	apply_time_window: int = 0
+	valid_time_from: Optional[str] = None
+	valid_time_to: Optional[str] = None
 
 	def to_dict(self) -> Dict:
 		"""Convert to dictionary for API response"""
 		return asdict(self)
+
+
+# ============================================================================
+# Helpers (time window on Pricing Rule)
+# ============================================================================
+
+def _pricing_rule_time_sql_columns() -> str:
+	"""Extra SELECT columns when Custom Fields exist on Pricing Rule."""
+	if not frappe.db.has_column("Pricing Rule", "apply_time_window"):
+		return ""
+	return ", apply_time_window, valid_time_from, valid_time_to"
+
+
+def _format_time_for_offer(val) -> Optional[str]:
+	if val is None:
+		return None
+	if isinstance(val, datetime.timedelta):
+		secs = int(val.total_seconds()) % 86400
+		if secs < 0:
+			secs += 86400
+		h = secs // 3600
+		m = (secs % 3600) // 60
+		s = secs % 60
+		return f"{h:02d}:{m:02d}:{s:02d}"
+	if isinstance(val, datetime.time):
+		return f"{val.hour:02d}:{val.minute:02d}:{val.second:02d}"
+	st = str(val)
+	return st.split(".")[0] if st else None
+
+
+def _time_window_from_rule(rule: Dict) -> tuple:
+	aw = cint(rule.get("apply_time_window") or 0)
+	tf = _format_time_for_offer(rule.get("valid_time_from"))
+	tt = _format_time_for_offer(rule.get("valid_time_to"))
+	return aw, tf, tt
 
 
 # ============================================================================
@@ -305,6 +345,8 @@ class OfferBuilder:
 		# Determine offer type
 		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
+		aw, tf, tt = _time_window_from_rule(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule.get("promotional_scheme") or rule["name"],
@@ -336,7 +378,10 @@ class OfferBuilder:
 			same_item=1 if slab.get("same_item") and not is_price_discount else 0,
 			is_recursive=1 if slab.get("is_recursive") and not is_price_discount else 0,
 			recurse_for=flt(slab.get("recurse_for", 0)) if not is_price_discount else 0,
-			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0
+			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
 		)
 
 	@staticmethod
@@ -361,6 +406,8 @@ class OfferBuilder:
 		elif rule["apply_on"] == ApplyOn.BRAND:
 			eligible_brands = eligibility.brands
 
+		aw, tf, tt = _time_window_from_rule(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule["name"],
@@ -384,7 +431,10 @@ class OfferBuilder:
 			promotional_scheme_id=None,
 			eligible_items=eligible_items,
 			eligible_item_groups=eligible_item_groups,
-			eligible_brands=eligible_brands
+			eligible_brands=eligible_brands,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
 		)
 
 
@@ -427,12 +477,15 @@ def get_offers(pos_profile: str) -> List[Dict]:
 def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 	"""Fetch offers from promotional schemes"""
 
+	time_cols = _pricing_rule_time_sql_columns()
+
 	# Fetch pricing rules linked to promotional schemes
-	pricing_rules = frappe.db.sql("""
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
 			price_or_product_discount, priority, valid_from, valid_upto
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0
@@ -479,14 +532,17 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 	"""Fetch offers from standalone pricing rules"""
 
+	time_cols = _pricing_rule_time_sql_columns()
+
 	# Fetch standalone pricing rules (not linked to schemes)
-	pricing_rules = frappe.db.sql("""
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling,
 			coupon_code_based, price_or_product_discount,
 			rate_or_discount, rate, discount_amount, discount_percentage,
 			min_qty, max_qty, min_amt, max_amt,
 			priority, valid_from, valid_upto
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0

@@ -354,6 +354,11 @@
 												:description="__('Enable partial payment for invoices')"
 											/>
 											<CheckboxField
+												v-model="settings.allow_skip_manual_batch_selection"
+												:label="__('Skip batch picker (FIFO auto-batch)')"
+												:description="__('Batch-only items skip the batch dialog; ERPNext assigns batches by FIFO when the invoice is saved. Serial items still require serial selection.')"
+											/>
+											<CheckboxField
 												v-model="settings.silent_print"
 												:label="__('Silent Print')"
 												:description="__('Print without confirmation')"
@@ -430,9 +435,10 @@ const settings = ref({
 	allow_credit_sale: 0,
 	allow_return: 0,
 	allow_write_off_change: 0,
-	allow_partial_payment: 0,
-	silent_print: 0,
-	allow_negative_stock: 0,
+				allow_partial_payment: 0,
+				silent_print: 0,
+				allow_skip_manual_batch_selection: 0,
+				allow_negative_stock: 0,
 	tax_inclusive: 0,
 })
 

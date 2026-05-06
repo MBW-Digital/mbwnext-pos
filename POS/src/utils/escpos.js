@@ -188,6 +188,17 @@ class ESCPOSBuilder {
 		return this._bytes(CMD.FEED_3, CMD.CUT_PARTIAL)
 	}
 
+	/**
+	 * Open cash drawer (kick-out) wired to printer DK port (RJ11).
+	 * ESC/POS: ESC p m t1 t2 — standard on Epson-compatible / HPRT / Xprinter.
+	 * @param {number} m  - 0 = drawer connector pin 2, 1 = pin 5 (DK2 vs DK1 layouts vary by printer).
+	 * @param {number} t1 - pulse ON time (×2 ms typical), default 0x19
+	 * @param {number} t2 - pulse OFF time, default 0xFA
+	 */
+	pulseCashDrawer(m = 0, t1 = 0x19, t2 = 0xfa) {
+		return this._bytes([ESC, 0x70, m & 0xff, t1 & 0xff, t2 & 0xff])
+	}
+
 	build() {
 		return new Uint8Array(this._buf)
 	}
@@ -213,9 +224,17 @@ function fmtDate(dateStr) {
  * @param {number} options.paperWidth           - 58 or 80 (mm)
  * @param {Object} [options.einvoiceQr]         - einvoice_self_service_qr object
  * @param {Object} [options.vnpostQr]           - vnpost_qr object
+ * @param {boolean} [options.openCashDrawer]    - send ESC/POS drawer kick after receipt (default true)
+ * @param {number}  [options.cashDrawerPin]     - 0 = pin 2, 1 = pin 5 (ESC/POS m param)
  */
 export function buildReceiptESCPOS(invoiceData, options = {}) {
-	const { paperWidth = 80, einvoiceQr, vnpostQr } = options
+	const {
+		paperWidth = 80,
+		einvoiceQr,
+		vnpostQr,
+		openCashDrawer = true,
+		cashDrawerPin = 0,
+	} = options
 	const b = new ESCPOSBuilder(paperWidth)
 
 	b.init()
@@ -351,5 +370,8 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 		.line('Powered by MBWNext POS')
 
 	b.feedAndCut()
+	if (openCashDrawer) {
+		b.pulseCashDrawer(Number(cashDrawerPin) === 1 ? 1 : 0)
+	}
 	return b.build()
 }

@@ -25,6 +25,8 @@ import { buildReceiptESCPOS } from "@/utils/escpos"
 const log = logger.create("WebUSBPrinter")
 
 const LS_WIDTH_KEY = "pos_usb_paper_width"
+const LS_DRAWER_KICK_KEY = "pos_usb_cash_drawer_kick"
+const LS_DRAWER_M_KEY = "pos_usb_cash_drawer_m"
 
 // Module-level singleton state
 const isSupported = ref("usb" in navigator)
@@ -32,6 +34,10 @@ const isConnected = ref(false)
 const isConnecting = ref(false)
 const deviceName = ref("")
 const paperWidth = ref(Number(localStorage.getItem(LS_WIDTH_KEY)) || 80)
+/** Mở két (ESC/POS) sau khi in — két nối RJ11 vào cổng DK của máy in */
+const cashDrawerKickEnabled = ref(localStorage.getItem(LS_DRAWER_KICK_KEY) !== "0")
+/** ESC/POS m: 0 = chân kick 2, 1 = chân kick 5 (tùy máy/két) */
+const cashDrawerKickM = ref([0, 1].includes(Number(localStorage.getItem(LS_DRAWER_M_KEY))) ? Number(localStorage.getItem(LS_DRAWER_M_KEY)) : 0)
 const lastError = ref("")
 
 let _device = null        // USBDevice instance
@@ -223,10 +229,14 @@ async function sendRaw(data) {
  */
 async function printInvoice(invoiceData, opts = {}) {
 	const width = opts.paperWidthMm || paperWidth.value || 80
+	const openDrawer = opts.openCashDrawer !== undefined ? opts.openCashDrawer : cashDrawerKickEnabled.value
+	const drawerM = opts.cashDrawerPin !== undefined ? opts.cashDrawerPin : cashDrawerKickM.value
 	const bytes = buildReceiptESCPOS(invoiceData, {
 		paperWidth: width,
 		einvoiceQr: opts.einvoiceQr || null,
 		vnpostQr:   opts.vnpostQr   || null,
+		openCashDrawer: openDrawer,
+		cashDrawerPin:  drawerM,
 	})
 	await sendRaw(bytes)
 	log.info(`Printed to ${deviceName.value} (${width}mm, ${bytes.length} bytes)`)
@@ -236,6 +246,30 @@ async function printInvoice(invoiceData, opts = {}) {
 function setPaperWidth(width) {
 	paperWidth.value = width
 	localStorage.setItem(LS_WIDTH_KEY, String(width))
+}
+
+function setCashDrawerKickEnabled(enabled) {
+	cashDrawerKickEnabled.value = !!enabled
+	localStorage.setItem(LS_DRAWER_KICK_KEY, cashDrawerKickEnabled.value ? "1" : "0")
+}
+
+/** @param {0|1} m - ESC/POS drawer pin selector */
+function setCashDrawerKickM(m) {
+	const v = Number(m) === 1 ? 1 : 0
+	cashDrawerKickM.value = v
+	localStorage.setItem(LS_DRAWER_M_KEY, String(v))
+}
+
+/**
+ * Gửi lệnh mở két (không in bill). Dùng khi cần mở két thủ công.
+ */
+async function kickCashDrawer() {
+	const b = new Uint8Array([
+		0x1b, 0x40, // init
+		0x1c, 0x2e, // exit Chinese (HPRT)
+		0x1b, 0x70, cashDrawerKickM.value & 0xff, 0x19, 0xfa,
+	])
+	await sendRaw(b)
 }
 
 const isReady = computed(() => isConnected.value)
@@ -249,6 +283,8 @@ export function useWebUSBPrinter() {
 		isReady,
 		deviceName,
 		paperWidth,
+		cashDrawerKickEnabled,
+		cashDrawerKickM,
 		lastError,
 
 		// Actions
@@ -258,5 +294,8 @@ export function useWebUSBPrinter() {
 		sendRaw,
 		printInvoice,
 		setPaperWidth,
+		setCashDrawerKickEnabled,
+		setCashDrawerKickM,
+		kickCashDrawer,
 	}
 }

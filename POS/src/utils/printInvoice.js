@@ -1,7 +1,81 @@
 import { call } from "@/utils/apiWrapper"
 import { logger } from "@/utils/logger"
+import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter"
 
 const log = logger.create('PrintInvoice')
+
+function isStandalonePWA() {
+	return (
+		window.matchMedia("(display-mode: standalone)").matches ||
+		window.navigator.standalone === true
+	)
+}
+
+/**
+ * Print a URL via a hidden iframe.
+ * Works in both normal browser and standalone PWA (avoids popup blocking).
+ * Chrome remembers the last selected printer, so after the first time
+ * the dialog auto-selects the previously used printer.
+ */
+function printUrlViaIframe(url) {
+	return new Promise((resolve, reject) => {
+		let iframe = document.getElementById("__pos_printview_iframe")
+		if (!iframe) {
+			iframe = document.createElement("iframe")
+			iframe.id = "__pos_printview_iframe"
+			iframe.style.cssText =
+				"position:fixed;top:-9999px;left:-9999px;width:0;height:0;border:none;"
+			document.body.appendChild(iframe)
+		}
+
+		iframe.onload = () => {
+			setTimeout(() => {
+				try {
+					iframe.contentWindow.focus()
+					iframe.contentWindow.print()
+					resolve(true)
+				} catch (e) {
+					reject(e)
+				}
+			}, 400)
+		}
+		iframe.onerror = reject
+		iframe.src = url
+	})
+}
+
+/**
+ * Print HTML content via a hidden iframe (for custom receipt HTML).
+ */
+function printHtmlViaIframe(htmlContent) {
+	return new Promise((resolve, reject) => {
+		let iframe = document.getElementById("__pos_print_iframe")
+		if (!iframe) {
+			iframe = document.createElement("iframe")
+			iframe.id = "__pos_print_iframe"
+			iframe.style.cssText =
+				"position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;"
+			document.body.appendChild(iframe)
+		}
+
+		iframe.onload = () => {
+			setTimeout(() => {
+				try {
+					iframe.contentWindow.focus()
+					iframe.contentWindow.print()
+					resolve(true)
+				} catch (e) {
+					reject(e)
+				}
+			}, 300)
+		}
+
+		const iframeDoc = iframe.contentDocument || iframe.contentWindow.document
+		iframeDoc.open()
+		iframeDoc.write(htmlContent)
+		iframeDoc.close()
+	})
+}
 
 /**
  * Print invoice using Frappe's print format system
@@ -20,10 +94,17 @@ export async function printInvoice(
 			throw new Error("Invalid invoice data")
 		}
 
+		// WebUSB connected → ESC/POS direct print (no dialog, Vietnamese fixed)
+		const usb = useWebUSBPrinter()
+		if (usb.isReady.value) {
+			log.info("Printing via WebUSB ESC/POS")
+			await usb.printInvoice(invoiceData, { paperWidthMm: usb.paperWidth.value })
+			return true
+		}
+
 		const doctype = invoiceData.doctype || "Sales Invoice"
 		const format = printFormat || "POS Next Receipt"
 
-		// Build PDF print URL
 		const params = new URLSearchParams({
 			doctype: doctype,
 			name: invoiceData.name,
@@ -31,23 +112,28 @@ export async function printInvoice(
 			no_letterhead: letterhead ? 0 : 1,
 			_lang: "en",
 			trigger_print: 1,
-			_t: Date.now(), // Cache buster to force fresh print format
+			_t: Date.now(),
 		})
 
 		if (letterhead) {
 			params.append("letterhead", letterhead)
 		}
 
-		// Open PDF in new window - browser will handle print dialog
 		const printUrl = `/printview?${params.toString()}`
-		const printWindow = window.open(printUrl, "_blank", "width=800,height=600")
 
-		if (!printWindow) {
-			throw new Error(
-				"Failed to open print window. Please check your popup blocker settings.",
-			)
+		// In standalone PWA, window.open() is blocked — use iframe instead.
+		// On regular web, use window.open() so that Frappe's configured @page CSS
+		// (e.g. size: 80mm auto) is respected by Chrome's print dialog.
+		if (isStandalonePWA()) {
+			await printUrlViaIframe(printUrl)
+			return true
 		}
 
+		const printWindow = window.open(printUrl, "_blank", "width=800,height=600")
+		if (!printWindow) {
+			// Popup blocked — fall back to iframe
+			await printUrlViaIframe(printUrl)
+		}
 		return true
 	} catch (error) {
 		log.error("Error printing with Frappe print format:", error)
@@ -64,10 +150,9 @@ export async function printInvoice(
  * @param {Object} invoiceData - The invoice document data from ERPNext
  * @param {Object} options - Optional: { vnpostQr: {...}, paperWidth: 58|80 }
  */
-export function printInvoiceCustom(invoiceData, options = {}) {
+export async function printInvoiceCustom(invoiceData, options = {}) {
 	const { vnpostQr, einvoiceSelfServiceQr, paperWidth = 80 } = options
 	const widthPx = paperWidth === 58 ? 220 : 302 // 58mm≈220px, 80mm≈302px at 96 DPI
-	const printWindow = window.open("", "_blank", `width=${widthPx + 50},height=700`)
 
 	const printContent = `
 		<!DOCTYPE html>
@@ -598,14 +683,17 @@ export function printInvoiceCustom(invoiceData, options = {}) {
 		</html>
 	`
 
-	printWindow.document.write(printContent)
-	printWindow.document.close()
-
-	// Auto print after load
-	printWindow.onload = () => {
-		setTimeout(() => {
-			printWindow.print()
-		}, 250)
+	// Always use iframe to avoid popup blocking in PWA and web
+	try {
+		await printHtmlViaIframe(printContent)
+	} catch (e) {
+		log.error("Iframe print failed, falling back to window.open:", e)
+		const printWindow = window.open("", "_blank", `width=${widthPx + 50},height=700`)
+		if (printWindow) {
+			printWindow.document.write(printContent)
+			printWindow.document.close()
+			printWindow.onload = () => setTimeout(() => printWindow.print(), 250)
+		}
 	}
 }
 
@@ -643,6 +731,16 @@ export async function printInvoiceByName(
 			invoiceDoc.vnpost_qr || invoiceDoc.einvoice_self_service_qr
 
 		if (needsThermalCustom) {
+			// WebUSB connected → use ESC/POS with native QR rendering (no garbled text)
+			const usb = useWebUSBPrinter()
+			if (usb.isReady.value) {
+				return await usb.printInvoice(invoiceDoc, {
+					paperWidthMm:  usb.paperWidth.value,
+					einvoiceQr:    invoiceDoc.einvoice_self_service_qr || null,
+					vnpostQr:      invoiceDoc.vnpost_qr || null,
+				})
+			}
+			// No WebUSB → fall back to custom HTML receipt (window.open)
 			return printInvoiceCustom(invoiceDoc, {
 				vnpostQr: invoiceDoc.vnpost_qr,
 				einvoiceSelfServiceQr: invoiceDoc.einvoice_self_service_qr,

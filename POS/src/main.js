@@ -194,6 +194,7 @@ async function initializeApp() {
 	log.debug("Registering router, auth state:", session.isLoggedIn)
 	app.use(router)
 	app.mount("#app")
+
 	// Keep document title as app name so Chrome "Add to home screen" shows MBW Next POS
 	if (typeof document !== "undefined") {
 		document.title = "MBW Next POS"

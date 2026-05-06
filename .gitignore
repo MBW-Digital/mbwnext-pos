@@ -8,7 +8,9 @@ __pycache__
 
 # Build artifacts - do not push built POS assets
 pos_next/public/pos/
-pos_next/www/
+# www/ chứa file build-pos.html hashed; chỉ whitelist trang cố định cần theo repo
+pos_next/www/*
+!pos_next/www/einvoice_self_service.html
 yarn.lock
 package-lock.json
 

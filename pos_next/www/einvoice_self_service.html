@@ -1,0 +1,575 @@
+---
+title: Yêu cầu xuất hóa đơn điện tử
+no_cache: 1
+show_sidebar: 0
+---
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yêu cầu xuất hóa đơn điện tử</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f0f4f8;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px 16px 48px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.10);
+    width: 100%;
+    max-width: 520px;
+    overflow: hidden;
+  }
+  .card-header {
+    background: linear-gradient(135deg, #1a56db 0%, #1e429f 100%);
+    color: #fff;
+    padding: 28px 28px 22px;
+  }
+  .card-header h1 { font-size: 1.2rem; font-weight: 700; }
+  .card-header p { font-size: 0.82rem; opacity: 0.85; margin-top: 4px; }
+  .invoice-info {
+    background: rgba(255,255,255,.15);
+    border-radius: 10px;
+    padding: 12px 16px;
+    margin-top: 14px;
+    font-size: 0.83rem;
+  }
+  .invoice-info strong { display: block; font-size: 1.1rem; margin-bottom: 2px; }
+  .card-body { padding: 24px 28px 28px; }
+
+  .tab-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .tab-btn {
+    flex: 1;
+    padding: 10px;
+    border: 2px solid #d1d5db;
+    border-radius: 10px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #374151;
+    transition: all .2s;
+    text-align: center;
+  }
+  .tab-btn.active {
+    border-color: #1a56db;
+    background: #eff6ff;
+    color: #1a56db;
+  }
+  .tab-btn:hover:not(.active) { border-color: #9ca3af; }
+
+  .form-group { margin-bottom: 16px; }
+  label {
+    display: block;
+    font-size: 0.84rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 5px;
+  }
+  label .req { color: #ef4444; margin-left: 2px; }
+  input[type=text], input[type=email], input[type=tel] {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid #d1d5db;
+    border-radius: 9px;
+    font-size: 0.92rem;
+    transition: border-color .2s;
+    outline: none;
+  }
+  input:focus { border-color: #1a56db; box-shadow: 0 0 0 3px rgba(26,86,219,.1); }
+
+  .tax-row { display: flex; gap: 8px; align-items: flex-end; }
+  .tax-row input { flex: 1; }
+  .btn-lookup {
+    padding: 10px 14px;
+    background: #f3f4f6;
+    border: 1.5px solid #d1d5db;
+    border-radius: 9px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #374151;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .2s;
+  }
+  .btn-lookup:hover { background: #e5e7eb; }
+  .btn-lookup:disabled { opacity: 0.5; cursor: not-allowed; }
+  .hint { font-size: 0.75rem; color: #6b7280; margin-top: 3px; }
+
+  .btn-submit {
+    width: 100%;
+    padding: 13px;
+    background: linear-gradient(135deg, #1a56db 0%, #1e429f 100%);
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    font-size: 1rem;
+    font-weight: 700;
+    cursor: pointer;
+    margin-top: 6px;
+    transition: opacity .2s;
+  }
+  .btn-submit:hover { opacity: 0.9; }
+  .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .alert {
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 0.86rem;
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+  .alert-error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .alert-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+  .alert-info { background: #eff6ff; color: #1e40af; border: 1px solid #bfdbfe; }
+  .alert-warn { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+  .success-icon { font-size: 2.5rem; text-align: center; margin-bottom: 10px; }
+  .spinner {
+    display: inline-block;
+    width: 18px; height: 18px;
+    border: 2.5px solid rgba(255,255,255,.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .hidden { display: none !important; }
+
+  .expires-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(255,255,255,.18);
+    border-radius: 20px;
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    margin-top: 8px;
+  }
+
+  @media (max-width: 400px) {
+    .card-header, .card-body { padding-left: 18px; padding-right: 18px; }
+    .tax-row { flex-direction: column; }
+    .btn-lookup { width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="card" id="app">
+  <!-- Loading State -->
+  <div id="state-loading" class="card-body" style="padding:60px 28px;text-align:center;color:#6b7280">
+    <div class="spinner" style="border-color:rgba(26,86,219,.3);border-top-color:#1a56db;width:32px;height:32px;margin:0 auto 14px"></div>
+    <p>Đang xác thực đường dẫn…</p>
+  </div>
+
+  <!-- Error State (bad token / expired) -->
+  <div id="state-error" class="hidden card-body" style="padding:48px 28px;text-align:center">
+    <div style="font-size:2.5rem;margin-bottom:12px">⚠️</div>
+    <h2 style="font-size:1rem;font-weight:700;color:#111827;margin-bottom:8px">Đường dẫn không hợp lệ</h2>
+    <p id="error-msg" style="font-size:0.86rem;color:#6b7280;line-height:1.5"></p>
+  </div>
+
+  <!-- Already Issued State -->
+  <div id="state-issued" class="hidden">
+    <div class="card-header">
+      <h1>🧾 Hóa đơn điện tử</h1>
+      <p>Đã xuất thành công</p>
+    </div>
+    <div class="card-body" style="text-align:center;padding-top:32px">
+      <div class="success-icon">✅</div>
+      <p style="color:#166534;font-weight:600;margin-bottom:8px">Hóa đơn điện tử đã được xuất.</p>
+      <p id="issued-no" style="font-size:0.84rem;color:#6b7280;margin-bottom:24px"></p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px">
+        <button class="btn-submit" onclick="viewInvoice()" style="background:linear-gradient(135deg,#1a56db 0%,#1e429f 100%)">
+          📄 Xem hóa đơn điện tử
+        </button>
+        <button class="btn-submit" id="btn-dl-pdf-issued" onclick="downloadInvoice()" style="background:linear-gradient(135deg,#059669 0%,#065f46 100%)">
+          ⬇️ Tải PDF hóa đơn
+        </button>
+      </div>
+      <div class="pdf-status-msg" style="font-size:0.8rem;color:#6b7280;margin-top:4px;min-height:20px"></div>
+    </div>
+  </div>
+
+  <!-- Main Form -->
+  <div id="state-form" class="hidden">
+    <div class="card-header">
+      <h1>🧾 Yêu cầu xuất hóa đơn điện tử</h1>
+      <p>Điền thông tin người mua để xuất hóa đơn theo quy định</p>
+      <div class="invoice-info">
+        <strong id="inv-total"></strong>
+        <span id="inv-name" style="opacity:.8"></span>
+      </div>
+      <div class="expires-badge" id="expires-badge"></div>
+    </div>
+
+    <div class="card-body">
+      <div id="form-alert" class="hidden alert"></div>
+
+      <!-- Buyer type tabs -->
+      <div class="tab-row">
+        <button class="tab-btn active" id="tab-retail" onclick="setType('retail')">👤 Cá nhân</button>
+        <button class="tab-btn" id="tab-company" onclick="setType('company')">🏢 Doanh nghiệp / Tổ chức</button>
+      </div>
+
+      <!-- Company-only: MST -->
+      <div id="company-fields" class="hidden">
+        <div class="form-group">
+          <label>Mã số thuế (MST) <span class="req">*</span></label>
+          <div class="tax-row">
+            <input type="text" id="tax-id" placeholder="VD: 0123456789" inputmode="numeric" maxlength="14">
+            <button class="btn-lookup" id="btn-lookup" onclick="lookupTax()">Tra cứu</button>
+          </div>
+          <div class="hint" id="lookup-hint"></div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>
+          <span id="name-label">Họ và tên</span>
+          <span class="req">*</span>
+        </label>
+        <input type="text" id="buyer-name" placeholder="Nhập tên người mua / tên công ty">
+      </div>
+
+      <div class="form-group">
+        <label>Địa chỉ <span class="req">*</span></label>
+        <input type="text" id="buyer-address" placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/TP">
+      </div>
+
+      <div class="form-group">
+        <label>Email <span class="req">*</span></label>
+        <input type="email" id="buyer-email" placeholder="email@example.com">
+        <div class="hint">Hóa đơn sẽ được gửi về email này</div>
+      </div>
+
+      <div class="form-group">
+        <label>Số điện thoại <span class="req">*</span></label>
+        <input type="tel" id="buyer-phone" placeholder="0901234567" inputmode="numeric">
+      </div>
+
+      <button class="btn-submit" id="btn-submit" onclick="submitForm()">
+        Xác nhận xuất hóa đơn điện tử
+      </button>
+    </div>
+  </div>
+
+  <!-- Success State -->
+  <div id="state-success" class="hidden">
+    <div class="card-header" style="background:linear-gradient(135deg,#059669 0%,#065f46 100%)">
+      <h1>✅ Yêu cầu đã được ghi nhận</h1>
+      <p>Hóa đơn điện tử sẽ được gửi về email của bạn</p>
+    </div>
+    <div class="card-body" style="text-align:center;padding-top:32px">
+      <div class="success-icon">🎉</div>
+      <p id="success-msg" style="color:#166534;font-weight:600;margin-bottom:8px;line-height:1.6"></p>
+      <p id="success-einvoice-no" style="font-size:0.84rem;color:#6b7280;margin-top:6px;margin-bottom:24px"></p>
+
+      <!-- PDF actions -->
+      <div id="pdf-actions" style="display:flex;flex-direction:column;gap:10px;margin-bottom:8px">
+        <button class="btn-submit" id="btn-view-pdf" onclick="viewInvoice()" style="background:linear-gradient(135deg,#1a56db 0%,#1e429f 100%)">
+          📄 Xem hóa đơn điện tử
+        </button>
+        <button class="btn-submit" id="btn-dl-pdf" onclick="downloadInvoice()" style="background:linear-gradient(135deg,#059669 0%,#065f46 100%)">
+          ⬇️ Tải PDF hóa đơn
+        </button>
+      </div>
+      <div class="pdf-status-msg" style="font-size:0.8rem;color:#6b7280;margin-top:4px;min-height:20px"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var API_BASE = "/api/method/pos_next.api.einvoice_self_service.";
+  var token = (new URLSearchParams(location.search)).get("t") || (new URLSearchParams(location.search)).get("token") || "";
+  var buyerType = "retail";
+  var invoiceData = null;
+
+  function show(id) {
+    ["state-loading","state-error","state-form","state-issued","state-success"].forEach(function(s) {
+      var el = document.getElementById(s);
+      if (el) el.classList.toggle("hidden", s !== id);
+    });
+  }
+
+  function fmt(amount, currency) {
+    try {
+      return new Intl.NumberFormat("vi-VN", { style: "currency", currency: currency || "VND" }).format(amount);
+    } catch (e) {
+      return amount.toLocaleString("vi-VN") + " " + (currency || "VND");
+    }
+  }
+
+  function timeLeft(expiresStr) {
+    var diff = new Date(expiresStr) - new Date();
+    if (diff <= 0) return "Đã hết hạn";
+    var h = Math.floor(diff / 3600000);
+    var m = Math.floor((diff % 3600000) / 60000);
+    return "Còn " + (h > 0 ? h + "h " : "") + m + " phút";
+  }
+
+  function fetchJSON(url) {
+    return fetch(url, { credentials: "include" }).then(function(r) { return r.json(); });
+  }
+
+  function postJSON(url, body) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "X-Frappe-CSRF-Token": "token" },
+      body: JSON.stringify(body)
+    }).then(function(r) { return r.json(); });
+  }
+
+  // ---- Init ----
+  if (!token) {
+    document.getElementById("error-msg").textContent = "Đường dẫn không chứa mã xác thực. Vui lòng quét lại mã QR.";
+    show("state-error");
+    return;
+  }
+
+  fetchJSON(API_BASE + "einvoice_self_service_session?token=" + encodeURIComponent(token))
+    .then(function(resp) {
+      var d = resp.message || resp;
+      if (!d.ok) {
+        document.getElementById("error-msg").textContent = d.message || "Đường dẫn không hợp lệ hoặc đã hết hạn.";
+        show("state-error");
+        return;
+      }
+      if (d.already_issued) {
+        var no = d.einvoice_no ? "Số hóa đơn: " + d.einvoice_no : "";
+        document.getElementById("issued-no").textContent = no;
+        show("state-issued");
+        return;
+      }
+      invoiceData = d;
+      document.getElementById("inv-total").textContent = fmt(d.grand_total, d.currency);
+      document.getElementById("inv-name").textContent = "Hóa đơn: " + d.sales_invoice;
+      var exp = d.expires_at;
+      if (exp) {
+        document.getElementById("expires-badge").textContent = "⏱ " + timeLeft(exp);
+      }
+      show("state-form");
+    })
+    .catch(function(err) {
+      document.getElementById("error-msg").textContent = "Không thể kết nối máy chủ. Vui lòng thử lại.";
+      show("state-error");
+    });
+
+  // ---- Buyer type switch ----
+  window.setType = function(type) {
+    buyerType = type;
+    document.getElementById("tab-retail").classList.toggle("active", type === "retail");
+    document.getElementById("tab-company").classList.toggle("active", type === "company");
+    document.getElementById("company-fields").classList.toggle("hidden", type !== "company");
+    document.getElementById("name-label").textContent = type === "company" ? "Tên công ty / Tổ chức" : "Họ và tên";
+    setFormAlert(null);
+  };
+
+  // ---- MST lookup ----
+  window.lookupTax = function() {
+    var taxId = document.getElementById("tax-id").value.trim();
+    if (!taxId) { setFormAlert("Vui lòng nhập MST trước khi tra cứu.", "error"); return; }
+    var btn = document.getElementById("btn-lookup");
+    var hint = document.getElementById("lookup-hint");
+    btn.disabled = true;
+    btn.textContent = "Đang tra…";
+    hint.textContent = "";
+    fetchJSON(API_BASE + "lookup_buyer_by_tax_id?tax_id=" + encodeURIComponent(taxId))
+      .then(function(resp) {
+        var d = resp.message || resp;
+        if (d.found) {
+          document.getElementById("buyer-name").value = d.name || "";
+          document.getElementById("buyer-address").value = d.address || "";
+          hint.style.color = "#059669";
+          hint.textContent = "✓ Tìm thấy: " + (d.name || "");
+        } else {
+          hint.style.color = "#b91c1c";
+          hint.textContent = "Không tìm thấy thông tin MST trong hệ thống. Vui lòng nhập thủ công.";
+        }
+      })
+      .catch(function() { hint.style.color = "#b91c1c"; hint.textContent = "Lỗi tra cứu. Vui lòng nhập thủ công."; })
+      .finally(function() { btn.disabled = false; btn.textContent = "Tra cứu"; });
+  };
+
+  // ---- Form alert ----
+  function setFormAlert(msg, type) {
+    var el = document.getElementById("form-alert");
+    if (!msg) { el.classList.add("hidden"); return; }
+    el.className = "alert alert-" + (type || "error");
+    el.textContent = msg;
+    el.classList.remove("hidden");
+  }
+
+  // ---- Submit ----
+  window.submitForm = function() {
+    var name = document.getElementById("buyer-name").value.trim();
+    var addr = document.getElementById("buyer-address").value.trim();
+    var email = document.getElementById("buyer-email").value.trim();
+    var phone = document.getElementById("buyer-phone").value.trim();
+    var taxId = buyerType === "company" ? document.getElementById("tax-id").value.trim() : "";
+
+    if (buyerType === "company" && !taxId) { setFormAlert("Vui lòng nhập Mã số thuế.", "error"); return; }
+    if (!name) { setFormAlert("Vui lòng nhập " + (buyerType === "company" ? "tên công ty" : "họ và tên") + ".", "error"); return; }
+    if (!addr) { setFormAlert("Vui lòng nhập địa chỉ.", "error"); return; }
+    if (!email || !email.includes("@")) { setFormAlert("Vui lòng nhập email hợp lệ.", "error"); return; }
+    if (!phone) { setFormAlert("Vui lòng nhập số điện thoại.", "error"); return; }
+
+    setFormAlert(null);
+    var btn = document.getElementById("btn-submit");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Đang xử lý…';
+
+    postJSON(API_BASE + "submit_self_service_einvoice", {
+      token: token,
+      buyer_type: buyerType,
+      tax_id: taxId,
+      buyer_name: name,
+      buyer_address: addr,
+      email: email,
+      phone: phone
+    })
+    .then(function(resp) {
+      var d = resp.message || resp;
+      if (d.ok) {
+        document.getElementById("success-msg").textContent = d.message || "Yêu cầu xuất hóa đơn điện tử đã được ghi nhận.";
+        if (d.einvoice_no) {
+          document.getElementById("success-einvoice-no").textContent = "Số hóa đơn: " + d.einvoice_no;
+        }
+        show("state-success");
+      } else {
+        setFormAlert(d.message || "Có lỗi xảy ra. Vui lòng thử lại.", "error");
+        btn.disabled = false;
+        btn.textContent = "Xác nhận xuất hóa đơn điện tử";
+      }
+    })
+    .catch(function() {
+      setFormAlert("Không thể kết nối máy chủ. Vui lòng thử lại.", "error");
+      btn.disabled = false;
+      btn.textContent = "Xác nhận xuất hóa đơn điện tử";
+    });
+  };
+
+  // ---- View / Download PDF ----
+  function setPdfStatus(msg, color) {
+    document.querySelectorAll(".pdf-status-msg").forEach(function(el) {
+      el.textContent = msg; el.style.color = color || "#6b7280";
+    });
+  }
+
+  function setActionLoading(btnId, loading, label) {
+    var btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.disabled = loading;
+    if (loading) {
+      btn.dataset.origText = btn.textContent;
+      btn.innerHTML = '<span class="spinner"></span>' + label;
+    } else {
+      btn.innerHTML = btn.dataset.origText || label;
+    }
+  }
+
+  function fetchViewInfo() {
+    return fetchJSON(API_BASE + "get_einvoice_view_info?t=" + encodeURIComponent(token));
+  }
+
+  window.viewInvoice = function() {
+    setActionLoading("btn-view-pdf", true, "Đang tải…");
+    setPdfStatus("", "");
+    fetchViewInfo()
+      .then(function(resp) {
+        var d = resp.message || resp;
+        setActionLoading("btn-view-pdf", false, "📄 Xem hóa đơn điện tử");
+        if (!d.ok) {
+          setPdfStatus(d.message || "Hóa đơn chưa sẵn sàng. Vui lòng thử lại sau 1–2 phút.", "#b91c1c");
+          return;
+        }
+        if (d.portal_url) {
+          window.open(d.portal_url, "_blank");
+          setPdfStatus("Đã mở trang tra cứu hóa đơn.", "#059669");
+          return;
+        }
+        if (d.pdf_b64) {
+          var bytes = atob(d.pdf_b64);
+          var arr = new Uint8Array(bytes.length);
+          for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+          var blob = new Blob([arr], { type: "application/pdf" });
+          var url = URL.createObjectURL(blob);
+          window.open(url, "_blank");
+          setPdfStatus("Đã mở PDF hóa đơn.", "#059669");
+          return;
+        }
+        if (d.cqt_pending) {
+          setPdfStatus("Hóa đơn đang chờ cơ quan thuế cấp mã. Vui lòng thử lại sau 1–2 phút.", "#92400e");
+        } else {
+          setPdfStatus("Chưa có dữ liệu PDF. Vui lòng thử lại sau.", "#b91c1c");
+        }
+      })
+      .catch(function() {
+        setActionLoading("btn-view-pdf", false, "📄 Xem hóa đơn điện tử");
+        setPdfStatus("Lỗi kết nối. Vui lòng thử lại.", "#b91c1c");
+      });
+  };
+
+  window.downloadInvoice = function() {
+    setActionLoading("btn-dl-pdf", true, "Đang tải…");
+    setPdfStatus("", "");
+    fetchViewInfo()
+      .then(function(resp) {
+        var d = resp.message || resp;
+        setActionLoading("btn-dl-pdf", false, "⬇️ Tải PDF hóa đơn");
+        if (!d.ok) {
+          setPdfStatus(d.message || "Hóa đơn chưa sẵn sàng. Vui lòng thử lại sau.", "#b91c1c");
+          return;
+        }
+        if (d.pdf_b64) {
+          var bytes = atob(d.pdf_b64);
+          var arr = new Uint8Array(bytes.length);
+          for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+          var blob = new Blob([arr], { type: "application/pdf" });
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "HDDT_" + (token.slice(0, 8)) + ".pdf";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setPdfStatus("Đã tải xuống PDF hóa đơn.", "#059669");
+          return;
+        }
+        if (d.portal_url) {
+          window.open(d.portal_url, "_blank");
+          setPdfStatus("PDF chưa sẵn sàng — đã mở trang tra cứu hóa đơn để tải.", "#059669");
+          return;
+        }
+        if (d.cqt_pending) {
+          setPdfStatus("Hóa đơn đang chờ cơ quan thuế cấp mã. Vui lòng thử lại sau 1–2 phút.", "#92400e");
+        } else {
+          setPdfStatus("Chưa có dữ liệu PDF. Vui lòng thử lại sau.", "#b91c1c");
+        }
+      })
+      .catch(function() {
+        setActionLoading("btn-dl-pdf", false, "⬇️ Tải PDF hóa đơn");
+        setPdfStatus("Lỗi kết nối. Vui lòng thử lại.", "#b91c1c");
+      });
+  };
+})();
+</script>
+</body>
+</html>

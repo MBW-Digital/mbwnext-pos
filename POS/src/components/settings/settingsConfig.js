@@ -37,6 +37,13 @@ export const sectionThemes = {
 		badgeBg: "bg-green-100",
 		badgeColor: "text-green-700",
 	},
+	blue: {
+		headerGradient: "from-blue-50 via-sky-50 to-indigo-50",
+		iconBg: "bg-blue-100",
+		iconColor: "text-blue-600",
+		badgeBg: "bg-blue-100",
+		badgeColor: "text-blue-700",
+	},
 }
 
 // Theme Configurations for Subsections

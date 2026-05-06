@@ -1,0 +1,262 @@
+/**
+ * useWebUSBPrinter - Direct USB thermal printer via WebUSB API.
+ *
+ * Sends ESC/POS commands directly to the USB device without any OS print
+ * dialog and without any paid software. The browser shows a one-time USB
+ * device picker; after that the device is remembered by the browser.
+ *
+ * Supported printers: Any ESC/POS compatible thermal printer
+ * (HPRT, Xprinter, Epson TM series, Star, etc.)
+ *
+ * Requirements:
+ * - Chrome / Edge (WebUSB not supported in Firefox/Safari)
+ * - On Windows: if the printer already has an OS driver installed, you may
+ *   need to install WinUSB driver using Zadig (https://zadig.akeo.ie/)
+ * - On Linux: add udev rule (see below) or run Chrome with sudo (not recommended)
+ *
+ * Linux udev rule (run once):
+ *   echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="0dd4", MODE="0666"' | sudo tee /etc/udev/rules.d/99-thermal-printer.rules
+ *   sudo udevadm control --reload && sudo udevadm trigger
+ */
+import { computed, ref } from "vue"
+import { logger } from "@/utils/logger"
+import { buildReceiptESCPOS } from "@/utils/escpos"
+
+const log = logger.create("WebUSBPrinter")
+
+const LS_WIDTH_KEY = "pos_usb_paper_width"
+
+// Module-level singleton state
+const isSupported = ref("usb" in navigator)
+const isConnected = ref(false)
+const isConnecting = ref(false)
+const deviceName = ref("")
+const paperWidth = ref(Number(localStorage.getItem(LS_WIDTH_KEY)) || 80)
+const lastError = ref("")
+
+let _device = null        // USBDevice instance
+let _iface = null         // claimed interface number
+let _endpoint = null      // bulk OUT endpoint address
+
+// ─────────────────────────────────────────────
+// Internal helpers
+// ─────────────────────────────────────────────
+
+/**
+ * Find the bulk OUT endpoint in the first suitable interface.
+ * Most thermal printers expose a single configuration with one interface
+ * containing a bulk-out endpoint.
+ */
+function findPrinterEndpoint(device) {
+	for (const config of device.configurations) {
+		for (const iface of config.interfaces) {
+			for (const alt of iface.alternates) {
+				// Accept printer class (0x07) or vendor-specific (0xFF) interfaces
+				if (alt.interfaceClass === 0x07 || alt.interfaceClass === 0xff) {
+					const ep = alt.endpoints.find(
+						(e) => e.direction === "out" && e.type === "bulk",
+					)
+					if (ep) {
+						return { interfaceNumber: iface.interfaceNumber, endpointNumber: ep.endpointNumber }
+					}
+				}
+			}
+		}
+	}
+	// Fallback: scan all interfaces for any bulk-out endpoint
+	for (const config of device.configurations) {
+		for (const iface of config.interfaces) {
+			for (const alt of iface.alternates) {
+				const ep = alt.endpoints.find(
+					(e) => e.direction === "out" && e.type === "bulk",
+				)
+				if (ep) {
+					return { interfaceNumber: iface.interfaceNumber, endpointNumber: ep.endpointNumber }
+				}
+			}
+		}
+	}
+	return null
+}
+
+async function openDevice(device) {
+	await device.open()
+
+	// Select configuration 1 if not already selected
+	if (device.configuration === null) {
+		await device.selectConfiguration(1)
+	}
+
+	const found = findPrinterEndpoint(device)
+	if (!found) {
+		await device.close()
+		throw new Error("No bulk-out endpoint found. This device may not be a supported printer.")
+	}
+
+	await device.claimInterface(found.interfaceNumber)
+	_iface = found.interfaceNumber
+	_endpoint = found.endpointNumber
+}
+
+// ─────────────────────────────────────────────
+// Public API
+// ─────────────────────────────────────────────
+
+/**
+ * Open USB device picker and connect to selected printer.
+ * The browser remembers the device — subsequent calls to reconnect()
+ * do not require user interaction.
+ */
+async function connect() {
+	if (!isSupported.value) {
+		lastError.value = "WebUSB is not supported in this browser. Please use Chrome or Edge."
+		return false
+	}
+	if (isConnected.value) return true
+	if (isConnecting.value) return false
+
+	isConnecting.value = true
+	lastError.value = ""
+
+	try {
+		// Show browser USB picker — user selects the printer
+		const device = await navigator.usb.requestDevice({
+			filters: [], // Show all USB devices; user picks the printer
+		})
+
+		await openDevice(device)
+
+		_device = device
+		deviceName.value = [device.manufacturerName, device.productName]
+			.filter(Boolean)
+			.join(" ") || `USB ${device.vendorId.toString(16)}:${device.productId.toString(16)}`
+
+		isConnected.value = true
+		log.info("Connected to USB printer:", deviceName.value)
+		return true
+	} catch (err) {
+		if (err.name === "NotFoundError") {
+			// User cancelled the picker — not an error
+			lastError.value = ""
+		} else {
+			lastError.value = err.message || String(err)
+			log.error("USB connect failed:", err)
+		}
+		return false
+	} finally {
+		isConnecting.value = false
+	}
+}
+
+/**
+ * Try to reconnect to a previously paired USB device without user interaction.
+ * Call this on app startup.
+ */
+async function reconnect() {
+	if (!isSupported.value || isConnected.value) return
+
+	try {
+		const devices = await navigator.usb.getDevices()
+		if (devices.length === 0) return
+
+		// Try to open the first paired device that looks like a printer
+		for (const device of devices) {
+			try {
+				await openDevice(device)
+				_device = device
+				deviceName.value = [device.manufacturerName, device.productName]
+					.filter(Boolean)
+					.join(" ") || `USB ${device.vendorId.toString(16)}:${device.productId.toString(16)}`
+				isConnected.value = true
+				log.info("Auto-reconnected to USB printer:", deviceName.value)
+				return
+			} catch {
+				// device might not be a printer, skip
+			}
+		}
+	} catch (err) {
+		log.warn("USB reconnect failed:", err)
+	}
+}
+
+/** Disconnect from USB printer. */
+async function disconnect() {
+	if (!_device) return
+	try {
+		if (_iface !== null) await _device.releaseInterface(_iface)
+		await _device.close()
+	} catch (err) {
+		log.warn("USB disconnect error:", err)
+	} finally {
+		_device = null
+		_iface = null
+		_endpoint = null
+		isConnected.value = false
+		deviceName.value = ""
+	}
+}
+
+/**
+ * Send raw bytes to the printer in chunks.
+ * Most USB printers have a max packet size of 64 or 512 bytes.
+ */
+async function sendRaw(data) {
+	if (!_device || !isConnected.value) {
+		throw new Error("USB printer not connected")
+	}
+
+	const CHUNK = 512
+	for (let offset = 0; offset < data.length; offset += CHUNK) {
+		const chunk = data.slice(offset, offset + CHUNK)
+		const result = await _device.transferOut(_endpoint, chunk)
+		if (result.status !== "ok") {
+			throw new Error(`USB transfer failed with status: ${result.status}`)
+		}
+	}
+}
+
+/**
+ * Print invoice (with optional e-invoice QR and VNPost QR) via ESC/POS.
+ *
+ * @param {Object} invoiceData   - Invoice document from ERPNext
+ * @param {Object} opts          - { paperWidthMm, einvoiceQr, vnpostQr }
+ */
+async function printInvoice(invoiceData, opts = {}) {
+	const width = opts.paperWidthMm || paperWidth.value || 80
+	const bytes = buildReceiptESCPOS(invoiceData, {
+		paperWidth: width,
+		einvoiceQr: opts.einvoiceQr || null,
+		vnpostQr:   opts.vnpostQr   || null,
+	})
+	await sendRaw(bytes)
+	log.info(`Printed to ${deviceName.value} (${width}mm, ${bytes.length} bytes)`)
+}
+
+/** Set paper width and persist to localStorage. */
+function setPaperWidth(width) {
+	paperWidth.value = width
+	localStorage.setItem(LS_WIDTH_KEY, String(width))
+}
+
+const isReady = computed(() => isConnected.value)
+
+export function useWebUSBPrinter() {
+	return {
+		// State
+		isSupported,
+		isConnected,
+		isConnecting,
+		isReady,
+		deviceName,
+		paperWidth,
+		lastError,
+
+		// Actions
+		connect,
+		reconnect,
+		disconnect,
+		sendRaw,
+		printInvoice,
+		setPaperWidth,
+	}
+}

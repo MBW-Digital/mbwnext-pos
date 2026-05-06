@@ -28,6 +28,8 @@ const LS_WIDTH_KEY       = "pos_usb_paper_width"
 const LS_DRAWER_KICK_KEY = "pos_usb_cash_drawer_kick"
 const LS_DRAWER_M_KEY    = "pos_usb_cash_drawer_m"
 const LS_VIMODE_KEY      = "pos_usb_vi_mode"
+/** Last successfully opened device (vendorId:productId:serial) — used to pick the right printer when several are paired */
+const LS_LAST_DEVICE_KEY = "pos_usb_last_device_tag"
 
 const VI_MODES = ['bitmap', 'ascii']
 
@@ -103,6 +105,36 @@ function findPrinterEndpoint(device) {
 	return null
 }
 
+function deviceTag(device) {
+	if (!device) return ""
+	return `${device.vendorId}:${device.productId}:${device.serialNumber || ""}`
+}
+
+function rememberLastUsbDevice(device) {
+	try {
+		localStorage.setItem(LS_LAST_DEVICE_KEY, deviceTag(device))
+	} catch (_) {}
+}
+
+/** Order paired devices: last successful printer first (stable when multiple USB devices are allowed). */
+function sortDevicesForReconnect(devices) {
+	const preferred = (() => {
+		try {
+			return localStorage.getItem(LS_LAST_DEVICE_KEY) || ""
+		} catch {
+			return ""
+		}
+	})()
+	if (!preferred) return devices
+	return [...devices].sort((a, b) => {
+		const ta = deviceTag(a)
+		const tb = deviceTag(b)
+		if (ta === preferred) return -1
+		if (tb === preferred) return 1
+		return 0
+	})
+}
+
 async function openDevice(device) {
 	await device.open()
 
@@ -156,6 +188,7 @@ async function connect() {
 			.join(" ") || `USB ${device.vendorId.toString(16)}:${device.productId.toString(16)}`
 
 		isConnected.value = true
+		rememberLastUsbDevice(device)
 		log.info("Connected to USB printer:", deviceName.value)
 		return true
 	} catch (err) {
@@ -172,34 +205,50 @@ async function connect() {
 	}
 }
 
+let _reconnectPromise = null
+
 /**
  * Try to reconnect to a previously paired USB device without user interaction.
- * Call this on app startup.
+ * Called on app startup, page visibility restore, USB plug events, and before print.
+ * Concurrent callers share one in-flight attempt.
  */
 async function reconnect() {
 	if (!isSupported.value || isConnected.value) return
 
-	try {
-		const devices = await navigator.usb.getDevices()
-		if (devices.length === 0) return
+	if (_reconnectPromise) {
+		await _reconnectPromise
+		return
+	}
 
-		// Try to open the first paired device that looks like a printer
-		for (const device of devices) {
-			try {
-				await openDevice(device)
-				_device = device
-				deviceName.value = [device.manufacturerName, device.productName]
-					.filter(Boolean)
-					.join(" ") || `USB ${device.vendorId.toString(16)}:${device.productId.toString(16)}`
-				isConnected.value = true
-				log.info("Auto-reconnected to USB printer:", deviceName.value)
-				return
-			} catch {
-				// device might not be a printer, skip
+	_reconnectPromise = (async () => {
+		try {
+			const devices = await navigator.usb.getDevices()
+			if (devices.length === 0) return
+
+			for (const device of sortDevicesForReconnect(devices)) {
+				try {
+					await openDevice(device)
+					_device = device
+					deviceName.value = [device.manufacturerName, device.productName]
+						.filter(Boolean)
+						.join(" ") || `USB ${device.vendorId.toString(16)}:${device.productId.toString(16)}`
+					isConnected.value = true
+					rememberLastUsbDevice(device)
+					log.info("Auto-reconnected to USB printer:", deviceName.value)
+					return
+				} catch {
+					// device might not be a printer, skip
+				}
 			}
+		} catch (err) {
+			log.warn("USB reconnect failed:", err)
 		}
-	} catch (err) {
-		log.warn("USB reconnect failed:", err)
+	})()
+
+	try {
+		await _reconnectPromise
+	} finally {
+		_reconnectPromise = null
 	}
 }
 

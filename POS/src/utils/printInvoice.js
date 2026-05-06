@@ -94,8 +94,11 @@ export async function printInvoice(
 			throw new Error("Invalid invoice data")
 		}
 
-		// WebUSB connected → ESC/POS direct print (no dialog, Vietnamese fixed)
+		// WebUSB paired device — await reconnect before check (cold start races with async reconnect)
 		const usb = useWebUSBPrinter()
+		if ("usb" in navigator) {
+			await usb.reconnect()
+		}
 		if (usb.isReady.value) {
 			log.info("Printing via WebUSB ESC/POS")
 			await usb.printInvoice(invoiceData, { paperWidthMm: usb.paperWidth.value })
@@ -731,8 +734,10 @@ export async function printInvoiceByName(
 			invoiceDoc.vnpost_qr || invoiceDoc.einvoice_self_service_qr
 
 		if (needsThermalCustom) {
-			// WebUSB connected → use ESC/POS with native QR rendering (no garbled text)
 			const usb = useWebUSBPrinter()
+			if ("usb" in navigator) {
+				await usb.reconnect()
+			}
 			if (usb.isReady.value) {
 				return await usb.printInvoice(invoiceDoc, {
 					paperWidthMm:  usb.paperWidth.value,

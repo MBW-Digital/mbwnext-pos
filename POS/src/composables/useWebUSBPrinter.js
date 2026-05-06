@@ -20,13 +20,25 @@
  */
 import { computed, ref } from "vue"
 import { logger } from "@/utils/logger"
-import { buildReceiptESCPOS } from "@/utils/escpos"
+import { buildReceiptESCPOS, buildReceiptBitmap } from "@/utils/escpos"
 
 const log = logger.create("WebUSBPrinter")
 
-const LS_WIDTH_KEY = "pos_usb_paper_width"
+const LS_WIDTH_KEY       = "pos_usb_paper_width"
 const LS_DRAWER_KICK_KEY = "pos_usb_cash_drawer_kick"
-const LS_DRAWER_M_KEY = "pos_usb_cash_drawer_m"
+const LS_DRAWER_M_KEY    = "pos_usb_cash_drawer_m"
+const LS_VIMODE_KEY      = "pos_usb_vi_mode"
+
+const VI_MODES = ['bitmap', 'ascii']
+
+function normalizeStoredUsbViMode(raw) {
+	if (!raw || typeof raw !== 'string') return 'bitmap'
+	const v = raw.toLowerCase()
+	if (v === 'bitmap' || v === 'ascii') return v
+	// Removed modes — map old experiments to bitmap
+	if (v === 'cp1258' || v === 'utf8') return 'bitmap'
+	return 'bitmap'
+}
 
 // Module-level singleton state
 const isSupported = ref("usb" in navigator)
@@ -38,6 +50,12 @@ const paperWidth = ref(Number(localStorage.getItem(LS_WIDTH_KEY)) || 80)
 const cashDrawerKickEnabled = ref(localStorage.getItem(LS_DRAWER_KICK_KEY) !== "0")
 /** ESC/POS m: 0 = chân kick 2, 1 = chân kick 5 (tùy máy/két) */
 const cashDrawerKickM = ref([0, 1].includes(Number(localStorage.getItem(LS_DRAWER_M_KEY))) ? Number(localStorage.getItem(LS_DRAWER_M_KEY)) : 0)
+const _storedNorm = normalizeStoredUsbViMode(localStorage.getItem(LS_VIMODE_KEY))
+if (localStorage.getItem(LS_VIMODE_KEY) !== _storedNorm) {
+	localStorage.setItem(LS_VIMODE_KEY, _storedNorm)
+}
+/** WebUSB output: `'bitmap'` = full Vietnamese; `'ascii'` = no diacritics via ESC/POS text. */
+const viMode = ref(_storedNorm)
 const lastError = ref("")
 
 let _device = null        // USBDevice instance
@@ -228,24 +246,36 @@ async function sendRaw(data) {
  * @param {Object} opts          - { paperWidthMm, einvoiceQr, vnpostQr }
  */
 async function printInvoice(invoiceData, opts = {}) {
-	const width = opts.paperWidthMm || paperWidth.value || 80
+	const width      = opts.paperWidthMm || paperWidth.value || 80
 	const openDrawer = opts.openCashDrawer !== undefined ? opts.openCashDrawer : cashDrawerKickEnabled.value
-	const drawerM = opts.cashDrawerPin !== undefined ? opts.cashDrawerPin : cashDrawerKickM.value
-	const bytes = buildReceiptESCPOS(invoiceData, {
-		paperWidth: width,
-		einvoiceQr: opts.einvoiceQr || null,
-		vnpostQr:   opts.vnpostQr   || null,
+	const drawerM    = opts.cashDrawerPin  !== undefined ? opts.cashDrawerPin  : cashDrawerKickM.value
+	const mode       = opts.viMode        !== undefined ? opts.viMode        : viMode.value
+
+	const printOpts = {
+		paperWidth:     width,
+		einvoiceQr:     opts.einvoiceQr || null,
+		vnpostQr:       opts.vnpostQr   || null,
 		openCashDrawer: openDrawer,
 		cashDrawerPin:  drawerM,
-	})
+	}
+
+	const bytes = mode === 'bitmap'
+		? buildReceiptBitmap(invoiceData, printOpts)
+		: buildReceiptESCPOS(invoiceData, printOpts)
 	await sendRaw(bytes)
-	log.info(`Printed to ${deviceName.value} (${width}mm, ${bytes.length} bytes)`)
+	log.info(`Printed to ${deviceName.value} (${width}mm, ${mode}, ${bytes.length} bytes)`)
 }
 
 /** Set paper width and persist to localStorage. */
 function setPaperWidth(width) {
 	paperWidth.value = width
 	localStorage.setItem(LS_WIDTH_KEY, String(width))
+}
+
+function setViMode(mode) {
+	const v = VI_MODES.includes(mode) ? mode : 'bitmap'
+	viMode.value = v
+	localStorage.setItem(LS_VIMODE_KEY, v)
 }
 
 function setCashDrawerKickEnabled(enabled) {
@@ -285,6 +315,7 @@ export function useWebUSBPrinter() {
 		paperWidth,
 		cashDrawerKickEnabled,
 		cashDrawerKickM,
+		viMode,
 		lastError,
 
 		// Actions
@@ -294,6 +325,7 @@ export function useWebUSBPrinter() {
 		sendRaw,
 		printInvoice,
 		setPaperWidth,
+		setViMode,
 		setCashDrawerKickEnabled,
 		setCashDrawerKickM,
 		kickCashDrawer,

@@ -1,12 +1,8 @@
 /**
  * ESC/POS receipt builder for thermal printers (HPRT, Xprinter, Epson, etc.)
  *
- * Key design decisions:
- * - Vietnamese text is normalized to ASCII (removes diacritics) because HPRT
- *   printers default to GBK/Chinese character mode which garbles UTF-8.
- * - FS . (exit Chinese character mode) is sent at init to fix HPRT garbling.
- * - E-invoice QR codes are printed natively via GS ( k (printer renders QR
- *   internally — much better quality than rasterizing an image).
+ * Text ESC/POS receipts use ASCII-normalised Vietnamese (strip diacritics).
+ * Full Vietnamese uses `buildReceiptBitmap` (canvas → raster, see below).
  */
 
 // ─────────────────────────────────────────────────────────────────
@@ -66,7 +62,7 @@ const CMD = {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Builder
+// Builder (text path: ASCII-normalised Vietnamese only)
 // ─────────────────────────────────────────────────────────────────
 class ESCPOSBuilder {
 	constructor(paperWidth = 80) {
@@ -81,8 +77,12 @@ class ESCPOSBuilder {
 	}
 
 	_raw(str) {
-		// Encode already-ASCII string as Latin-1 bytes (safe after ascii() normalization)
 		for (let i = 0; i < str.length; i++) this._buf.push(str.charCodeAt(i) & 0xff)
+		return this
+	}
+
+	_write(str) {
+		this._raw(ascii(String(str || '')))
 		return this
 	}
 
@@ -104,37 +104,38 @@ class ESCPOSBuilder {
 	dblOff()      { return this._bytes(CMD.DOUBLE_SIZE_OFF) }
 
 	line(text = '', nl = 1) {
-		this._raw(ascii(text))._lf(nl)
+		this._write(text)._lf(nl)
 		return this
 	}
 
 	divider(ch = '-') {
-		return this.alignLeft().line(ch.repeat(this.charsPerLine))
+		// Divider chars are always ASCII — safe to send raw.
+		return this.alignLeft()._raw(ch.repeat(this.charsPerLine))._lf()
 	}
 
 	twoCol(left, right) {
-		const l = ascii(String(left  || ''))
-		const r = ascii(String(right || ''))
-		const gap = this.charsPerLine - l.length - r.length
+		const lM = ascii(String(left  || ''))
+		const rM = ascii(String(right || ''))
+		const gap = this.charsPerLine - lM.length - rM.length
 		if (gap <= 0) {
-			this._raw(l.substring(0, this.charsPerLine - r.length - 1) + ' ' + r)._lf()
+			this._write(lM.substring(0, this.charsPerLine - rM.length - 1) + ' ' + rM)._lf()
 		} else {
-			this._raw(l + ' '.repeat(gap) + r)._lf()
+			this._write(lM + ' '.repeat(gap) + rM)._lf()
 		}
 		return this
 	}
 
 	threeCol(left, center, right) {
-		const W = this.charsPerLine
-		const l = ascii(String(left   || '')).substring(0, Math.floor(W * 0.45))
-		const r = ascii(String(right  || ''))
-		const c = ascii(String(center || ''))
-		const rStart = W - r.length
-		const cPos   = Math.floor((l.length + rStart) / 2) - Math.floor(c.length / 2)
-		let row = l.padEnd(Math.max(l.length, cPos))
-		const cPadded = c.padEnd(Math.max(0, rStart - row.length))
-		row = (row + cPadded + r).substring(0, W)
-		this._raw(row)._lf()
+		const W  = this.charsPerLine
+		const lM = ascii(String(left || '')).substring(0, Math.floor(W * 0.45))
+		const rM = ascii(String(right || ''))
+		const cM = ascii(String(center || ''))
+		const rStart = W - rM.length
+		const cPos   = Math.floor((lM.length + rStart) / 2) - Math.floor(cM.length / 2)
+		let row = lM.padEnd(Math.max(lM.length, cPos))
+		const cPadded = cM.padEnd(Math.max(0, rStart - row.length))
+		row = (row + cPadded + rM).substring(0, W)
+		this._write(row)._lf()
 		return this
 	}
 
@@ -219,13 +220,13 @@ function fmtDate(dateStr) {
 /**
  * Build full ESC/POS receipt including e-invoice QR (native printer rendering).
  *
- * @param {Object} invoiceData
- * @param {Object} options
- * @param {number} options.paperWidth           - 58 or 80 (mm)
- * @param {Object} [options.einvoiceQr]         - einvoice_self_service_qr object
- * @param {Object} [options.vnpostQr]           - vnpost_qr object
- * @param {boolean} [options.openCashDrawer]    - send ESC/POS drawer kick after receipt (default true)
- * @param {number}  [options.cashDrawerPin]     - 0 = pin 2, 1 = pin 5 (ESC/POS m param)
+ * @param {Object}  invoiceData
+ * @param {Object}  options
+ * @param {number}  options.paperWidth        - 58 or 80 (mm)
+ * @param {Object}  [options.einvoiceQr]      - einvoice_self_service_qr object
+ * @param {Object}  [options.vnpostQr]        - vnpost_qr object
+ * @param {boolean} [options.openCashDrawer]  - send ESC/POS drawer kick after receipt (default true)
+ * @param {number}  [options.cashDrawerPin]   - 0 = pin 2, 1 = pin 5 (ESC/POS m param)
  */
 export function buildReceiptESCPOS(invoiceData, options = {}) {
 	const {
@@ -244,27 +245,27 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 		.boldOn().dblOn()
 		.line(invoiceData.company || 'POS Next')
 		.dblOff().boldOff()
-		.line('HOA DON BAN HANG')
+		.line('HÓA ĐƠN BÁN HÀNG')
 		.divider('=')
 
 	// ── Info ─────────────────────────────────────────────────────
 	b.alignLeft()
-	b.twoCol('So HD:', invoiceData.name || '')
-	b.twoCol('Ngay:', fmtDate(invoiceData.posting_date))
-	if (invoiceData.customer_name) b.twoCol('KH:', invoiceData.customer_name)
+	b.twoCol('Số HD:', invoiceData.name || '')
+	b.twoCol('Ngày:', fmtDate(invoiceData.posting_date))
+	if (invoiceData.customer_name) b.twoCol('Khách hàng:', invoiceData.customer_name)
 	if (
 		invoiceData.status === 'Partly Paid' ||
 		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
 	) {
-		b.boldOn().line('** THANH TOAN MOT PHAN **').boldOff()
+		b.boldOn().line('** THANH TOÁN MỘT PHẦN **').boldOff()
 	}
 
 	b.divider('-')
 
 	// ── Items ────────────────────────────────────────────────────
 	b.boldOn()
-	if (b.charsPerLine >= 48) b.threeCol('San pham', 'SL', 'Thanh tien')
-	else b.line('San pham / SL / Don gia / TT')
+	if (b.charsPerLine >= 48) b.threeCol('Sản phẩm', 'SL', 'Thành tiền')
+	else b.line('Sản phẩm / SL / Đơn giá / TT')
 	b.boldOff().divider('-')
 
 	for (const item of (invoiceData.items || [])) {
@@ -275,16 +276,16 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 		const isFree   = item.is_free_item
 
 		if (b.charsPerLine >= 48) {
-			b.threeCol(name + (isFree ? '(FREE)' : ''), `${qty}x${fmtAmt(rate)}`, fmtAmt(subtotal))
+			b.threeCol(name + (isFree ? ' (MIỄN PHÍ)' : ''), `${qty}x${fmtAmt(rate)}`, fmtAmt(subtotal))
 		} else {
-			b.line(name + (isFree ? ' (FREE)' : ''))
+			b.line(name + (isFree ? ' (MIỄN PHÍ)' : ''))
 			b.twoCol(`  ${qty}x${fmtAmt(rate)}`, fmtAmt(subtotal))
 		}
 
 		const discPct = Number.parseFloat(item.discount_percentage || 0)
 		const discAmt = Number.parseFloat(item.discount_amount || 0)
 		if (discPct > 0 || discAmt > 0) {
-			b.twoCol(`  Giam gia(${discPct.toFixed(0)}%)`, `-${fmtAmt(discAmt)}`)
+			b.twoCol(`  Giảm giá(${discPct.toFixed(0)}%)`, `-${fmtAmt(discAmt)}`)
 		}
 		if (item.serial_no) {
 			b.line(`  S/N: ${item.serial_no.replace(/\n/g, ', ').substring(0, b.charsPerLine - 6)}`)
@@ -296,50 +297,50 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	// ── Totals ───────────────────────────────────────────────────
 	const taxes = Number.parseFloat(invoiceData.total_taxes_and_charges || 0)
 	if (taxes > 0) {
-		b.twoCol('Tong cong:', fmtAmt((invoiceData.grand_total || 0) - taxes))
-		b.twoCol('Thue:', fmtAmt(taxes))
+		b.twoCol('Tổng cộng:', fmtAmt((invoiceData.grand_total || 0) - taxes))
+		b.twoCol('Thuế:', fmtAmt(taxes))
 	}
 	const disc = Number.parseFloat(invoiceData.discount_amount || 0)
 	if (disc > 0) {
 		const pct = invoiceData.additional_discount_percentage
 			? `(${Number(invoiceData.additional_discount_percentage).toFixed(1)}%) ` : ''
-		b.twoCol(`Giam them ${pct}:`, `-${fmtAmt(disc)}`)
+		b.twoCol(`Giảm thêm ${pct}:`, `-${fmtAmt(disc)}`)
 	}
 
 	b.divider('=')
 	b.boldOn().dblOn()
-	b.twoCol('TONG:', fmtAmt(invoiceData.grand_total))
+	b.twoCol('TỔNG:', fmtAmt(invoiceData.grand_total))
 	b.dblOff().boldOff()
 
 	// ── Payments ─────────────────────────────────────────────────
 	const payments = invoiceData.payments || []
 	if (payments.length > 0) {
 		b.divider('-')
-		b.boldOn().line('Thanh toan:').boldOff()
+		b.boldOn().line('Thanh toán:').boldOff()
 		for (const p of payments) {
 			b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
 		}
 	}
 	if (vnpostQr && vnpostQr.amount > 0) {
-		b.twoCol('  Chuyen khoan:', fmtAmt(vnpostQr.amount))
+		b.twoCol('  Chuyển khoản:', fmtAmt(vnpostQr.amount))
 	}
 	const paid = Number.parseFloat(invoiceData.paid_amount || 0)
-	if (paid > 0) b.twoCol('Da thanh toan:', fmtAmt(paid))
+	if (paid > 0) b.twoCol('Đã thanh toán:', fmtAmt(paid))
 
 	const change = Number.parseFloat(invoiceData.change_amount || 0)
-	if (change > 0) b.twoCol('Tien thua:', fmtAmt(change))
+	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
 
 	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
-	if (outstanding > 0) b.boldOn().twoCol('Con no:', fmtAmt(outstanding)).boldOff()
+	if (outstanding > 0) b.boldOn().twoCol('Còn nợ:', fmtAmt(outstanding)).boldOff()
 
 	// ── VNPost QR ─────────────────────────────────────────────────
 	if (vnpostQr && vnpostQr.qr_data) {
 		b.divider('-')
 		b.alignCenter()
-			.boldOn().line('VNPOST PAY - CHUYEN KHOAN').boldOff()
+			.boldOn().line('VNPOST PAY - CHUYỂN KHOẢN').boldOff()
 			.twoCol('STK:', vnpostQr.account_no || '')
-			.twoCol('Ngan hang:', vnpostQr.bank_short_name || '')
-			.twoCol('So tien:', fmtAmt(vnpostQr.amount))
+			.twoCol('Ngân hàng:', vnpostQr.bank_short_name || '')
+			.twoCol('Số tiền:', fmtAmt(vnpostQr.amount))
 		b.alignCenter().qrCode(vnpostQr.qr_data, 4)._lf()
 		b.alignLeft()
 	}
@@ -348,14 +349,13 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	if (einvoiceQr && einvoiceQr.url) {
 		b.divider('-')
 		b.alignCenter()
-			.boldOn().line('PHIEU BAN HANG - HOA DON DIEN TU').boldOff()
-			.line('Quet QR de xuat hoa don dien tu')
-			.line('hoac mo lien ket (trong 2 gio):')
-		// QR of the e-invoice URL
+			.boldOn().line('PHIẾU BÁN HÀNG - HÓA ĐƠN ĐIỆN TỬ').boldOff()
+			.line('Quét QR để xuất hóa đơn điện tử')
+			.line('hoặc mở liên kết (trong 2 giờ):')
 		b.alignCenter().qrCode(einvoiceQr.url, 4)._lf()
 		b.alignLeft()
 		if (einvoiceQr.hd_display_code) {
-			b.twoCol('Ma hoa don:', einvoiceQr.hd_display_code)
+			b.twoCol('Mã hóa đơn:', einvoiceQr.hd_display_code)
 		}
 		if (einvoiceQr.barcode_text) {
 			b.alignCenter().barcode128(einvoiceQr.barcode_text)
@@ -366,7 +366,7 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	// ── Footer ────────────────────────────────────────────────────
 	b.divider('=')
 		.alignCenter()
-		.line('Cam on quy khach!')
+		.line('Cảm ơn quý khách!')
 		.line('Powered by MBWNext POS')
 
 	b.feedAndCut()
@@ -374,4 +374,305 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 		b.pulseCashDrawer(Number(cashDrawerPin) === 1 ? 1 : 0)
 	}
 	return b.build()
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Bitmap receipt builder — full Vietnamese/Unicode support
+//
+// Why text-mode Vietnamese fails on HPRT TP808:
+//   The printer does not expose CP1258/UTF-8 via ESC t — any code page
+//   number outside its supported set is silently ignored, leaving the
+//   printer in PC437 (box-drawing) mode which garbles high bytes.
+//
+// The bitmap approach bypasses all encoding issues:
+//   browser canvas renders any Unicode font → we convert to 1-bit
+//   raster → GS v 0 (raster image command) → printer prints it.
+//
+// Key settings:
+//   • NO supersampling — thinner strokes preserved (diacritics readable).
+//   • font ~26 px (80 mm) — larger glyphs.
+//   • threshold 80 — captures lightly anti-aliased edges without dilation.
+// ─────────────────────────────────────────────────────────────────
+
+const BITMAP_DOTS      = { 58: 384, 80: 576 }
+const BITMAP_THRESHOLD = 80   // 31 % luminance → black
+const BITMAP_FONT_80   = 26   // px, for 80 mm paper
+const BITMAP_FONT_58   = 22   // px, for 58 mm paper
+
+class BitmapReceiptBuilder {
+	constructor(paperWidth = 80) {
+		this._W    = BITMAP_DOTS[paperWidth] || 576
+		this._fs   = paperWidth === 58 ? BITMAP_FONT_58 : BITMAP_FONT_80
+		this._lh   = Math.ceil(this._fs * 1.65)
+		this._mg   = 6
+		this._iW   = this._W - this._mg * 2
+		this._rows = []
+		this._app  = []   // appended native ESC/POS cmds (QR / barcode)
+	}
+
+	_font(bold, large) {
+		const sz     = large ? Math.round(this._fs * 1.5) : this._fs
+		const weight = bold || large ? 'bold ' : ''
+		return `${weight}${sz}px Arial, sans-serif`
+	}
+
+	_lhFor(large) {
+		return large ? Math.round(this._fs * 1.5 * 1.65) : this._lh
+	}
+
+	_wrap(text, bold, large) {
+		// Measure text width with a temporary canvas
+		if (!this._mctx) {
+			const mc = document.createElement('canvas')
+			this._mctx = mc.getContext('2d')
+		}
+		this._mctx.font = this._font(bold, large)
+		const words = String(text || '').split(' ')
+		const lines = []
+		let cur = ''
+		for (const w of words) {
+			const t = cur ? cur + ' ' + w : w
+			if (this._mctx.measureText(t).width > this._iW && cur) {
+				lines.push(cur); cur = w
+			} else { cur = t }
+		}
+		if (cur) lines.push(cur)
+		return lines.length ? lines : ['']
+	}
+
+	text(t, { bold = false, large = false, align = 'left' } = {}) {
+		for (const line of this._wrap(t, bold, large)) {
+			this._rows.push({ type: 't', v: line, bold, large, align, lh: this._lhFor(large) })
+		}
+		return this
+	}
+
+	divider(dbl = false) {
+		this._rows.push({ type: 'd', dbl, lh: this._lh })
+		return this
+	}
+
+	twoCol(l, r) {
+		this._rows.push({ type: '2', l: String(l || ''), r: String(r || ''), lh: this._lh })
+		return this
+	}
+
+	qr(data, size = 4) {
+		if (data) this._app.push({ type: 'qr', data, size })
+		return this
+	}
+
+	barcode128(data) {
+		if (data) this._app.push({ type: 'barcode', data })
+		return this
+	}
+
+	_renderToBytes() {
+		const W = this._W
+		let H = this._mg
+		for (const row of this._rows) H += row.lh
+		H += this._mg * 2
+
+		const canvas = document.createElement('canvas')
+		canvas.width = W; canvas.height = H
+		const ctx = canvas.getContext('2d')
+		ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H)
+		ctx.fillStyle = '#000'; ctx.textBaseline = 'top'
+
+		let y = this._mg
+		for (const row of this._rows) {
+			if (row.type === 't') {
+				ctx.font = this._font(row.bold, row.large)
+				if (row.align === 'center') {
+					ctx.textAlign = 'center'; ctx.fillText(row.v, W / 2, y)
+				} else if (row.align === 'right') {
+					ctx.textAlign = 'right'; ctx.fillText(row.v, W - this._mg, y)
+				} else {
+					ctx.textAlign = 'left'; ctx.fillText(row.v, this._mg, y)
+				}
+			} else if (row.type === 'd') {
+				const my = y + Math.floor(row.lh / 2)
+				if (row.dbl) {
+					ctx.fillRect(this._mg, my - 2, this._iW, 2)
+					ctx.fillRect(this._mg, my + 2, this._iW, 2)
+				} else {
+					ctx.fillRect(this._mg, my, this._iW, 1)
+				}
+			} else if (row.type === '2') {
+				ctx.font = this._font(false, false)
+				ctx.textAlign = 'left';  ctx.fillText(row.l, this._mg, y)
+				ctx.textAlign = 'right'; ctx.fillText(row.r, W - this._mg, y)
+			}
+			y += row.lh
+		}
+
+		// 1-bit conversion: lower threshold (80) captures anti-aliased diacritic edges
+		const id = ctx.getImageData(0, 0, W, H)
+		const bpr = Math.ceil(W / 8)
+		const raw = new Uint8Array(bpr * H)
+		for (let py = 0; py < H; py++) {
+			for (let px = 0; px < W; px++) {
+				const i   = (py * W + px) * 4
+				const lum = id.data[i] * 0.299 + id.data[i + 1] * 0.587 + id.data[i + 2] * 0.114
+				if (lum < BITMAP_THRESHOLD) {
+					raw[py * bpr + Math.floor(px / 8)] |= 0x80 >> (px % 8)
+				}
+			}
+		}
+		// Dilation 0 — threshold 80 already captures anti-aliased diacritics
+		// without needing extra stroke expansion
+		return { bm: raw, bpr, H }
+	}
+
+	buildBitmapBytes() {
+		const { bm, bpr, H } = this._renderToBytes()
+		const hdr = new Uint8Array([GS, 0x76, 0x30, 0, bpr & 0xff, (bpr >> 8) & 0xff, H & 0xff, (H >> 8) & 0xff])
+		const out = new Uint8Array(hdr.length + bm.length)
+		out.set(hdr); out.set(bm, hdr.length)
+		return out
+	}
+
+	buildAppendedBytes() {
+		const enc = new TextEncoder()
+		const out = []
+		for (const cmd of this._app) {
+			if (cmd.type === 'qr') {
+				const bytes = enc.encode(cmd.data)
+				const len   = bytes.length + 3
+				out.push(
+					ESC, 0x61, 0x01,
+					GS, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00,
+					GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, cmd.size || 4,
+					GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x32,
+					GS, 0x28, 0x6b, len & 0xff, (len >> 8) & 0xff, 0x31, 0x50, 0x30, ...bytes,
+					GS, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30, LF,
+					ESC, 0x61, 0x00,
+				)
+			} else if (cmd.type === 'barcode') {
+				const bytes = enc.encode(String(cmd.data))
+				out.push(
+					ESC, 0x61, 0x01,
+					GS, 0x68, 0x28, GS, 0x77, 0x02, GS, 0x48, 0x02,
+					GS, 0x6b, 0x49, bytes.length, ...bytes, LF,
+					ESC, 0x61, 0x00,
+				)
+			}
+		}
+		return new Uint8Array(out)
+	}
+}
+
+/**
+ * Build a full bitmap receipt (supports full Vietnamese/Unicode via canvas rendering).
+ * Stream: [init] → [main bitmap] → [native QR/barcode cmds] → [footer bitmap] → [cut] → [kick]
+ */
+export function buildReceiptBitmap(invoiceData, options = {}) {
+	const {
+		paperWidth = 80,
+		einvoiceQr,
+		vnpostQr,
+		openCashDrawer = true,
+		cashDrawerPin  = 0,
+	} = options
+	const b = new BitmapReceiptBuilder(paperWidth)
+
+	b.text(invoiceData.company || 'POS Next', { large: true, align: 'center' })
+	b.text('HÓA ĐƠN BÁN HÀNG', { align: 'center' })
+	b.divider(true)
+
+	b.twoCol('Số HD:', invoiceData.name || '')
+	b.twoCol('Ngày:', fmtDate(invoiceData.posting_date))
+	if (invoiceData.customer_name) b.twoCol('Khách hàng:', invoiceData.customer_name)
+	const isPartial = invoiceData.status === 'Partly Paid' ||
+		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
+	if (isPartial) b.text('** THANH TOÁN MỘT PHẦN **', { align: 'center' })
+	b.divider()
+
+	b.text('Sản phẩm  ·  SL  ·  Thành tiền')
+	b.divider()
+	for (const item of (invoiceData.items || [])) {
+		const qty  = item.quantity || item.qty || 1
+		const rate = item.price_list_rate || item.rate || 0
+		const sub  = qty * rate
+		const name = item.item_name || item.item_code || ''
+		b.text(name + (item.is_free_item ? ' (MIỄN PHÍ)' : ''))
+		b.twoCol(`  ${qty} × ${fmtAmt(rate)}`, fmtAmt(sub))
+		const dPct = Number.parseFloat(item.discount_percentage || 0)
+		const dAmt = Number.parseFloat(item.discount_amount    || 0)
+		if (dPct > 0 || dAmt > 0) b.twoCol(`  Giảm (${dPct.toFixed(0)}%):`, `-${fmtAmt(dAmt)}`)
+		if (item.serial_no) b.text(`  S/N: ${item.serial_no.replace(/\n/g, ', ')}`)
+	}
+	b.divider()
+
+	const taxes = Number.parseFloat(invoiceData.total_taxes_and_charges || 0)
+	if (taxes > 0) {
+		b.twoCol('Tổng cộng:', fmtAmt((invoiceData.grand_total || 0) - taxes))
+		b.twoCol('Thuế:', fmtAmt(taxes))
+	}
+	const disc = Number.parseFloat(invoiceData.discount_amount || 0)
+	if (disc > 0) {
+		const pct = invoiceData.additional_discount_percentage
+			? `(${Number(invoiceData.additional_discount_percentage).toFixed(1)}%) ` : ''
+		b.twoCol(`Giảm thêm ${pct}:`, `-${fmtAmt(disc)}`)
+	}
+	b.divider(true)
+	b.twoCol('TỔNG:', fmtAmt(invoiceData.grand_total))
+
+	const payments = invoiceData.payments || []
+	if (payments.length > 0) {
+		b.divider()
+		b.text('Thanh toán:')
+		for (const p of payments) b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
+	}
+	if (vnpostQr && vnpostQr.amount > 0) b.twoCol('  Chuyển khoản:', fmtAmt(vnpostQr.amount))
+	const paid = Number.parseFloat(invoiceData.paid_amount || 0)
+	if (paid > 0) b.twoCol('Đã thanh toán:', fmtAmt(paid))
+	const change = Number.parseFloat(invoiceData.change_amount || 0)
+	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
+	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
+	if (outstanding > 0) b.text(`Còn nợ: ${fmtAmt(outstanding)}`)
+
+	if (vnpostQr && vnpostQr.qr_data) {
+		b.divider()
+		b.text('VNPOST PAY — CHUYỂN KHOẢN', { align: 'center' })
+		b.twoCol('STK:', vnpostQr.account_no || '')
+		b.twoCol('Ngân hàng:', vnpostQr.bank_short_name || '')
+		b.qr(vnpostQr.qr_data, 4)
+	}
+
+	if (einvoiceQr && einvoiceQr.url) {
+		b.divider()
+		b.text('PHIẾU BÁN HÀNG - HÓA ĐƠN ĐIỆN TỬ', { align: 'center' })
+		b.text('Quét QR để xuất hóa đơn điện tử', { align: 'center' })
+		b.text('hoặc mở liên kết (trong 2 giờ):', { align: 'center' })
+		if (einvoiceQr.hd_display_code) b.twoCol('Mã hóa đơn:', einvoiceQr.hd_display_code)
+		b.qr(einvoiceQr.url, 4)
+		if (einvoiceQr.barcode_text) b.barcode128(einvoiceQr.barcode_text)
+	}
+
+	// Footer built separately so QR codes print before it
+	const bf = new BitmapReceiptBuilder(paperWidth)
+	bf.divider(true)
+	bf.text('Cảm ơn quý khách! Hẹn gặp lại!', { align: 'center' })
+	bf.text('MBWNext POS', { align: 'center' })
+
+	const init     = new Uint8Array([ESC, 0x40, FS, 0x2e])
+	const mainBm   = b.buildBitmapBytes()
+	const nativeQR = b.buildAppendedBytes()
+	const footerBm = bf.buildBitmapBytes()
+	const cut      = new Uint8Array([...CMD.FEED_3, ...CMD.CUT_PARTIAL])
+	const kick     = openCashDrawer
+		? new Uint8Array([ESC, 0x70, cashDrawerPin & 0xff, 0x19, 0xfa])
+		: new Uint8Array(0)
+
+	const total  = init.length + mainBm.length + nativeQR.length + footerBm.length + cut.length + kick.length
+	const result = new Uint8Array(total)
+	let pos = 0
+	result.set(init,     pos); pos += init.length
+	result.set(mainBm,   pos); pos += mainBm.length
+	result.set(nativeQR, pos); pos += nativeQR.length
+	result.set(footerBm, pos); pos += footerBm.length
+	result.set(cut,      pos); pos += cut.length
+	result.set(kick,     pos)
+	return result
 }

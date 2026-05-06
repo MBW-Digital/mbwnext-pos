@@ -442,8 +442,20 @@
 											<option :value="80">80mm (HPRT TP808, Xprinter XP-80, Epson TM-T82)</option>
 										</select>
 									</div>
-									<div class="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/80">
-										<CheckboxField
+								<div class="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/80">
+									<div>
+										<label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Vietnamese printing') }}</label>
+										<select
+											:value="usbPrinter.viMode.value"
+											@change="usbPrinter.setViMode($event.target.value)"
+											class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+										>
+											<option value="bitmap">{{ __('Full Vietnamese') }}</option>
+											<option value="ascii">{{ __('No diacritics (ASCII)') }}</option>
+										</select>
+										<p class="text-xs text-gray-500 mt-1">{{ __('Full Vietnamese. ASCII: faster, Latin letters without accents.') }}</p>
+									</div>
+									<CheckboxField
 											:model-value="usbPrinter.cashDrawerKickEnabled.value ? 1 : 0"
 											:label="__('Open cash drawer after print (WebUSB)')"
 											:description="__('Use when the drawer is connected to the printer DK port (RJ11). Only works with direct USB printing, not the browser print dialog.')"
@@ -461,16 +473,6 @@
 											</select>
 											<p class="text-xs text-gray-500 mt-1">{{ __('If the drawer does not open, try the alternate option.') }}</p>
 										</div>
-										<Button
-											:loading="usbKickDrawerLoading"
-											variant="outline"
-											theme="gray"
-											size="sm"
-											class="w-full"
-											@click="testUsbKickDrawer"
-										>
-											{{ __('Test open drawer') }}
-										</Button>
 									</div>
 								</div>
 							</div>
@@ -579,19 +581,6 @@ const salesSectionClasses = computed(() => getSectionHeaderClasses("green"))
 const usbSectionClasses = computed(() => getSectionHeaderClasses("blue"))
 
 const usbPrinter = useWebUSBPrinter()
-const usbKickDrawerLoading = ref(false)
-
-async function testUsbKickDrawer() {
-	usbKickDrawerLoading.value = true
-	try {
-		await usbPrinter.kickCashDrawer()
-		showSuccess(__('Drawer kick command sent.'))
-	} catch (err) {
-		showError(err?.message || String(err))
-	} finally {
-		usbKickDrawerLoading.value = false
-	}
-}
 
 const warehouseSubsectionClasses = computed(() => getSubsectionClasses("gray"))
 const stockPolicySubsectionClasses = computed(() =>

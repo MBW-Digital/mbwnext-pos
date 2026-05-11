@@ -87,12 +87,6 @@
       </div>
     </div>
 
-    <!-- Shift Opening Dialog -->
-    <ShiftOpeningDialog
-      v-model="showShiftDialog"
-      @shift-opened="handleShiftOpened"
-      @dialog-closed="handleDialogClosed"
-    />
   </div>
 </template>
 
@@ -103,10 +97,8 @@ import { usePOSUIStore } from "@/stores/posUI"
 import { FeatherIcon } from "frappe-ui"
 import { onMounted, reactive, ref, watch } from "vue"
 import { useRouter } from "vue-router"
-import ShiftOpeningDialog from "../components/ShiftOpeningDialog.vue"
 import { useShift } from "../composables/useShift"
 import { session } from "../data/session"
-import { ensureCSRFToken } from "../utils/csrf"
 import { offlineWorker } from "../utils/offline/workerClient"
 
 const router = useRouter()
@@ -120,7 +112,6 @@ const loginForm = reactive({
 	password: "",
 })
 
-const showShiftDialog = ref(false)
 const showPassword = ref(false)
 
 // Reset state when login page mounts
@@ -138,7 +129,6 @@ onMounted(() => {
 	// Only clear state if user is NOT logged in
 	// If user is already logged in (e.g., after successful login), don't clear their session
 	if (!session.isLoggedIn) {
-		showShiftDialog.value = false
 		cartStore.clearCart()
 		invoiceTabsStore.resetPaymentUiOnAllTabs()
 		uiStore.resetAllDialogs()
@@ -165,53 +155,26 @@ function submit() {
 	})
 }
 
-// Watch for successful login
+// Watch for successful login and navigate to POSSale immediately.
+// CSRF token is already initialised in session.js onSuccess, so no
+// need to await it again here — doing so risks blocking navigation if
+// the service worker is not ready yet.
 watch(
 	() => session.isLoggedIn,
-	async (isLoggedIn) => {
+	(isLoggedIn) => {
 		if (isLoggedIn) {
-			// Initialize CSRF token after successful login
-			try {
-				console.log("User logged in, initializing CSRF token...")
-				await ensureCSRFToken()
+			// Navigate straight to POSSale; NoShiftPlaceholder will handle the HR shift check.
+			router.push({ name: "POSSale" })
 
-				// Sync CSRF token to worker for background API calls
-				if (window.csrf_token) {
-					await offlineWorker.setCSRFToken(window.csrf_token)
-				}
-			} catch (error) {
-				console.error("Failed to initialize CSRF token after login:", error)
+			// Sync CSRF token to service worker in the background (non-blocking).
+			if (window.csrf_token) {
+				offlineWorker.setCSRFToken(window.csrf_token).catch((err) => {
+					console.warn("Worker CSRF sync failed (non-fatal):", err)
+				})
 			}
-
-			// Show shift opening dialog after successful login
-			showShiftDialog.value = true
 		}
 	},
 )
-
-// Watch for dialog being closed via X button (v-model update)
-// When user closes dialog without action, navigate to POSSale
-watch(showShiftDialog, (isOpen, wasOpen) => {
-	// Only navigate if dialog was open and is now closed, and user is logged in
-	if (wasOpen === true && isOpen === false && session.isLoggedIn) {
-		router.push({ name: "POSSale" })
-	}
-})
-
-function handleShiftOpened() {
-	// Navigate to POS sale after shift is opened
-	router.push({ name: "POSSale" })
-}
-
-function handleDialogClosed({ reason }) {
-	// Navigate to /pos when dialog is cancelled or resumed
-	// "cancelled" means user closed dialog without action
-	// "resumed" means user chose to resume existing shift
-	// In both cases, navigate to POSSale (existing shift will be active)
-	if (reason === "cancelled" || reason === "resumed") {
-		router.push({ name: "POSSale" })
-	}
-}
 
 // Clear error when user starts typing
 watch([() => loginForm.email, () => loginForm.password], () => {

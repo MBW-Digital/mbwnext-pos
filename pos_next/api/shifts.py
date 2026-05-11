@@ -6,8 +6,67 @@ from __future__ import unicode_literals
 import json
 import frappe
 from frappe import _
-from frappe.utils import nowdate, nowtime, get_datetime
+from frappe.utils import nowdate, nowtime, get_datetime, now_datetime
+from pos_next.api.roster import get_today_roster_shifts_for_user
 from pos_next.api.utilities import get_wallet_payment_modes
+
+
+def _user_has_submitted_pos_closing_shift_today(user: str) -> bool:
+	"""True if POS Closing Shift is submitted today for this user (posting_date + docstatus)."""
+	if not user or user == "Guest":
+		return False
+	return bool(
+		frappe.db.exists(
+			"POS Closing Shift",
+			{"user": user, "docstatus": 1, "posting_date": nowdate()},
+		)
+	)
+
+
+def _time_str_to_minutes(timestr):
+	if not timestr:
+		return None
+	parts = str(timestr).split(":")
+	try:
+		return int(parts[0] or 0) * 60 + int(parts[1] or 0)
+	except (ValueError, IndexError):
+		return None
+
+
+def _roster_still_has_slot_not_ended_today(shifts_rows):
+	"""True if any roster line's end_time is still today on the wall clock (same heuristic as POS UI)."""
+	dt = now_datetime()
+	now_m = dt.hour * 60 + dt.minute
+	for row in shifts_rows:
+		end_m = _time_str_to_minutes(row.get("end_time"))
+		if end_m is not None and now_m <= end_m:
+			return True
+	return False
+
+
+def _cannot_open_new_pos_after_same_day_close(user):
+	"""After submitting POS Closing Shift, block only when reopening is not allowed for this roster day.
+
+	- Single roster slot today: never reopen after close (same day).
+	- Multiple roster slots: allow another opening until all today's slots have ended (multi-shift work day).
+	"""
+	if not _user_has_submitted_pos_closing_shift_today(user):
+		return False
+
+	rows = get_today_roster_shifts_for_user(user)
+	if len(rows) <= 1:
+		return True
+
+	if _roster_still_has_slot_not_ended_today(rows):
+		return False
+
+	return True
+
+
+@frappe.whitelist()
+def user_closed_pos_shift_today():
+	"""Whether POS must stay closed for today after a submitted closing (see multi-shift rules)."""
+	return {"closed_today": _cannot_open_new_pos_after_same_day_close(frappe.session.user)}
 
 
 @frappe.whitelist()
@@ -101,6 +160,11 @@ def check_opening_shift(user=None):
 def create_opening_shift(pos_profile, company, balance_details):
 	"""Create a new POS Opening Shift"""
 	balance_details = json.loads(balance_details) if isinstance(balance_details, str) else balance_details
+
+	if _cannot_open_new_pos_after_same_day_close(frappe.session.user):
+		frappe.throw(
+			_("You cannot open another POS shift today. If you work multiple roster shifts, try again when the next shift window is active.")
+		)
 
 	# Check if user already has an open shift
 	existing_shift = check_opening_shift(frappe.session.user)

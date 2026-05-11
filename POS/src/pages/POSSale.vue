@@ -13,6 +13,7 @@
 				:current-time="shiftStore.currentTime"
 				:shift-duration="shiftStore.shiftDuration"
 				:has-open-shift="shiftStore.hasOpenShift"
+				:hr-schedule-badge="headerHrScheduleBadge"
 				:profile-name="shiftStore.profileName"
 				:user-name="userName"
 				:user-image="userImage"
@@ -455,134 +456,16 @@
 				</div>
 			</div>
 
-			<!-- No Shift Placeholder -->
-			<div
+			<!-- No Shift Placeholder (HR Roster aware) -->
+			<NoShiftPlaceholder
 				v-else
-				class="flex-1 flex items-center justify-center bg-gray-50"
-				style="max-height: calc(100vh - 60px - var(--header-height, 60px))"
-			>
-				<div class="text-center">
-					<div
-						class="mx-auto flex items-center justify-center h-24 w-24 rounded-full bg-blue-100"
-					>
-						<svg
-							class="h-12 w-12 text-blue-600"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-							/>
-						</svg>
-					</div>
-					<h3 class="mt-4 text-lg font-medium text-gray-900">
-						{{ __("Welcome to MBW Next POS") }}
-					</h3>
-					<p class="mt-2 text-sm text-gray-500">
-						{{ __("Please open a shift to start making sales") }}
-					</p>
-					<!-- Trạng thái chấm công + nút thao tác (hình tròn, icon vân tay) -->
-					<div class="mt-4 space-y-3">
-						<div
-							class="inline-flex items-center px-3 py-1 rounded-full text-xs"
-							:class="[
-								attendanceState === 'checked_in'
-									? 'bg-green-50 text-green-700'
-									: attendanceState === 'checked_out'
-										? 'bg-gray-100 text-gray-700'
-										: 'bg-red-50 text-red-700',
-							]"
-						>
-							<span
-								class="w-2 h-2 rounded-full me-2"
-								:class="[
-									attendanceState === 'checked_in'
-										? 'bg-green-500'
-										: attendanceState === 'checked_out'
-											? 'bg-gray-400'
-											: 'bg-red-500',
-								]"
-							/>
-							<span class="font-medium">
-								{{ attendanceStatusLabel }}
-							</span>
-						</div>
-						<div class="flex items-center justify-center gap-8">
-							<button
-								v-if="showCheckInButton"
-								type="button"
-								:disabled="isAttendanceActionLoading"
-								@click="handleCheckIn"
-								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-red-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								<span
-									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 active:scale-[0.98] transition-all duration-200 border-2 border-red-100"
-								>
-									<!-- Icon đồng hồ (chấm công vào) -->
-									<svg
-										class="w-8 h-8"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<circle cx="12" cy="12" r="9" />
-										<path d="M12 7v5l3 3" />
-									</svg>
-								</span>
-								<span class="text-sm font-semibold text-gray-800">
-									{{ __("Check In") }}
-								</span>
-							</button>
-							<button
-								v-if="showCheckOutButton"
-								type="button"
-								:disabled="isAttendanceActionLoading"
-								@click="handleCheckOut"
-								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-gray-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								<span
-									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-gray-600 to-gray-700 text-white hover:from-gray-700 hover:to-gray-800 active:scale-[0.98] transition-all duration-200 border-2 border-gray-100"
-								>
-									<!-- Icon ra cửa / kết thúc ca -->
-									<svg
-										class="w-8 h-8"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-										<polyline points="16 17 21 12 16 7" />
-										<line x1="21" y1="12" x2="9" y2="12" />
-									</svg>
-								</span>
-								<span class="text-sm font-semibold text-gray-800">
-									{{ __("Check Out") }}
-								</span>
-							</button>
-						</div>
-					</div>
-					<Button
-						variant="solid"
-						theme="blue"
-						@click="uiStore.showOpenShiftDialog = true"
-						class="mt-6"
-					>
-						{{ __("Open Shift") }}
-					</Button>
-				</div>
-			</div>
+				:is-loading="todayShiftsLoading"
+				:has-employee="todayShiftsHasEmployee"
+				:employee-name="todayShiftsEmployee"
+				:shifts="todayShifts"
+				:pos-shift-closed-today="posShiftClosedToday"
+				@open-shift="handleOpenShiftFromPlaceholder"
+			/>
 
 			<!-- Payment Dialog (state per invoice tab) -->
 		<PaymentDialog
@@ -628,6 +511,28 @@
 				:opening-shift="shiftStore.currentShift?.name"
 				@shift-closed="handleShiftClosed"
 			/>
+
+			<!-- Confirm close POS shift before HR end time -->
+			<Dialog
+				v-model="showEarlyCloseShiftConfirm"
+				:options="{ title: __('Close shift early?'), size: 'sm' }"
+			>
+				<template #body-content>
+					<p class="text-sm text-gray-600 py-2">
+						{{ earlyCloseHrConfirmMessage }}
+					</p>
+				</template>
+				<template #actions>
+					<div class="flex gap-2 w-full justify-end">
+						<Button variant="subtle" @click="cancelEarlyCloseShiftConfirm">
+							{{ __("No") }}
+						</Button>
+						<Button variant="solid" theme="red" @click="confirmEarlyCloseShiftProceed">
+							{{ __("Yes") }}
+						</Button>
+					</div>
+				</template>
+			</Dialog>
 
 			<VNPostPayBankTransferDialog
 				v-model="activeTabVnpostDialogModel"
@@ -821,105 +726,6 @@
 							@click="confirmClearCart"
 						>
 							{{ __("Clear All") }}
-						</Button>
-					</div>
-				</template>
-			</Dialog>
-
-			<!-- Dialog chụp ảnh chấm công (đính kèm Attendance) -->
-			<Dialog
-				v-model="showPhotoDialog"
-				:options="{ title: __('Attendance Photo'), size: 'sm' }"
-				@after-close="stopAttendancePhotoCamera"
-			>
-				<template #body-content>
-					<div class="py-3 space-y-3">
-						<p class="text-sm text-gray-600">
-							{{ __("Take a photo to save to the attendance record (optional).") }}
-						</p>
-						<div class="relative bg-gray-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center">
-							<video
-								ref="attendancePhotoVideoRef"
-								autoplay
-								playsinline
-								muted
-								class="absolute inset-0 w-full h-full object-cover object-center"
-							/>
-							<canvas ref="attendancePhotoCanvasRef" class="hidden" />
-							<div
-								v-if="attendancePhotoError"
-								class="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-sm p-4"
-							>
-								{{ attendancePhotoError }}
-							</div>
-						</div>
-					</div>
-				</template>
-				<template #actions>
-					<div class="flex gap-2 w-full">
-						<Button
-							class="flex-1"
-							variant="subtle"
-							:loading="attendancePhotoSkipping"
-							:disabled="attendancePhotoUploading"
-							@click="skipAttendancePhoto"
-						>
-							{{ __("Skip") }}
-						</Button>
-						<Button
-							class="flex-1"
-							variant="solid"
-							theme="blue"
-							:loading="attendancePhotoUploading"
-							:disabled="attendancePhotoSkipping"
-							@click="captureAndUploadAttendancePhoto"
-						>
-							{{ __("Take Photo") }}
-						</Button>
-					</div>
-				</template>
-			</Dialog>
-
-			<!-- Dialog chọn ca làm việc cho chấm công -->
-			<Dialog
-				v-model="showShiftDialog"
-				:options="{ title: __('Select Shift'), size: 'xs' }"
-			>
-				<template #body-content>
-					<div class="py-3 space-y-3">
-						<p class="text-sm text-gray-600">
-							{{ __("Please select a shift for attendance.") }}
-						</p>
-						<select
-							v-model="tempSelectedShiftType"
-							class="mt-1 block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
-						>
-							<option
-								v-for="shift in shiftTypes"
-								:key="shift.name"
-								:value="shift.name"
-							>
-								{{ shift.name }}
-							</option>
-						</select>
-					</div>
-				</template>
-				<template #actions>
-					<div class="flex gap-2 w-full">
-						<Button
-							class="flex-1"
-							variant="subtle"
-							@click="cancelShiftDialog"
-						>
-							{{ __("Cancel") }}
-						</Button>
-						<Button
-							class="flex-1"
-							variant="solid"
-							theme="blue"
-							@click="confirmShiftSelection"
-						>
-							{{ __("Confirm") }}
 						</Button>
 					</div>
 				</template>
@@ -1195,6 +1001,7 @@
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
+import NoShiftPlaceholder from "@/components/pos/NoShiftPlaceholder.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 import ManagementSlider from "@/components/pos/ManagementSlider.vue";
@@ -1390,345 +1197,195 @@ const showInvoiceManagement = ref(false);
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
 
-// Trạng thái chấm công (check-in / check-out)
-const attendanceStatus = ref(null);
-const shiftTypes = ref([]);
-const showShiftDialog = ref(false);
-const tempSelectedShiftType = ref("");
+// ─── HR Roster: today's shifts ────────────────────────────────────────────────
+const todayShifts = ref([]);
+const todayShiftsLoading = ref(false);
+const todayShiftsEmployee = ref("");
+const todayShiftsHasEmployee = ref(true);
+/** Aligns with server: blocks reopen only for single-slot days or after all roster slots ended (not after each close when multiple shifts exist). */
+const posShiftClosedToday = ref(false);
 
-// Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
-const showPhotoDialog = ref(false);
-const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
-const attendancePhotoVideoRef = ref(null);
-const attendancePhotoCanvasRef = ref(null);
-const attendancePhotoStream = ref(null);
-const attendancePhotoError = ref("");
-const attendancePhotoUploading = ref(false);
-const attendancePhotoSkipping = ref(false);
-const pendingAttendanceAction = ref(null);
-
-const attendanceStatusResource = createResource({
-	url: "pos_next.api.attendance.get_today_status",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-	},
-});
-
-const attendanceCheckInResource = createResource({
-	url: "pos_next.api.attendance.check_in",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-		showSuccess(__("Check-in successful"));
-	},
-	onError(error) {
-		log.error("Attendance check-in error:", error);
-		showError(parseError(error));
-	},
-});
-
-const attendanceCheckOutResource = createResource({
-	url: "pos_next.api.attendance.check_out",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-		showSuccess(__("Check-out successful"));
-	},
-	onError(error) {
-		log.error("Attendance check-out error:", error);
-		showError(parseError(error));
-	},
-});
-
-const attendanceState = computed(
-	() => attendanceStatus.value?.state || "not_marked"
-);
-
-const attendanceStatusLabel = computed(() => {
-	if (attendanceState.value === "checked_in") {
-		return __("You have checked in today");
+async function loadPosShiftClosedToday() {
+	try {
+		const res = await call("pos_next.api.shifts.user_closed_pos_shift_today", {});
+		const data = res?.message ?? res ?? {};
+		posShiftClosedToday.value = !!data.closed_today;
+	} catch (err) {
+		log.error("Error loading POS closed-today flag:", err);
+		posShiftClosedToday.value = false;
 	}
-	if (attendanceState.value === "checked_out") {
-		return __("You have checked out today");
+}
+
+async function loadTodayShifts() {
+	todayShiftsLoading.value = true;
+	try {
+		await Promise.all([
+			(async () => {
+				try {
+					const res = await call("pos_next.api.roster.get_today_shifts", {});
+					const data = res?.message ?? res ?? {};
+					todayShiftsHasEmployee.value = !!data.has_employee;
+					todayShiftsEmployee.value = data.employee_name || "";
+					todayShifts.value = Array.isArray(data.shifts) ? data.shifts : [];
+				} catch (err) {
+					log.error("Error loading today HR shifts:", err);
+					todayShiftsHasEmployee.value = true; // soft-fail: don't block POS
+					todayShifts.value = [];
+				}
+			})(),
+			loadPosShiftClosedToday(),
+		]);
+	} finally {
+		todayShiftsLoading.value = false;
 	}
-	return __("You have not checked in today");
+}
+
+function hrTimeToMinutes(timeStr) {
+	if (!timeStr) return null;
+	const parts = String(timeStr).split(":");
+	const h = parseInt(parts[0] || "0", 10);
+	const m = parseInt(parts[1] || "0", 10);
+	return h * 60 + m;
+}
+
+/** Depends on shiftStore.currentTime so "now" updates every second during open shift */
+/** Minutes before HR roster start_time that count as same window (POS open / header / early-close messaging). */
+const HR_SCHEDULE_EARLY_OPEN_MINUTES = 30
+
+const hrNowMinutes = computed(() => {
+	void shiftStore.currentTime;
+	const d = new Date();
+	return d.getHours() * 60 + d.getMinutes();
 });
 
-const showCheckInButton = computed(
-	() =>
-		attendanceState.value === "not_marked" ||
-		attendanceState.value === "checked_out"
-);
-
-const showCheckOutButton = computed(
-	() => attendanceState.value === "checked_in"
-);
-
-const isAttendanceActionLoading = computed(
-	() =>
-		attendanceCheckInResource.loading || attendanceCheckOutResource.loading
-);
-
-const currentShiftName = computed(() => {
-	if (!shiftTypes.value.length) {
-		return null;
-	}
-
-	const now = new Date();
-	const minutesNow = now.getHours() * 60 + now.getMinutes();
-
-	// Ưu tiên ca có khoảng thời gian bao phủ thời điểm hiện tại
-	for (const shift of shiftTypes.value) {
-		const start = shift.start_time;
-		const end = shift.end_time;
-
-		if (!start || !end) continue;
-
-		const [sh, sm] = String(start).split(":").map((v) => parseInt(v || "0", 10));
-		const [eh, em] = String(end).split(":").map((v) => parseInt(v || "0", 10));
-
-		const startMinutes = sh * 60 + sm;
-		const endMinutes = eh * 60 + em;
-
-		if (minutesNow >= startMinutes && minutesNow <= endMinutes) {
-			return shift.name;
+const activeHrScheduleShift = computed(() => {
+	const nm = hrNowMinutes.value;
+	/** @type {typeof todayShifts.value} */
+	const candidates = [];
+	for (const s of todayShifts.value) {
+		const start = hrTimeToMinutes(s.start_time);
+		const end = hrTimeToMinutes(s.end_time);
+		if (start === null || end === null) continue;
+		const windowStart = Math.max(0, start - HR_SCHEDULE_EARLY_OPEN_MINUTES);
+		if (nm >= windowStart && nm <= end) {
+			candidates.push(s);
 		}
 	}
-
-	// Nếu không khớp ca nào theo giờ, dùng ca đầu tiên làm mặc định
-	return shiftTypes.value[0].name;
+	if (!candidates.length) return null;
+	// When two slots overlap on the clock (e.g. afternoon still "in hours" while evening is in 30-min early window), use the latest start_time so the header matches the shift the user opens POS for (same rule as the welcome screen).
+	return candidates.reduce((best, s) => {
+		const sm = hrTimeToMinutes(s.start_time);
+		const bm = hrTimeToMinutes(best.start_time);
+		if (sm === null) return best;
+		if (bm === null) return s;
+		return sm > bm ? s : best;
+	});
 });
 
-function isShiftActiveNow(shiftName) {
-	if (!shiftName || !shiftTypes.value.length) {
-		return false;
-	}
+/** Header badge: current HR shift line (next to POS shift duration) */
+const headerHrScheduleBadge = computed(() => {
+	if (!shiftStore.hasOpenShift) return null;
 
-	const shift = shiftTypes.value.find((s) => s.name === shiftName);
-	if (!shift || !shift.start_time || !shift.end_time) {
-		// Nếu ca không có giờ bắt đầu/kết thúc rõ ràng thì không ràng buộc
-		return true;
-	}
+	const active = activeHrScheduleShift.value;
+	if (active) {
+		const nm = hrNowMinutes.value;
+		const startM = hrTimeToMinutes(active.start_time);
+		const beforeOfficialStart = startM !== null && nm < startM;
 
-	const now = new Date();
-	const minutesNow = now.getHours() * 60 + now.getMinutes();
-
-	const [sh, sm] = String(shift.start_time)
-		.split(":")
-		.map((v) => parseInt(v || "0", 10));
-	const [eh, em] = String(shift.end_time)
-		.split(":")
-		.map((v) => parseInt(v || "0", 10));
-
-	const startMinutes = sh * 60 + sm;
-	const endMinutes = eh * 60 + em;
-
-	return minutesNow >= startMinutes && minutesNow <= endMinutes;
-}
-
-function openShiftDialog(action) {
-	pendingAttendanceAction.value = action;
-
-	// Gán giá trị mặc định là ca hiện tại (nếu có) hoặc ca đầu tiên
-	if (!tempSelectedShiftType.value) {
-		const autoShift = currentShiftName.value;
-		if (autoShift) {
-			tempSelectedShiftType.value = autoShift;
-		} else if (shiftTypes.value.length > 0) {
-			tempSelectedShiftType.value = shiftTypes.value[0].name;
+		const parts = [active.shift_type].filter(Boolean);
+		if (active.start_time && active.end_time) {
+			parts.push(`${active.start_time}–${active.end_time}`);
 		}
+		if (active.shift_location) parts.push(active.shift_location);
+		return {
+			variant: beforeOfficialStart ? "orange" : "green",
+			label: `${__("HR shift")}: `,
+			value: parts.join(" · "),
+		};
 	}
 
-	showShiftDialog.value = true;
-}
-
-async function handleCheckIn() {
-	// Luôn mở popup chọn ca khi chấm công vào
-	if (!shiftTypes.value.length) {
-		showWarning(
-			__("No shift types found. Please configure Shift Type first.")
-		);
-		return;
-	}
-	openShiftDialog("check_in");
-}
-
-async function handleCheckOut() {
-	// Mở popup xác nhận ca khi chấm công ra
-	openShiftDialog("check_out");
-}
-
-function cancelShiftDialog() {
-	showShiftDialog.value = false;
-	pendingAttendanceAction.value = null;
-}
-
-async function confirmShiftSelection() {
-	if (!tempSelectedShiftType.value) {
-		showWarning(__("Please select a shift."));
-		return;
+	if (todayShiftsHasEmployee.value && todayShifts.value.length > 0) {
+		return {
+			variant: "orange",
+			label: `${__("HR shift")}: `,
+			value: __("Outside scheduled hours"),
+		};
 	}
 
-	const chosenShift = tempSelectedShiftType.value;
+	if (!todayShiftsHasEmployee.value) {
+		return {
+			variant: "gray",
+			label: `${__("HR shift")}: `,
+			value: __("No employee linked"),
+		};
+	}
 
-	// Chặn chấm công nếu ca không khớp giờ hiện tại
-	if (!isShiftActiveNow(chosenShift)) {
-		showWarning(
+	return {
+		variant: "gray",
+		label: `${__("HR shift")}: `,
+		value: __("Schedule not loaded"),
+	};
+});
+
+/** True when POS close is initiated from "Close Shift & Sign Out" and needs early-close confirm gate */
+const earlyCloseConfirmFromLogoutFlow = ref(false);
+
+const showEarlyCloseShiftConfirm = ref(false);
+
+const earlyCloseHrConfirmMessage = computed(() => {
+	const s = activeHrScheduleShift.value;
+	if (!s) return __("Your HR shift window has ended. Closing now is not early.");
+	const end = s.end_time ? String(s.end_time) : "";
+	const name = s.shift_type || __("shift");
+	return end
+		? __(
+				"You are closing the POS shift before your scheduled HR shift ({0}) ends ({1}). Do you want to continue?",
+				[name, end]
+			)
+		: __("You are closing the POS shift before your scheduled HR shift ends. Do you want to continue?");
+});
+
+function shouldConfirmEarlyHrClose() {
+	const active = activeHrScheduleShift.value;
+	if (!active || !active.end_time) return false;
+	const nm = hrNowMinutes.value;
+	const end = hrTimeToMinutes(active.end_time);
+	if (end === null) return false;
+	return nm < end;
+}
+
+function confirmEarlyCloseShiftProceed() {
+	showEarlyCloseShiftConfirm.value = false;
+	earlyCloseConfirmFromLogoutFlow.value = false;
+	uiStore.showCloseShiftDialog = true;
+}
+
+function cancelEarlyCloseShiftConfirm() {
+	showEarlyCloseShiftConfirm.value = false;
+	if (earlyCloseConfirmFromLogoutFlow.value) {
+		earlyCloseConfirmFromLogoutFlow.value = false;
+		logoutAfterClose.value = false;
+		uiStore.showLogoutDialog = true;
+	}
+}
+
+/**
+ * Called when user clicks "Open Shift" on the NoShiftPlaceholder.
+ * Stores the suggested HR shift (if any) and opens the POS shift dialog.
+ */
+function handleOpenShiftFromPlaceholder(hrShift) {
+	if (posShiftClosedToday.value) {
+		showError(
 			__(
-				"The current time is not within the selected shift time range. Please choose a valid shift."
+				"You have already closed your POS shift today. You cannot open another until tomorrow."
 			)
 		);
 		return;
 	}
-
-	showShiftDialog.value = false;
-	const action = pendingAttendanceAction.value;
-	pendingAttendanceAction.value = null;
-
-	// Luồng mới: chọn ca → chụp ảnh (hoặc bỏ qua) → rồi mới gọi API
-	attendancePhotoError.value = "";
-	pendingAttendanceParams.value = { shift: chosenShift, action };
-	showPhotoDialog.value = true;
-}
-
-/** Gọi API check-in hoặc check-out theo pendingAttendanceParams. */
-async function doAttendanceSubmit() {
-	const p = pendingAttendanceParams.value;
-	if (!p) return;
-	if (p.action === "check_in") {
-		await attendanceCheckInResource.submit({
-			pos_profile: shiftStore.profileName,
-			shift: p.shift,
-		});
-	} else if (p.action === "check_out") {
-		await attendanceCheckOutResource.submit({
-			pos_profile: shiftStore.profileName,
-		});
-	}
-}
-
-// Bật/tắt camera khi mở/đóng dialog chụp ảnh chấm công
-watch(showPhotoDialog, async (isOpen) => {
-	if (isOpen) {
-		await nextTick();
-		startAttendancePhotoCamera();
-	} else {
-		stopAttendancePhotoCamera();
-		pendingAttendanceParams.value = null;
-	}
-});
-
-async function startAttendancePhotoCamera() {
-	attendancePhotoError.value = "";
-	try {
-		// Tỷ lệ 16:9 để khớp ô xem, giảm lệch khi crop
-		const stream = await navigator.mediaDevices.getUserMedia({
-			video: {
-				facingMode: "user",
-				width: { ideal: 640 },
-				height: { ideal: 360 },
-				aspectRatio: { ideal: 16 / 9 },
-			},
-		});
-		attendancePhotoStream.value = stream;
-		await nextTick();
-		const video = attendancePhotoVideoRef.value;
-		if (video && stream) {
-			video.srcObject = stream;
-		}
-	} catch (err) {
-		attendancePhotoError.value =
-			err.message || __("Cannot access camera. You can skip or use a device with camera.");
-	}
-
-}
-
-function stopAttendancePhotoCamera() {
-	const stream = attendancePhotoStream.value;
-	if (stream) {
-		stream.getTracks().forEach((t) => t.stop());
-		attendancePhotoStream.value = null;
-	}
-	const video = attendancePhotoVideoRef.value;
-	if (video) {
-		video.srcObject = null;
-	}
-	attendancePhotoError.value = "";
-}
-
-async function skipAttendancePhoto() {
-	const p = pendingAttendanceParams.value;
-	if (!p) {
-		showPhotoDialog.value = false;
-		return;
-	}
-	attendancePhotoSkipping.value = true;
-	try {
-		await doAttendanceSubmit();
-		showPhotoDialog.value = false;
-	} catch (e) {
-		// Lỗi đã được resource onError xử lý
-	} finally {
-		attendancePhotoSkipping.value = false;
-	}
-}
-
-function blobToBase64(blob) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onloadend = () => {
-			const dataUrl = reader.result;
-			const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
-			resolve(base64);
-		};
-		reader.onerror = reject;
-		reader.readAsDataURL(blob);
-	});
-}
-
-async function captureAndUploadAttendancePhoto() {
-	const video = attendancePhotoVideoRef.value;
-	const canvas = attendancePhotoCanvasRef.value;
-	const p = pendingAttendanceParams.value;
-	if (!video || !canvas || !p) {
-		showWarning(__("Cannot capture photo. Please try again or skip."));
-		return;
-	}
-	if (video.readyState !== video.HAVE_ENOUGH_DATA) {
-		showWarning(__("Camera not ready. Please wait or skip."));
-		return;
-	}
-	attendancePhotoUploading.value = true;
-	try {
-		canvas.width = video.videoWidth;
-		canvas.height = video.videoHeight;
-		const ctx = canvas.getContext("2d");
-		ctx.drawImage(video, 0, 0);
-		const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
-		if (!blob) {
-			showWarning(__("Failed to capture image."));
-			return;
-		}
-		const imageBase64 = await blobToBase64(blob);
-		// Gọi check-in/check-out trước để có attendance_name, sau đó đính kèm ảnh
-		await doAttendanceSubmit();
-		const attendanceName = attendanceStatus.value?.attendance_name;
-		if (attendanceName) {
-			await call("pos_next.api.attendance.upload_attendance_photo", {
-				attendance_name: attendanceName,
-				image_base64: imageBase64,
-				photo_type: p.action || "check_in",
-			});
-			showSuccess(__("Photo saved to attendance."));
-		}
-		showPhotoDialog.value = false;
-	} catch (err) {
-		log.error("captureAndUploadAttendancePhoto error:", err);
-		showError(parseError(err));
-	} finally {
-		attendancePhotoUploading.value = false;
-	}
+	// hrShift = the currently active shift object or null
+	// Currently used for UX context; stored for potential future use
+	// (e.g., recording hr_shift_type on POS Opening Shift)
+	uiStore.showOpenShiftDialog = true;
 }
 
 const selectedInvoiceForView = ref(null);
@@ -1802,23 +1459,6 @@ onMounted(async () => {
 		updateLayoutBounds();
 	};
 	window.addEventListener("resize", handleResize, { passive: true });
-
-	// Load today's attendance status for the current user
-	try {
-		await attendanceStatusResource.fetch();
-	} catch (error) {
-		log.error("Error loading attendance status:", error);
-	}
-
-	// Load available shift types (dùng nội bộ để tự gán ca khi chấm công)
-	try {
-		const response = await call("pos_next.api.attendance.get_shift_types", {});
-		const data = response?.message || response || [];
-		shiftTypes.value = Array.isArray(data) ? data : [];
-	} catch (error) {
-		log.error("Error loading shift types:", error);
-		shiftTypes.value = [];
-	}
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {
@@ -1958,7 +1598,11 @@ onMounted(async () => {
 		const hasShift = await shiftStore.checkShift();
 
 		if (!hasShift) {
-			uiStore.showOpenShiftDialog = true;
+			// Load HR Roster shifts for the welcome screen (non-blocking)
+			// Do NOT auto-open the shift dialog — user will see NoShiftPlaceholder
+			// and click "Open Shift" themselves after reviewing their HR schedule.
+			loadTodayShifts();
+
 			// Offline: use last profile from IndexedDB and load items from cache
 			if (offlineStore.isOffline) {
 				try {
@@ -2006,6 +1650,9 @@ onMounted(async () => {
 				} else {
 					await offlineStore.checkOfflineCacheAvailability();
 				}
+
+				// HR roster: header schedule badge + welcome screen when no POS shift
+				loadTodayShifts();
 			}
 		}
 
@@ -2311,6 +1958,7 @@ async function handleShiftOpened() {
 		// Load tax rules with tax_inclusive setting
 		await cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings);
 	}
+	loadTodayShifts();
 	showSuccess(__("You can now start making sales"));
 }
 
@@ -2326,9 +1974,9 @@ function handleShiftClosed() {
 		uiStore.resetAllDialogs();
 		session.logout.submit();
 	} else {
-		setTimeout(() => {
-			uiStore.showOpenShiftDialog = true;
-		}, 500);
+		// Reload HR shifts so NoShiftPlaceholder shows updated status.
+		// User can then click "Open Shift" themselves when their shift is active.
+		loadTodayShifts();
 	}
 }
 
@@ -2894,6 +2542,11 @@ async function handleOptionSelected(option) {
 }
 
 function handleCloseShift() {
+	earlyCloseConfirmFromLogoutFlow.value = false;
+	if (shiftStore.hasOpenShift && shouldConfirmEarlyHrClose()) {
+		showEarlyCloseShiftConfirm.value = true;
+		return;
+	}
 	uiStore.showCloseShiftDialog = true;
 }
 
@@ -2978,9 +2631,14 @@ function confirmLogout() {
 }
 
 function logoutWithCloseShift() {
-	// Open close shift dialog and remember to logout after closing
 	logoutAfterClose.value = true;
 	uiStore.showLogoutDialog = false;
+	earlyCloseConfirmFromLogoutFlow.value = true;
+	if (shiftStore.hasOpenShift && shouldConfirmEarlyHrClose()) {
+		showEarlyCloseShiftConfirm.value = true;
+		return;
+	}
+	earlyCloseConfirmFromLogoutFlow.value = false;
 	uiStore.showCloseShiftDialog = true;
 }
 

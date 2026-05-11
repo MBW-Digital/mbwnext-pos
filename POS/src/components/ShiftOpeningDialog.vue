@@ -195,6 +195,8 @@ import { createResource } from "frappe-ui"
 import { computed, ref, watch } from "vue"
 import { useShift } from "../composables/useShift"
 import { useFormatters } from "../composables/useFormatters"
+import { useToast } from "../composables/useToast"
+import { call } from "../utils/apiWrapper"
 import ShiftClosingDialog from "./ShiftClosingDialog.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
 
@@ -212,6 +214,22 @@ const open = computed({
 const { createOpeningShift, getOpeningDialogData, checkOpeningShift } =
 	useShift()
 const { formatDateTime } = useFormatters()
+const { showError } = useToast()
+
+async function ensureNotClosedToday() {
+	const res = await call("pos_next.api.shifts.user_closed_pos_shift_today", {})
+	const data = res?.message ?? res ?? {}
+	if (data.closed_today) {
+		showError(
+			__(
+				"You have already closed your POS shift today. You cannot open another until tomorrow.",
+			),
+		)
+		closeDialog("cancelled")
+		return false
+	}
+	return true
+}
 
 const step = ref(1)
 const selectedProfile = ref(null)
@@ -275,6 +293,8 @@ async function initDialog() {
 	dialogDataResource.reset()
 
 	try {
+		if (!(await ensureNotClosedToday())) return
+
 		// Await profile fetch to ensure data is loaded before proceeding
 		await profilesResource.fetch()
 
@@ -364,6 +384,8 @@ async function handleExistingShiftClosed() {
 	openingBalances.value = {}
 
 	await checkOpeningShift.fetch()
+
+	if (!(await ensureNotClosedToday())) return
 
 	if (!profilesResource.data || profilesResource.data.length === 0) {
 		await profilesResource.fetch()

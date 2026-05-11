@@ -65,7 +65,7 @@ doctype_list_js = {
 # Home Pages
 # ----------
 
-template_apps = ["erpnext", "pos_next"]
+template_apps = ["erpnext", "pos_next", "hrms"]
 
 # application home page (will override Website Settings)
 # home_page = "login"

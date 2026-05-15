@@ -14,40 +14,6 @@
 
 			<!-- Content -->
 			<div v-else class="text-center">
-				<!-- Already submitted POS Closing Shift today: cannot reopen until tomorrow -->
-				<div
-					v-if="posShiftClosedToday"
-					class="mb-5 p-4 bg-red-50 border border-red-200 rounded-lg text-left"
-				>
-					<div class="flex gap-2">
-						<svg
-							class="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M12 15v2m0 4h.01M12 3a9 9 0 00-9 9 5.25v9.75l3.75-2.25H21A2.25 2.25 0 0021 6.75 9 9 0 0012 3z"
-							/>
-						</svg>
-						<div>
-							<p class="text-sm font-medium text-red-800">
-								{{ __("POS shift closed for today") }}
-							</p>
-							<p class="text-xs text-red-700 mt-1">
-								{{
-									__(
-										"You have already closed your cashier shift today. Opening a new shift is only allowed starting tomorrow."
-									)
-								}}
-							</p>
-						</div>
-					</div>
-				</div>
-
 				<!-- Status icon -->
 				<div
 					class="mx-auto flex items-center justify-center h-20 w-20 rounded-full mb-4 transition-colors"

@@ -1397,6 +1397,9 @@ def get_print_receipt_data(invoice_name, include_vnpost_qr=True, include_sepay_q
 	if include_sepay_qr is not None:
 		include_vnpost_qr = include_sepay_qr
 	data = get_invoice(invoice_name)
+	from pos_next.api.receipt_print import enrich_invoice_dict_for_print
+
+	data.update(enrich_invoice_dict_for_print(data))
 
 	try:
 		from pos_next.api.einvoice_self_service import get_self_service_qr_payload

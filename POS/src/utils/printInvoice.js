@@ -4,6 +4,15 @@ import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter"
 
 const log = logger.create('PrintInvoice')
 
+/** Định dạng số kiểu vi-VN (dùng cho phiếu in HTML fallback). */
+function formatVN(amount, decimals = 0) {
+	const n = Number.parseFloat(amount || 0)
+	return Math.abs(n).toLocaleString('vi-VN', {
+		minimumFractionDigits: decimals,
+		maximumFractionDigits: decimals,
+	})
+}
+
 function isStandalonePWA() {
 	return (
 		window.matchMedia("(display-mode: standalone)").matches ||
@@ -382,184 +391,143 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					margin-bottom: 8px;
 					text-transform: uppercase;
 				}
-				.einvoicesrv-wrap {
-					display: flex;
-					flex-direction: row;
-					align-items: flex-start;
-					gap: 10px;
-				}
-				.einvoicesrv-qr-col {
-					flex: 0 0 auto;
-				}
-				.einvoicesrv-copy-col {
-					flex: 1;
-					font-size: 9px;
-					line-height: 1.35;
-					text-align: left;
-				}
-				.einvoicesrv-copy-col p {
-					margin: 0 0 6px 0;
-				}
-				.einvoicesrv-strong {
-					font-size: 9px;
-					word-break: break-all;
-					margin: 0 0 4px 0;
-				}
-				.einvoicesrv-fine {
-					font-size: 8px;
-					margin: 0;
-				}
-				.einvoicesrv-qr-img {
-					width: 92px;
-					height: 92px;
-					display: block;
-				}
-				.einvoicesrv-footer-meta {
-					margin-top: 10px;
-					padding-top: 8px;
-					border-top: 1px dashed #ccc;
+				.einvoicesrv-hint {
 					text-align: center;
 					font-size: 10px;
+					line-height: 1.35;
+					margin: 0 0 4px;
 				}
-				.einvoicesrv-barcode-img {
-					max-width: 100%;
-					height: 36px;
-					object-fit: contain;
-					margin: 6px auto 2px;
+				.einvoicesrv-qr-img {
+					width: 112px;
+					height: 112px;
 					display: block;
-				}
-				.einvoicesrv-barcode-txt {
-					font-size: 9px;
-					font-family: monospace;
-					letter-spacing: 0.5px;
+					margin: 8px auto 0;
 				}
 			</style>
 		</head>
 		<body>
 			<div class="receipt">
-				<!-- Header -->
-				<div class="header">
-					<div class="company-name">${invoiceData.company || "POS Next"}</div>
-					<div style="font-size: 12px;">${__('TAX INVOICE')}</div>
-				</div>
-
-				<!-- Invoice Info -->
-				<div class="invoice-info">
-					<div>
-						<span>${__('Invoice #:')}</span>
-						<span><strong>${invoiceData.name}</strong></span>
-					</div>
-					<div>
-						<span>${__('Date:')}</span>
-						<span>${new Date(invoiceData.posting_date || Date.now()).toLocaleString()}</span>
-					</div>
-					${
-						invoiceData.customer_name
-							? `
-					<div>
-						<span>${__('Customer:')}</span>
-						<span>${invoiceData.customer_name}</span>
-					</div>
-					`
-							: ""
+				${(() => {
+					const storeName =
+						invoiceData.receipt_company_display_name ||
+						invoiceData.company ||
+						"POS Next"
+					const branch =
+						invoiceData.receipt_branch_label ||
+						invoiceData.pos_profile ||
+						""
+					const addr = invoiceData.receipt_company_address || ""
+					const coPhone = invoiceData.receipt_company_phone || ""
+					const printDt =
+						invoiceData.receipt_print_datetime ||
+						new Date().toLocaleString("vi-VN")
+					const msch = invoiceData.receipt_msch || ""
+					const nv = invoiceData.receipt_salesperson || ""
+					const custPhone =
+						invoiceData.receipt_customer_phone ||
+						invoiceData.contact_mobile ||
+						invoiceData.mobile_no ||
+						invoiceData.pos_einvoice_buyer_phone ||
+						""
+					const lyEarn = Number(invoiceData.receipt_loyalty_earned ?? 0)
+					const lyBal = Number(invoiceData.receipt_loyalty_balance ?? 0)
+					let taxPct = null
+					for (const row of invoiceData.taxes || []) {
+						const r = Number.parseFloat(row.rate || 0)
+						if (r > 0) {
+							taxPct = r
+							break
+						}
 					}
-					${
-						(invoiceData.status === "Partly Paid" || (invoiceData.outstanding_amount && invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total))
-							? `
-					<div class="partial-status">
-						<span>${__('Status:')}</span>
-						<span>${__('PARTIAL PAYMENT')}</span>
-					</div>
-					`
-							: ""
-					}
-				</div>
+					const vatAmt = (() => {
+						let v = Number.parseFloat(invoiceData.total_taxes_and_charges || 0)
+						if (v > 0) return v
+						for (const row of invoiceData.taxes || []) {
+							v += Number.parseFloat(row.tax_amount || 0)
+						}
+						return v
+					})()
+					const vatLbl =
+						taxPct != null
+							? `VAT ${Math.abs(taxPct - Math.round(taxPct)) < 1e-9 ? Math.round(taxPct) : taxPct}%`
+							: vatAmt > 0
+								? "Thuế GTGT"
+								: "VAT 0%"
+					const partial =
+						invoiceData.status === "Partly Paid" ||
+						(invoiceData.outstanding_amount &&
+							invoiceData.outstanding_amount > 0 &&
+							invoiceData.outstanding_amount < invoiceData.grand_total)
 
-				<!-- Items -->
-				<div class="items-table">
-					${invoiceData.items
+					const itemsRows = (invoiceData.items || [])
 						.map((item) => {
-							// Determine if item has promotional pricing
-							const hasItemDiscount =
-								(item.discount_percentage &&
-									Number.parseFloat(item.discount_percentage) > 0) ||
-								(item.discount_amount &&
-									Number.parseFloat(item.discount_amount) > 0)
-							const isFree = item.is_free_item
-							const qty = item.quantity || item.qty
-
-							// Display original list price for transparency
-							const displayRate = item.price_list_rate || item.rate
-							// Calculate subtotal before any price reductions
-							const subtotal = qty * displayRate
-
+							const qty = item.quantity || item.qty || 1
+							const rate = item.price_list_rate || item.rate || 0
+							const disc = Number.parseFloat(item.discount_amount || 0)
+							const amt = Number.parseFloat(item.amount || 0)
+							const nm =
+								`${item.item_name || item.item_code || ""}${item.is_free_item ? ` ${__('(FREE)')}` : ""}`
+							const serialHtml = item.serial_no
+								? `<div style="font-size:9px;margin-top:2px;">S/N: ${String(item.serial_no).replace(/\n/g, ", ")}</div>`
+								: ""
 							return `
-						<div class="item-row">
-							<div class="item-name">
-								${item.item_name || item.item_code} ${isFree ? __('(FREE)') : ""}
-							</div>
-							<div class="item-details">
-								<span>${qty} × ${formatCurrency(displayRate)}</span>
-								<span><strong>${formatCurrency(subtotal)}</strong></span>
-							</div>
-							${
-								hasItemDiscount
-									? `
-							<div class="item-discount">
-								<span>Discount ${item.discount_percentage ? `(${Number(item.discount_percentage).toFixed(2)}%)` : ""}</span>
-								<span>-${formatCurrency(item.discount_amount || 0)}</span>
-							</div>
-							`
-									: ""
-							}
-							${
-								item.serial_no
-									? `
-							<div class="item-serials">
-								<div class="item-serials-label">${__('Serial No:')}</div>
-								<div class="item-serials-list">${item.serial_no.replace(/\n/g, ', ')}</div>
-							</div>
-							`
-									: ""
-							}
-						</div>
-						`
+						<tr><td colspan="4" style="font-weight:bold;padding-top:4px;">${nm}</td></tr>
+						<tr>
+							<td>${formatVN(rate, 2)}</td>
+							<td style="text-align:right">${Number(qty).toLocaleString("vi-VN", { maximumFractionDigits: 0 })}</td>
+							<td style="text-align:right">${formatVN(disc, 2)}</td>
+							<td style="text-align:right">${formatVN(amt, 0)}</td>
+						</tr>
+						${serialHtml ? `<tr><td colspan="4">${serialHtml}</td></tr>` : ""}`
 						})
-						.join("")}
-				</div>
+						.join("")
 
-				<!-- Totals -->
-				<div class="totals">
-					${
-						invoiceData.total_taxes_and_charges &&
-						invoiceData.total_taxes_and_charges > 0
-							? `
-					<div class="total-row">
-						<span>${__('Subtotal:')}</span>
-						<span>${formatCurrency((invoiceData.grand_total || 0) - (invoiceData.total_taxes_and_charges || 0))}</span>
+					return `
+				<div style="text-align:center;font-weight:bold;font-size:15px;margin-bottom:4px;">${storeName}</div>
+				<div style="text-align:center;font-size:11px;line-height:1.35;">
+					<div><b>Chi nhánh:</b> ${branch}</div>
+					${addr ? `<div>${addr}</div>` : ""}
+					${coPhone ? `<div><b>Số điện thoại:</b> ${coPhone}</div>` : ""}
+				</div>
+				<div style="text-align:center;font-weight:bold;font-size:13px;margin:10px 0 8px;">PHIẾU TÍNH TIỀN</div>
+				<div style="display:table;width:100%;font-size:10px;margin-bottom:8px;">
+					<div style="display:table-cell;width:50%;vertical-align:top;">
+						<div><b>Thời gian:</b> ${printDt}</div>
+						<div><b>Mã HĐ:</b> ${invoiceData.name}</div>
 					</div>
-					<div class="total-row">
-						<span>${__('Tax:')}</span>
-						<span>${formatCurrency(invoiceData.total_taxes_and_charges)}</span>
-					</div>
-					`
-							: ""
-					}
-					${
-						invoiceData.discount_amount
-							? `
-					<div class="total-row" style="color: #28a745;">
-						<span>Additional Discount${invoiceData.additional_discount_percentage ? ` (${Number(invoiceData.additional_discount_percentage).toFixed(1)}%)` : ""}:</span>
-						<span>-${formatCurrency(Math.abs(invoiceData.discount_amount))}</span>
-					</div>
-					`
-							: ""
-					}
-					<div class="total-row grand-total">
-						<span>${__('TOTAL:')}</span>
-						<span>${formatCurrency(invoiceData.grand_total)}</span>
+					<div style="display:table-cell;width:50%;vertical-align:top;text-align:right;">
+						<div><b>MSCH:</b> ${msch || "—"}</div>
+						<div><b>NV:</b> ${nv}</div>
 					</div>
 				</div>
+				<div style="border-top:1px dashed #000;margin:8px 0;"></div>
+				<div style="font-size:10px;margin-bottom:8px;line-height:1.4;">
+					<div><b>Tên khách hàng:</b> ${invoiceData.customer_name || "Khách lẻ"}</div>
+					<div><b>Số điện thoại:</b> ${custPhone || "—"}</div>
+				</div>
+				${partial ? `<div style="color:#b30000;font-weight:bold;font-size:10px;margin-bottom:6px;">Trạng thái: THANH TOÁN MỘT PHẦN</div>` : ""}
+				<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:6px;">
+					<thead>
+						<tr style="border-bottom:1px solid #000;font-weight:bold;">
+							<th style="text-align:left;padding:2px 0;">Mặt hàng/giá</th>
+							<th style="text-align:right;width:10%;">SL</th>
+							<th style="text-align:right;width:22%;">KM</th>
+							<th style="text-align:right;width:22%;">T.tiền</th>
+						</tr>
+					</thead>
+					<tbody>${itemsRows}</tbody>
+				</table>
+				<div style="border-top:1px dashed #000;margin:8px 0;"></div>
+				<div style="font-size:11px;">
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tổng tiền hàng</span><span>${formatVN(invoiceData.total || 0, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Chiết khấu</span><span>${formatVN(Math.abs(Number.parseFloat(invoiceData.discount_amount || 0)), 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>${vatLbl}</span><span>${formatVN(vatAmt, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:8px 0 0;padding-top:6px;border-top:2px solid #000;font-weight:bold;font-size:12px;">
+						<span>Tổng cần thanh toán</span><span>${formatVN(invoiceData.grand_total || 0, 0)}</span>
+					</div>
+				</div>
+				`
+				})()}
 
 				<!-- Payments: include existing + bank transfer (VNPost) when applicable -->
 				${
@@ -584,21 +552,21 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 							(payment) => `
 						<div class="payment-row">
 							<span>${payment.mode_of_payment}:</span>
-							<span>${formatCurrency(payment.amount)}</span>
+							<span>${formatVN(payment.amount, 0)}</span>
 						</div>
 					`,
 						)
 						.join("")}
 					<div class="payment-row total-paid">
 						<span>${__('Total Paid:')}</span>
-						<span>${formatCurrency(invoiceData.paid_amount || 0)}</span>
+						<span>${formatVN(invoiceData.paid_amount || 0, 0)}</span>
 					</div>
 					${
 						invoiceData.change_amount && invoiceData.change_amount > 0
 							? `
 					<div class="payment-row" style="font-weight: bold; margin-top: 5px;">
 						<span>${__('Change:')}</span>
-						<span>${formatCurrency(invoiceData.change_amount)}</span>
+						<span>${formatVN(invoiceData.change_amount, 0)}</span>
 					</div>
 					`
 							: ""
@@ -608,7 +576,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 							? `
 					<div class="outstanding-row">
 						<span>${__('BALANCE DUE:')}</span>
-						<span>${formatCurrency(invoiceData.outstanding_amount)}</span>
+						<span>${formatVN(invoiceData.outstanding_amount, 0)}</span>
 					</div>
 					`
 							: ""
@@ -617,6 +585,10 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 				`
 					})()
 				}
+
+				<div style="font-size:9px;margin:12px 0;line-height:1.45;border-top:1px dashed #000;padding-top:8px;">
+					Điểm tích lũy: Hóa đơn hiện tại được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; Tổng điểm sau hóa đơn là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
+				</div>
 
 				${
 					vnpostQr
@@ -631,7 +603,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					<div class="vnp-qr-detail"><strong>${__('Bank')}:</strong> ${vnpostQr.bank_code || ""}</div>
 					<div class="vnp-qr-detail"><strong>${__('Account')}:</strong> ${vnpostQr.account_number || ""}</div>
 					<div class="vnp-qr-detail"><strong>${__('Holder')}:</strong> ${vnpostQr.account_holder || ""}</div>
-					<div class="vnp-qr-detail"><strong>${__('Amount')}:</strong> ${formatCurrency(vnpostQr.amount)}</div>
+					<div class="vnp-qr-detail"><strong>${__('Amount')}:</strong> ${formatVN(vnpostQr.amount, 0)}</div>
 					<div class="vnp-qr-detail"><strong>${__('Content')}:</strong> ${vnpostQr.content || ""}</div>
 				</div>
 				`
@@ -642,26 +614,10 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					einvoiceSelfServiceQr?.url
 						? `
 				<div class="einvoicesrv-section">
-					<div class="einvoicesrv-heading">${__('Sales slip — e-invoice')}</div>
-					<div class="einvoicesrv-wrap">
-						<div class="einvoicesrv-qr-col">
-							${einvoiceSelfServiceQr.qr_image_url ? `<img src="${einvoiceSelfServiceQr.qr_image_url}" alt="" class="einvoicesrv-qr-img" />` : ""}
-						</div>
-						<div class="einvoicesrv-copy-col">
-							<p>${__('Scan the QR code to issue an e-invoice or open the link below within 2 hours.')}</p>
-							<p class="einvoicesrv-strong">${einvoiceSelfServiceQr.url ? einvoiceSelfServiceQr.url.replace(/^https?:\/\//, "") : ""}</p>
-							<p class="einvoicesrv-fine">${__('We are not responsible if buyer information is incorrect.')}</p>
-						</div>
-					</div>
-					<div class="einvoicesrv-footer-meta">
-						<div>${__('Invoice ref.')}: <strong>${einvoiceSelfServiceQr.hd_display_code || "—"}</strong></div>
-						${
-							einvoiceSelfServiceQr.barcode_text
-								? `<img class="einvoicesrv-barcode-img" src="https://barcode.tec-it.com/barcode.ashx?code=Code128&dpi=96&imagetype=Gif&translate-esc=off&data=${encodeURIComponent(einvoiceSelfServiceQr.barcode_text)}" alt="" />`
-								: ""
-						}
-						<div class="einvoicesrv-barcode-txt">${einvoiceSelfServiceQr.barcode_text || ""}</div>
-					</div>
+					<div class="einvoicesrv-heading">MÃ QR HÓA ĐƠN ĐIỆN TỬ</div>
+					<p class="einvoicesrv-hint">Quét QR để xuất hóa đơn điện tử</p>
+					<p class="einvoicesrv-hint" style="margin-bottom: 8px;">hoặc mở liên kết (trong 2 giờ):</p>
+					${einvoiceSelfServiceQr.qr_image_url ? `<img src="${einvoiceSelfServiceQr.qr_image_url}" alt="" class="einvoicesrv-qr-img" />` : ""}
 				</div>
 				`
 						: ""
@@ -669,8 +625,8 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 
 				<!-- Footer -->
 				<div class="footer">
-					<div style="margin-bottom: 5px;">${__('Thank you for your business!')}</div>
-					<div style="font-size: 10px;">Powered by <span style="color: #000; font-weight: 600;">MBWNext POS</span></div>
+					${invoiceData.receipt_company_phone ? `<div>Số điện thoại cửa hàng — ${invoiceData.receipt_company_phone}</div>` : ""}
+					<div style="margin-top: 8px; font-weight: bold;">Cảm ơn và hẹn gặp lại!</div>
 				</div>
 			</div>
 

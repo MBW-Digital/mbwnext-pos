@@ -217,6 +217,28 @@ function fmtDate(dateStr) {
 	return d.toLocaleDateString('vi-VN') + ' ' + d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
+function receiptVatAmount(inv) {
+	let v = Number.parseFloat(inv.total_taxes_and_charges || 0)
+	if (v > 0) return v
+	for (const row of inv.taxes || []) {
+		v += Number.parseFloat(row.tax_amount || 0)
+	}
+	return v
+}
+
+function receiptVatLabel(inv, vatAmt) {
+	for (const row of inv.taxes || []) {
+		const rp = Number.parseFloat(row.rate || 0)
+		if (rp > 0) {
+			const rInt = Math.round(rp)
+			const pct = Math.abs(rp - rInt) < 1e-9 ? String(rInt) : String(rp)
+			return `VAT ${pct}%`
+		}
+	}
+	if (vatAmt > 0) return 'Thuế GTGT'
+	return 'VAT 0%'
+}
+
 /**
  * Build full ESC/POS receipt including e-invoice QR (native printer rendering).
  *
@@ -240,19 +262,41 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 
 	b.init()
 
+	const storeName =
+		invoiceData.receipt_company_display_name || invoiceData.company || 'POS Next'
+	const branch = invoiceData.receipt_branch_label || invoiceData.pos_profile || ''
+	const addr = (invoiceData.receipt_company_address || '').trim()
+	const coPhone = (invoiceData.receipt_company_phone || '').trim()
+	const printDt =
+		invoiceData.receipt_print_datetime || fmtDate(invoiceData.posting_date)
+	const nv = (invoiceData.receipt_salesperson || '').trim()
+	const msch = (invoiceData.receipt_msch || '').trim()
+	const custPhone = (
+		(invoiceData.receipt_customer_phone || '').trim()
+		|| (invoiceData.contact_mobile || '').trim()
+		|| (invoiceData.mobile_no || '').trim()
+	)
+
 	// ── Header ───────────────────────────────────────────────────
 	b.alignCenter()
 		.boldOn().dblOn()
-		.line(invoiceData.company || 'POS Next')
+		.line(storeName)
 		.dblOff().boldOff()
-		.line('HÓA ĐƠN BÁN HÀNG')
+	if (branch) b.line(`Chi nhánh: ${branch}`)
+	if (addr) b.line(addr)
+	if (coPhone) b.line(`Số điện thoại: ${coPhone}`)
+	b.boldOn().line('PHIẾU TÍNH TIỀN').boldOff()
 		.divider('=')
 
 	// ── Info ─────────────────────────────────────────────────────
 	b.alignLeft()
-	b.twoCol('Số HD:', invoiceData.name || '')
-	b.twoCol('Ngày:', fmtDate(invoiceData.posting_date))
-	if (invoiceData.customer_name) b.twoCol('Khách hàng:', invoiceData.customer_name)
+	b.twoCol('Thời gian:', printDt)
+	b.twoCol('Mã HĐ:', invoiceData.name || '')
+	b.twoCol('MSCH:', msch || '—')
+	b.twoCol('NV:', nv || '—')
+	b.divider('-')
+	b.line(`Tên KH: ${invoiceData.customer_name || 'Khách lẻ'}`)
+	b.twoCol('SĐT KH:', custPhone || '—')
 	if (
 		invoiceData.status === 'Partly Paid' ||
 		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
@@ -264,29 +308,28 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 
 	// ── Items ────────────────────────────────────────────────────
 	b.boldOn()
-	if (b.charsPerLine >= 48) b.threeCol('Sản phẩm', 'SL', 'Thành tiền')
-	else b.line('Sản phẩm / SL / Đơn giá / TT')
+	if (b.charsPerLine >= 48) {
+		b.line('Mặt hàng/giá    SL   KM     T.tiền')
+	} else {
+		b.line('MH/giá · SL · KM · TT')
+	}
 	b.boldOff().divider('-')
 
 	for (const item of (invoiceData.items || [])) {
 		const qty      = item.quantity || item.qty || 1
 		const rate     = item.price_list_rate || item.rate || 0
-		const subtotal = qty * rate
+		const discAmt  = Number.parseFloat(item.discount_amount || 0)
+		const lineAmt  = Number.parseFloat(item.amount || 0)
 		const name     = (item.item_name || item.item_code || '').substring(0, b.charsPerLine - 2)
 		const isFree   = item.is_free_item
 
+		b.line(name + (isFree ? ' (MIỄN PHÍ)' : ''))
 		if (b.charsPerLine >= 48) {
-			b.threeCol(name + (isFree ? ' (MIỄN PHÍ)' : ''), `${qty}x${fmtAmt(rate)}`, fmtAmt(subtotal))
+			b.line(` ${fmtAmt(rate)} | ${qty} | ${fmtAmt(discAmt)} | ${fmtAmt(lineAmt)}`)
 		} else {
-			b.line(name + (isFree ? ' (MIỄN PHÍ)' : ''))
-			b.twoCol(`  ${qty}x${fmtAmt(rate)}`, fmtAmt(subtotal))
+			b.twoCol(` ${qty}×${fmtAmt(rate)} KM:${fmtAmt(discAmt)}`, fmtAmt(lineAmt))
 		}
 
-		const discPct = Number.parseFloat(item.discount_percentage || 0)
-		const discAmt = Number.parseFloat(item.discount_amount || 0)
-		if (discPct > 0 || discAmt > 0) {
-			b.twoCol(`  Giảm giá(${discPct.toFixed(0)}%)`, `-${fmtAmt(discAmt)}`)
-		}
 		if (item.serial_no) {
 			b.line(`  S/N: ${item.serial_no.replace(/\n/g, ', ').substring(0, b.charsPerLine - 6)}`)
 		}
@@ -295,21 +338,15 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.divider('-')
 
 	// ── Totals ───────────────────────────────────────────────────
-	const taxes = Number.parseFloat(invoiceData.total_taxes_and_charges || 0)
-	if (taxes > 0) {
-		b.twoCol('Tổng cộng:', fmtAmt((invoiceData.grand_total || 0) - taxes))
-		b.twoCol('Thuế:', fmtAmt(taxes))
-	}
-	const disc = Number.parseFloat(invoiceData.discount_amount || 0)
-	if (disc > 0) {
-		const pct = invoiceData.additional_discount_percentage
-			? `(${Number(invoiceData.additional_discount_percentage).toFixed(1)}%) ` : ''
-		b.twoCol(`Giảm thêm ${pct}:`, `-${fmtAmt(disc)}`)
-	}
+	b.twoCol('Tổng tiền hàng:', fmtAmt(invoiceData.total || 0))
+	const invDisc = Number.parseFloat(invoiceData.discount_amount || 0)
+	b.twoCol('Chiết khấu:', fmtAmt(Math.abs(invDisc)))
+	const vatAmt = receiptVatAmount(invoiceData)
+	b.twoCol(`${receiptVatLabel(invoiceData, vatAmt)}:`, fmtAmt(vatAmt))
 
 	b.divider('=')
 	b.boldOn().dblOn()
-	b.twoCol('TỔNG:', fmtAmt(invoiceData.grand_total))
+	b.twoCol('Tổng cần thanh toán:', fmtAmt(invoiceData.grand_total))
 	b.dblOff().boldOff()
 
 	// ── Payments ─────────────────────────────────────────────────
@@ -333,6 +370,11 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
 	if (outstanding > 0) b.boldOn().twoCol('Còn nợ:', fmtAmt(outstanding)).boldOff()
 
+	const lyE = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
+	const lyB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
+	b.divider('-')
+	b.line(`Điểm TL: +${lyE.toFixed(0)}; Tổng ${lyB.toFixed(0)}`)
+
 	// ── VNPost QR ─────────────────────────────────────────────────
 	if (vnpostQr && vnpostQr.qr_data) {
 		b.divider('-')
@@ -349,24 +391,18 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	if (einvoiceQr && einvoiceQr.url) {
 		b.divider('-')
 		b.alignCenter()
-			.boldOn().line('PHIẾU BÁN HÀNG - HÓA ĐƠN ĐIỆN TỬ').boldOff()
+			.boldOn().line('MÃ QR HÓA ĐƠN ĐIỆN TỬ').boldOff()
 			.line('Quét QR để xuất hóa đơn điện tử')
 			.line('hoặc mở liên kết (trong 2 giờ):')
 		b.alignCenter().qrCode(einvoiceQr.url, 4)._lf()
 		b.alignLeft()
-		if (einvoiceQr.hd_display_code) {
-			b.twoCol('Mã hóa đơn:', einvoiceQr.hd_display_code)
-		}
-		if (einvoiceQr.barcode_text) {
-			b.alignCenter().barcode128(einvoiceQr.barcode_text)
-			b.alignLeft()
-		}
 	}
 
 	// ── Footer ────────────────────────────────────────────────────
 	b.divider('=')
 		.alignCenter()
-		.line('Cảm ơn quý khách!')
+	if (coPhone) b.line(`SĐT cửa hàng — ${coPhone}`)
+	b.line('Cảm ơn và hẹn gặp lại!')
 		.line('Powered by MBWNext POS')
 
 	b.feedAndCut()
@@ -576,13 +612,34 @@ export function buildReceiptBitmap(invoiceData, options = {}) {
 	} = options
 	const b = new BitmapReceiptBuilder(paperWidth)
 
-	b.text(invoiceData.company || 'POS Next', { large: true, align: 'center' })
-	b.text('HÓA ĐƠN BÁN HÀNG', { align: 'center' })
+	const storeName =
+		invoiceData.receipt_company_display_name || invoiceData.company || 'POS Next'
+	const branch = invoiceData.receipt_branch_label || invoiceData.pos_profile || ''
+	const addr = (invoiceData.receipt_company_address || '').trim()
+	const coPhoneBmp = (invoiceData.receipt_company_phone || '').trim()
+	const printDtBmp =
+		invoiceData.receipt_print_datetime || fmtDate(invoiceData.posting_date)
+	const nvBmp = (invoiceData.receipt_salesperson || '').trim()
+	const mschBmp = (invoiceData.receipt_msch || '').trim()
+	const custPhoneBmp = (
+		(invoiceData.receipt_customer_phone || '').trim()
+		|| (invoiceData.contact_mobile || '').trim()
+	)
+
+	b.text(storeName, { large: true, align: 'center' })
+	b.text('PHIẾU TÍNH TIỀN', { align: 'center' })
 	b.divider(true)
 
-	b.twoCol('Số HD:', invoiceData.name || '')
-	b.twoCol('Ngày:', fmtDate(invoiceData.posting_date))
-	if (invoiceData.customer_name) b.twoCol('Khách hàng:', invoiceData.customer_name)
+	b.twoCol('Thời gian:', printDtBmp)
+	b.twoCol('Mã HĐ:', invoiceData.name || '')
+	b.twoCol('MSCH:', mschBmp || '—')
+	b.twoCol('NV:', nvBmp || '—')
+	if (branch) b.twoCol('Chi nhánh:', branch)
+	if (addr) b.text(addr, { align: 'left' })
+	if (coPhoneBmp) b.twoCol('SĐT CH:', coPhoneBmp)
+	b.divider()
+	b.twoCol('Tên KH:', invoiceData.customer_name || 'Khách lẻ')
+	b.twoCol('SĐT KH:', custPhoneBmp || '—')
 	const isPartial = invoiceData.status === 'Partly Paid' ||
 		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
 	if (isPartial) b.text('** THANH TOÁN MỘT PHẦN **', { align: 'center' })
@@ -604,19 +661,13 @@ export function buildReceiptBitmap(invoiceData, options = {}) {
 	}
 	b.divider()
 
-	const taxes = Number.parseFloat(invoiceData.total_taxes_and_charges || 0)
-	if (taxes > 0) {
-		b.twoCol('Tổng cộng:', fmtAmt((invoiceData.grand_total || 0) - taxes))
-		b.twoCol('Thuế:', fmtAmt(taxes))
-	}
-	const disc = Number.parseFloat(invoiceData.discount_amount || 0)
-	if (disc > 0) {
-		const pct = invoiceData.additional_discount_percentage
-			? `(${Number(invoiceData.additional_discount_percentage).toFixed(1)}%) ` : ''
-		b.twoCol(`Giảm thêm ${pct}:`, `-${fmtAmt(disc)}`)
-	}
+	b.twoCol('Tổng tiền hàng:', fmtAmt(invoiceData.total || 0))
+	const discB = Number.parseFloat(invoiceData.discount_amount || 0)
+	b.twoCol('Chiết khấu:', fmtAmt(Math.abs(discB)))
+	const vatAmtB = receiptVatAmount(invoiceData)
+	b.twoCol(`${receiptVatLabel(invoiceData, vatAmtB)}:`, fmtAmt(vatAmtB))
 	b.divider(true)
-	b.twoCol('TỔNG:', fmtAmt(invoiceData.grand_total))
+	b.twoCol('Tổng cần thanh toán:', fmtAmt(invoiceData.grand_total))
 
 	const payments = invoiceData.payments || []
 	if (payments.length > 0) {
@@ -632,6 +683,11 @@ export function buildReceiptBitmap(invoiceData, options = {}) {
 	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
 	if (outstanding > 0) b.text(`Còn nợ: ${fmtAmt(outstanding)}`)
 
+	const lyEB = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
+	const lyBB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
+	b.divider()
+	b.text(`Điểm TL: +${lyEB.toFixed(0)}; Tổng ${lyBB.toFixed(0)}`)
+
 	if (vnpostQr && vnpostQr.qr_data) {
 		b.divider()
 		b.text('VNPOST PAY — CHUYỂN KHOẢN', { align: 'center' })
@@ -642,18 +698,17 @@ export function buildReceiptBitmap(invoiceData, options = {}) {
 
 	if (einvoiceQr && einvoiceQr.url) {
 		b.divider()
-		b.text('PHIẾU BÁN HÀNG - HÓA ĐƠN ĐIỆN TỬ', { align: 'center' })
+		b.text('MÃ QR HÓA ĐƠN ĐIỆN TỬ', { align: 'center' })
 		b.text('Quét QR để xuất hóa đơn điện tử', { align: 'center' })
 		b.text('hoặc mở liên kết (trong 2 giờ):', { align: 'center' })
-		if (einvoiceQr.hd_display_code) b.twoCol('Mã hóa đơn:', einvoiceQr.hd_display_code)
 		b.qr(einvoiceQr.url, 4)
-		if (einvoiceQr.barcode_text) b.barcode128(einvoiceQr.barcode_text)
 	}
 
 	// Footer built separately so QR codes print before it
 	const bf = new BitmapReceiptBuilder(paperWidth)
 	bf.divider(true)
-	bf.text('Cảm ơn quý khách! Hẹn gặp lại!', { align: 'center' })
+	if (coPhoneBmp) bf.text(`SĐT cửa hàng — ${coPhoneBmp}`, { align: 'center' })
+	bf.text('Cảm ơn và hẹn gặp lại!', { align: 'center' })
 	bf.text('MBWNext POS', { align: 'center' })
 
 	const init     = new Uint8Array([ESC, 0x40, FS, 0x2e])

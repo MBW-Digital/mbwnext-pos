@@ -1,6 +1,7 @@
 import { call } from "@/utils/apiWrapper"
 import { logger } from "@/utils/logger"
 import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter"
+import { logCashDrawerPrintBill } from "@/utils/tillExceptionLog"
 
 const log = logger.create('PrintInvoice')
 
@@ -111,6 +112,9 @@ export async function printInvoice(
 		if (usb.isReady.value) {
 			log.info("Printing via WebUSB ESC/POS")
 			await usb.printInvoice(invoiceData, { paperWidthMm: usb.paperWidth.value })
+			if (usb.cashDrawerKickEnabled.value && invoiceData.pos_profile) {
+				await logCashDrawerPrintBill(invoiceData.pos_profile, invoiceData.name)
+			}
 			return true
 		}
 
@@ -695,11 +699,15 @@ export async function printInvoiceByName(
 				await usb.reconnect()
 			}
 			if (usb.isReady.value) {
-				return await usb.printInvoice(invoiceDoc, {
+				await usb.printInvoice(invoiceDoc, {
 					paperWidthMm:  usb.paperWidth.value,
 					einvoiceQr:    invoiceDoc.einvoice_self_service_qr || null,
 					vnpostQr:      invoiceDoc.vnpost_qr || null,
 				})
+				if (usb.cashDrawerKickEnabled.value && invoiceDoc.pos_profile) {
+					await logCashDrawerPrintBill(invoiceDoc.pos_profile, invoiceDoc.name)
+				}
+				return true
 			}
 			// No WebUSB → fall back to custom HTML receipt (window.open)
 			return printInvoiceCustom(invoiceDoc, {

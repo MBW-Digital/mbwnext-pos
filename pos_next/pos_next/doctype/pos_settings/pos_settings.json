@@ -45,6 +45,7 @@
   "allow_free_batch_return",
   "allow_skip_manual_batch_selection",
   "allow_print_draft_invoices",
+  "allow_manual_cash_drawer",
   "section_break_pricing",
   "decimal_precision",
   "tax_inclusive",
@@ -351,6 +352,14 @@
    "fieldname": "allow_print_draft_invoices",
    "fieldtype": "Check",
    "label": "Allow Print Draft Invoices"
+  },
+  {
+   "default": "0",
+   "depends_on": "enabled",
+   "description": "Allow cashiers to use the manual Open Cash Drawer control in POS. Each open is logged with server time in Till Exception Report.",
+   "fieldname": "allow_manual_cash_drawer",
+   "fieldtype": "Check",
+   "label": "Allow Manual Cash Drawer Open"
   },
   {
    "collapsible": 1,

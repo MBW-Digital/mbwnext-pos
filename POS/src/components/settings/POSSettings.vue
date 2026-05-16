@@ -363,6 +363,33 @@
 											:label="__('Silent Print')"
 											:description="__('Print without confirmation')"
 										/>
+										<CheckboxField
+											v-model="settings.allow_manual_cash_drawer"
+											:label="__('Allow Manual Cash Drawer Open')"
+											:description="__('When enabled, cashiers can use Open Cash Drawer below. Each open is saved on the server with exact time (Till Exception Report).')"
+										/>
+										<div
+											v-if="Number(settings.allow_manual_cash_drawer)"
+											class="flex flex-col gap-2 pt-1 border-t border-gray-100"
+										>
+											<Button
+												:loading="openingCashDrawer"
+												variant="solid"
+												theme="gray"
+												size="sm"
+												class="self-start"
+												:disabled="!usbPrinter.isSupported.value || !usbPrinter.isConnected.value"
+												@click="openManualCashDrawer"
+											>
+												{{ __('Open Cash Drawer (manual)') }}
+											</Button>
+											<p v-if="usbPrinter.isSupported.value && !usbPrinter.isConnected.value" class="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+												{{ __('Connect the USB thermal printer first. The drawer uses the printer kick (DK) port.') }}
+											</p>
+											<p v-else-if="!usbPrinter.isSupported.value" class="text-xs text-gray-500">
+												{{ __('Manual drawer open requires WebUSB (Chrome or Edge) and a connected USB receipt printer.') }}
+											</p>
+										</div>
 									</div>
 								</div>
 							</div>
@@ -552,6 +579,7 @@ const settings = ref({
 				allow_skip_manual_batch_selection: 0,
 				allow_negative_stock: 0,
 	tax_inclusive: 0,
+	allow_manual_cash_drawer: 0,
 })
 
 // Stock Sync Settings (localStorage persisted)
@@ -581,6 +609,41 @@ const salesSectionClasses = computed(() => getSectionHeaderClasses("green"))
 const usbSectionClasses = computed(() => getSectionHeaderClasses("blue"))
 
 const usbPrinter = useWebUSBPrinter()
+
+const openingCashDrawer = ref(false)
+
+async function openManualCashDrawer() {
+	if (!props.posProfile) {
+		showError(__("POS Profile not found"))
+		return
+	}
+	if (!Number(settings.value.allow_manual_cash_drawer)) {
+		showError(__("Manual cash drawer open is not allowed"))
+		return
+	}
+	if (!usbPrinter.isSupported.value) {
+		showError(__("WebUSB is not available in this browser"))
+		return
+	}
+	if (!usbPrinter.isConnected.value) {
+		showError(__("Connect the USB printer first"))
+		return
+	}
+	openingCashDrawer.value = true
+	try {
+		await call("pos_next.api.till_exception.log_cash_drawer_event", {
+			pos_profile: props.posProfile,
+			event_type: "Manual Open",
+		})
+		await usbPrinter.kickCashDrawer()
+		showSuccess(__("Event logged and cash drawer opened"))
+	} catch (error) {
+		log.error("Manual cash drawer failed:", error)
+		showError(error.message || __("Failed to open cash drawer"))
+	} finally {
+		openingCashDrawer.value = false
+	}
+}
 
 const warehouseSubsectionClasses = computed(() => getSubsectionClasses("gray"))
 const stockPolicySubsectionClasses = computed(() =>

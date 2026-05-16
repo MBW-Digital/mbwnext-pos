@@ -25,7 +25,7 @@
    "hidden": 0,
    "is_query_report": 0,
    "label": "Configuration",
-   "link_count": 2,
+   "link_count": 3,
    "onboard": 0,
    "type": "Card Break"
   },
@@ -45,6 +45,16 @@
    "label": "POS Profile",
    "link_count": 0,
    "link_to": "POS Profile",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Till Exception Report",
+   "link_count": 0,
+   "link_to": "Till Exception Report",
    "link_type": "DocType",
    "onboard": 0,
    "type": "Link"

@@ -62,6 +62,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Miscellaneous
 		input_qty: 0,
 		allow_negative_stock: 0,
+		allow_manual_cash_drawer: 0,
 		// Sales Persons
 		enable_sales_persons: "Disabled",
 		enable_vnpost_pay: 0,

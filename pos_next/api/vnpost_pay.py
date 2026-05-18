@@ -248,10 +248,10 @@ def _get_vnpost_settings(pos_profile):
 	service = (doc.get("vnpost_service_code") or "").strip()
 	partner = (doc.get("vnpost_partner_code") or "").strip()
 	acc = (doc.get("vnpost_partner_acc_no") or "").strip()
-	po = (doc.get("vnpost_pocode") or "").strip()
+	po = (doc.get("vnpost_pocode") or "").strip()  # optional — not in signature
 	pvk = (doc.get("vnpost_rsa_private_key") or "").strip()
 
-	if not (base and user and pwd and service and partner and acc and po and pvk):
+	if not (base and user and service and partner and acc and pvk):
 		return None
 	
 	return frappe._dict(

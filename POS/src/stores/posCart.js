@@ -172,6 +172,53 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const isEmpty = computed(() => invoiceItems.value.length === 0)
 	const hasCustomer = computed(() => !!customer.value)
 
+	/**
+	 * Grid / search payloads often omit `item_tax_rate`. Detect a non-empty ERPNext tax map.
+	 */
+	function itemTaxRateMapLooksComplete(item) {
+		if (!item?.item_tax_rate) return false
+		const s = String(item.item_tax_rate).trim()
+		if (!s || s === "{}") return false
+		try {
+			const o = JSON.parse(s)
+			return Boolean(o && typeof o === "object" && Object.keys(o).length > 0)
+		} catch {
+			return false
+		}
+	}
+
+	/**
+	 * Fetch `get_item_details` when online so Item Tax Template + item_tax_rate apply on cart lines and totals.
+	 */
+	async function enrichItemTaxIfNeeded(item, qty = 1) {
+		if (offlineState.isOffline || !item?.item_code || !posProfile.value) {
+			return item
+		}
+		if (itemTaxRateMapLooksComplete(item)) {
+			return item
+		}
+		try {
+			const details = await getItemDetailsResource.submit({
+				item_code: item.item_code,
+				pos_profile: posProfile.value,
+				customer: customer.value?.name || customer.value,
+				qty,
+				uom: item.uom || item.stock_uom,
+			})
+			if (!details || typeof details !== "object") {
+				return item
+			}
+			return {
+				...item,
+				item_tax_template: details.item_tax_template ?? item.item_tax_template,
+				item_tax_rate: details.item_tax_rate ?? item.item_tax_rate,
+			}
+		} catch (e) {
+			console.warn("enrichItemTaxIfNeeded:", e)
+			return item
+		}
+	}
+
 	// Actions
 	/**
 	 * @param {Object} item - Item to add
@@ -180,7 +227,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {Object|null} currentProfile - POS profile
 	 * @param {{ merge?: boolean }} options - merge: false = add as new line each time (for per-line service items)
 	 */
-	function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
+	async function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
+		const row = await enrichItemTaxIfNeeded(item, qty)
+
 		// Check stock availability before adding to cart
 		// Skip validation for batch/serial items - they have their own validation in the dialog
 		// Check for stock items AND Product Bundles (bundles now have calculated stock)
@@ -189,40 +238,40 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		// Determine if this item should be validated for stock
 		// Include: stock items, bundles, OR items with actual_qty defined (catches misconfigured items)
 		// CRITICAL: If is_stock_item is explicitly false/0, we must skip validation even if actual_qty exists
-		const isNonStockItem = item.is_stock_item === 0 || item.is_stock_item === false
-		const hasActualQty = item.actual_qty !== undefined || item.stock_qty !== undefined
-		const shouldValidateStock = !isNonStockItem && (item.is_stock_item || item.is_bundle || hasActualQty)
+		const isNonStockItem = row.is_stock_item === 0 || row.is_stock_item === false
+		const hasActualQty = row.actual_qty !== undefined || row.stock_qty !== undefined
+		const shouldValidateStock = !isNonStockItem && (row.is_stock_item || row.is_bundle || hasActualQty)
 
 		const allowsSkipManualBatchPick =
 			settingsStore.isEnabled &&
 			settingsStore.allowSkipManualBatchSelection &&
-			item.has_batch_no &&
-			!item.has_serial_no
+			row.has_batch_no &&
+			!row.has_serial_no
 
 		if (
 			currentProfile &&
 			!autoAdd &&
 			settingsStore.shouldEnforceStockValidation() &&
 			shouldValidateStock &&
-			!item.has_serial_no &&
-			(!(item.has_batch_no) || allowsSkipManualBatchPick)
+			!row.has_serial_no &&
+			(!(row.has_batch_no) || allowsSkipManualBatchPick)
 		) {
-			const warehouse = item.warehouse || currentProfile.warehouse
+			const warehouse = row.warehouse || currentProfile.warehouse
 			const actualQty =
-				item.actual_qty !== undefined ? item.actual_qty : item.stock_qty || 0
+				row.actual_qty !== undefined ? row.actual_qty : row.stock_qty || 0
 
 			if (warehouse && actualQty !== undefined && actualQty !== null) {
 				const stockCheck = checkStockAvailability({
-					itemCode: item.item_code,
+					itemCode: row.item_code,
 					qty: qty,
 					warehouse: warehouse,
 					actualQty: actualQty,
 				})
 
 				if (!stockCheck.available) {
-					const itemType = item.is_bundle ? "Bundle" : "Item"
+					const itemType = row.is_bundle ? "Bundle" : "Item"
 					const errorMsg = formatStockError(
-						item.item_name,
+						row.item_name,
 						qty,
 						stockCheck.actualQty,
 						warehouse,
@@ -234,7 +283,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		// Add item to cart - no toast notification for performance
-		addItemToInvoice(item, qty, options)
+		addItemToInvoice(row, qty, options)
 	}
 
 	function clearCart() {
@@ -1356,6 +1405,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		cartItem.conversion_factor = uomData?.conversion_factor || itemDetails.conversion_factor || 1
 		cartItem.rate = itemDetails.price_list_rate || itemDetails.rate
 		cartItem.price_list_rate = itemDetails.price_list_rate
+		if (itemDetails.item_tax_template != null) {
+			cartItem.item_tax_template = itemDetails.item_tax_template
+		}
+		if (itemDetails.item_tax_rate != null) {
+			cartItem.item_tax_rate = itemDetails.item_tax_rate
+		}
 	}
 
 	/**

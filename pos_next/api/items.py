@@ -323,6 +323,25 @@ def get_item_detail(
 
 	res = erpnext_get_item_details(args, doc)
 
+	if item.get("company"):
+		try:
+			from mbwnext_advanced_selling.controllers.python_hook.sales_invoice import (
+				ensure_selling_item_tax_for_item_line,
+			)
+
+			tpl, tr = ensure_selling_item_tax_for_item_line(
+				item_code,
+				item.get("company"),
+				res.get("item_tax_template"),
+				res.get("item_tax_rate"),
+			)
+			if tpl:
+				res["item_tax_template"] = tpl
+			if tr:
+				res["item_tax_rate"] = tr
+		except Exception:
+			pass
+
 	if item.get("is_stock_item") and warehouse:
 		res["actual_qty"] = get_stock_availability(item_code, warehouse)
 

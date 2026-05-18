@@ -259,6 +259,8 @@ export function useInvoice() {
 				brand: item.brand,
 				// Resolved barcode flag - prevents editing qty/uom/rate for weighted/priced barcodes
 				is_resolved_barcode: item.is_resolved_barcode || false,
+				item_tax_template: item.item_tax_template || null,
+				item_tax_rate: item.item_tax_rate || null,
 			}
 			invoiceItems.value.push(newItem)
 			// Recalculate the newly added item to apply taxes
@@ -531,7 +533,7 @@ export function useInvoice() {
 		const currentKey = JSON.stringify(taxRules.value)
 
 		// Return cached value if tax rules haven't changed
-		if (currentKey === taxRulesCacheKey && cachedTaxRate !== 0) {
+		if (currentKey === taxRulesCacheKey) {
 			return cachedTaxRate
 		}
 
@@ -553,6 +555,34 @@ export function useInvoice() {
 		taxRulesCacheKey = currentKey
 
 		return totalRate
+	}
+
+	/**
+	 * Sum tax % from ERPNext `item_tax_rate` (JSON: account head -> rate).
+	 * Matches get_item_details / Sales Invoice item row behavior.
+	 */
+	function parseItemTaxRatePercent(item) {
+		if (!item?.item_tax_rate) return 0
+		try {
+			const raw = item.item_tax_rate
+			const obj = typeof raw === "string" ? JSON.parse(raw) : raw
+			if (!obj || typeof obj !== "object") return 0
+			let sum = 0
+			for (const v of Object.values(obj)) {
+				const n = Number(v)
+				if (!Number.isNaN(n)) sum += n
+			}
+			return sum
+		} catch {
+			return 0
+		}
+	}
+
+	/** Per-line rate from Item Tax Template; falls back to POS Profile template total %. */
+	function getApplicableTaxRatePercent(item) {
+		const perItem = parseItemTaxRatePercent(item)
+		if (perItem > 0) return perItem
+		return calculateTotalTaxRate()
 	}
 
 	function rebuildIncrementalCache() {
@@ -628,7 +658,7 @@ export function useInvoice() {
 
 		// Calculate tax based on inclusive/exclusive mode
 		// Use currency precision for all monetary calculations to match ERPNext
-		const totalTaxRate = calculateTotalTaxRate()
+		const totalTaxRate = getApplicableTaxRatePercent(item)
 		let netAmount = 0
 		let taxAmount = 0
 
@@ -685,21 +715,33 @@ export function useInvoice() {
 	 * @returns {Array} Items formatted for ERPNext Sales Invoice
 	 */
 	function formatItemsForSubmission(items) {
-		return items.map((item) => ({
-			item_code: item.item_code,
-			item_name: item.item_name,
-			qty: item.quantity || item.qty || 1,
-			rate: computeBackendRate(item),
-			price_list_rate: roundCurrency(item.price_list_rate || item.rate),
-			uom: item.uom,
-			warehouse: item.warehouse,
-			batch_no: item.batch_no,
-			serial_no: item.serial_no,
-			conversion_factor: item.conversion_factor || 1,
-			discount_percentage: roundCurrency(item.discount_percentage || 0),
-			discount_amount: roundCurrency(item.discount_amount || 0),
-			pricing_rules: stringifyPricingRules(item.pricing_rules),
-		}))
+		return items.map((item) => {
+			const row = {
+				item_code: item.item_code,
+				item_name: item.item_name,
+				qty: item.quantity || item.qty || 1,
+				rate: computeBackendRate(item),
+				price_list_rate: roundCurrency(item.price_list_rate || item.rate),
+				uom: item.uom,
+				warehouse: item.warehouse,
+				batch_no: item.batch_no,
+				serial_no: item.serial_no,
+				conversion_factor: item.conversion_factor || 1,
+				discount_percentage: roundCurrency(item.discount_percentage || 0),
+				discount_amount: roundCurrency(item.discount_amount || 0),
+				pricing_rules: stringifyPricingRules(item.pricing_rules),
+			}
+			if (item.item_tax_template) {
+				row.item_tax_template = item.item_tax_template
+			}
+			if (item.item_tax_rate) {
+				row.item_tax_rate =
+					typeof item.item_tax_rate === "string"
+						? item.item_tax_rate
+						: JSON.stringify(item.item_tax_rate)
+			}
+			return row
+		})
 	}
 
 	function addPayment(payment) {

@@ -2023,7 +2023,7 @@ async function handleAddColdStorageFeeLine(count = 1) {
 		};
 
 		// Gộp vào một dòng: cộng số lượng (merge: true)
-		cartStore.addItem(item, n, true, shiftStore.currentProfile, {
+		await cartStore.addItem(item, n, true, shiftStore.currentProfile, {
 			merge: true,
 		});
 	} catch (error) {
@@ -2053,7 +2053,7 @@ function handleRemoveColdStorageFeeLine(count = 1) {
 	}
 }
 
-function handleItemSelected(item, autoAdd = false) {
+async function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
 		const autoQty =
@@ -2077,9 +2077,9 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(resolvedItem, item.resolved_qty, true, shiftStore.currentProfile);
+				await cartStore.addItem(resolvedItem, item.resolved_qty, true, shiftStore.currentProfile);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				await cartStore.addItem(item, 1, true, shiftStore.currentProfile);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -2149,7 +2149,7 @@ function handleItemSelected(item, autoAdd = false) {
 
 	// Add to cart
 	try {
-		cartStore.addItem(item, 1, false, shiftStore.currentProfile);
+		await cartStore.addItem(item, 1, false, shiftStore.currentProfile);
 	} catch (error) {
 		uiStore.showError(
 			__("Insufficient Stock"),
@@ -2493,7 +2493,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(
+					await cartStore.addItem(
 						variant,
 						cartStore.pendingItemQty,
 						false,
@@ -2526,7 +2526,7 @@ async function handleOptionSelected(option) {
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -2728,7 +2728,7 @@ async function handleApplyOffer(offer) {
 	}
 }
 
-function handleBatchSerialSelected(batchSerial) {
+async function handleBatchSerialSelected(batchSerial) {
 	if (cartStore.pendingItem) {
 		// Use quantity from batchSerial if provided (for multiple serial numbers), otherwise use pendingItemQty
 		const qty = batchSerial.quantity || cartStore.pendingItemQty;
@@ -2738,7 +2738,7 @@ function handleBatchSerialSelected(batchSerial) {
 			...batchSerial,
 		};
 		try {
-			cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+			await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 			cartStore.clearPendingItem();
 		} catch (error) {
 			showError(error.message);
@@ -2866,7 +2866,7 @@ async function handleEditOfflineInvoice(invoice) {
 			for (const item of invoiceData.items) {
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
-				cartStore.addItem(
+				await cartStore.addItem(
 					item,
 					item.quantity || item.qty || 1,
 					true,

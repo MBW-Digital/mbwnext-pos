@@ -7,11 +7,11 @@
  "doctype": "Workspace",
  "for_user": "",
  "hide_custom": 0,
- "icon": "message",
+ "icon": "heart-active",
  "idx": 0,
- "indicator_color": "green",
- "is_hidden": 1,
- "label": "POSNext",
+ "indicator_color": "",
+ "is_hidden": 0,
+ "label": "MBWNext Post",
  "links": [
   {
    "hidden": 0,
@@ -124,17 +124,17 @@
    "type": "Link"
   }
  ],
- "modified": "2026-05-18 21:37:57.797006",
+ "modified": "2026-05-18 21:38:06.668461",
  "modified_by": "Administrator",
  "module": "POS Next",
- "name": "POSNext",
+ "name": "MBWNext Post",
  "number_cards": [],
  "owner": "Administrator",
  "parent_page": "",
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 42.0,
+ "sequence_id": 6.0,
  "shortcuts": [
   {
    "color": "Grey",
@@ -200,5 +200,5 @@
    "type": "DocType"
   }
  ],
- "title": "POSNext"
+ "title": "MBWNext Post"
 }

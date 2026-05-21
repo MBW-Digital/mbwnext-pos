@@ -7,7 +7,19 @@ import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
 const LEFT_PANEL_MIN = 320
-const RIGHT_PANEL_MIN = 360
+const RIGHT_PANEL_MIN = 320
+// ~42% product list / ~58% cart — balanced for browsing items and viewing cart
+const LEFT_PANEL_RATIO = 0.42
+const LEFT_PANEL_IDEAL_MAX = 560
+
+function getDefaultLeftPanelWidth(containerWidth) {
+	const safeContainerWidth =
+		Number.isFinite(containerWidth) && containerWidth > 0
+			? containerWidth
+			: LEFT_PANEL_MIN + RIGHT_PANEL_MIN
+	const byRatio = Math.round(safeContainerWidth * LEFT_PANEL_RATIO)
+	return Math.min(Math.max(byRatio, LEFT_PANEL_MIN), LEFT_PANEL_IDEAL_MAX)
+}
 
 export const usePOSUIStore = defineStore("posUI", () => {
 	// Loading state
@@ -62,8 +74,9 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	)
 
 	// Layout state
-	const leftPanelWidth = ref(800)
+	const leftPanelWidth = ref(480)
 	const isResizing = ref(false)
+	let hasInitializedLayout = false
 
 	// Computed
 	const isDesktop = computed(() => windowWidth.value >= 1024)
@@ -145,6 +158,14 @@ export const usePOSUIStore = defineStore("posUI", () => {
 
 	function updateLayoutBounds(containerWidth) {
 		if (containerWidth) {
+			if (!hasInitializedLayout) {
+				leftPanelWidth.value = clampLeftPanelWidth(
+					getDefaultLeftPanelWidth(containerWidth),
+					containerWidth,
+				)
+				hasInitializedLayout = true
+				return
+			}
 			leftPanelWidth.value = clampLeftPanelWidth(
 				leftPanelWidth.value,
 				containerWidth,

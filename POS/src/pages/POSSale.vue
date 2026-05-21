@@ -193,44 +193,13 @@
 				v-if="shiftStore.hasOpenShift"
 				class="flex-1 flex flex-col overflow-hidden relative"
 			>
-				<!-- Invoice Tabs Bar -->
-				<div class="flex items-center justify-between px-2 sm:px-4 py-1.5 bg-white border-b border-gray-200 shadow-sm">
-					<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
-						<button
-							v-for="tab in invoiceTabsStore.tabs"
-							:key="tab.id"
-							@click="handleInvoiceTabClick(tab.id)"
-							:class="[
-								'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium border transition-all touch-manipulation whitespace-nowrap',
-								invoiceTabsStore.activeTabId === tab.id
-									? 'bg-red-600 text-white border-red-600 shadow-sm'
-									: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-							]"
-						>
-							<span>{{ tab.label }}</span>
-							<button
-								v-if="invoiceTabsStore.tabs.length > 1"
-								@click.stop="handleCloseInvoiceTab(tab.id)"
-								class="p-0.5 rounded hover:bg-red-100 hover:text-red-700"
-								:aria-label="__('Close tab')"
-							>
-								<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-								</svg>
-							</button>
-						</button>
-						<button
-							@click="handleAddInvoiceTab"
-							class="ml-1 flex items-center justify-center w-7 h-7 rounded-md border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 hover:text-red-600 hover:border-red-400 flex-shrink-0"
-							:disabled="invoiceTabsStore.tabs.length >= invoiceTabsStore.maxTabs"
-							:aria-label="__('New tab')"
-						>
-							<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-							</svg>
-						</button>
-					</div>
-				</div>
+				<!-- Invoice Tabs Bar (Mobile: full width above split) -->
+				<InvoiceTabsBar
+					v-if="!uiStore.isDesktop"
+					@tab-click="handleInvoiceTabClick"
+					@add-tab="handleAddInvoiceTab"
+					@close-tab="handleCloseInvoiceTab"
+				/>
 
 				<!-- Icon-Only Management Slider - Always Visible -->
 				<div class="flex-1 flex overflow-hidden">
@@ -320,17 +289,27 @@
 							}"
 							:class="[
 								'flex flex-col bg-white overflow-hidden',
-								uiStore.isDesktop ? 'flex-shrink-0' : 'flex-1',
+								uiStore.isDesktop ? 'flex-shrink-0 min-h-0' : 'flex-1',
 							]"
 							style="contain: layout style paint"
 						>
-							<ItemsSelector
-								ref="itemsSelectorRef"
-								:pos-profile="shiftStore.profileName"
-								:cart-items="cartStore.invoiceItems"
-								:currency="shiftStore.profileCurrency"
-								@item-selected="handleItemSelected"
+							<!-- Invoice Tabs Bar (Desktop: inside left panel) -->
+							<InvoiceTabsBar
+								v-if="uiStore.isDesktop"
+								@tab-click="handleInvoiceTabClick"
+								@add-tab="handleAddInvoiceTab"
+								@close-tab="handleCloseInvoiceTab"
 							/>
+
+							<div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+								<ItemsSelector
+									ref="itemsSelectorRef"
+									:pos-profile="shiftStore.profileName"
+									:cart-items="cartStore.invoiceItems"
+									:currency="shiftStore.profileCurrency"
+									@item-selected="handleItemSelected"
+								/>
+							</div>
 						</div>
 					</keep-alive>
 
@@ -368,7 +347,7 @@
 							v-if="uiStore.isDesktop || uiStore.mobileActiveTab === 'cart'"
 							:class="[
 								'flex flex-col bg-gray-50 overflow-hidden',
-								uiStore.isDesktop ? 'flex-1' : 'flex-1',
+								uiStore.isDesktop ? 'flex-1 min-h-0' : 'flex-1',
 							]"
 							style="min-width: 300px; contain: layout style paint"
 						>
@@ -1012,6 +991,7 @@ import CreateCustomerDialog from "@/components/sale/CreateCustomerDialog.vue";
 import CustomerDialog from "@/components/sale/CustomerDialog.vue";
 import DraftInvoicesDialog from "@/components/sale/DraftInvoicesDialog.vue";
 import InvoiceCart from "@/components/sale/InvoiceCart.vue";
+import InvoiceTabsBar from "@/components/sale/InvoiceTabsBar.vue";
 import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";

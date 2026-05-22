@@ -43,7 +43,7 @@
 							variant="green"
 							size="xs"
 							:icon="shiftIcon"
-							:label="__('Shift Open:')"
+							:label="__('Open:')"
 							:value="shiftDuration"
 						/>
 

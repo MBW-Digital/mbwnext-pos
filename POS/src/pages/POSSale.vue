@@ -1279,7 +1279,7 @@ const headerHrScheduleBadge = computed(() => {
 		if (active.shift_location) parts.push(active.shift_location);
 		return {
 			variant: beforeOfficialStart ? "orange" : "green",
-			label: `${__("HR shift")}: `,
+			label: `${__("Shift")}: `,
 			value: parts.join(" · "),
 		};
 	}
@@ -1287,7 +1287,7 @@ const headerHrScheduleBadge = computed(() => {
 	if (todayShiftsHasEmployee.value && todayShifts.value.length > 0) {
 		return {
 			variant: "orange",
-			label: `${__("HR shift")}: `,
+			label: `${__("Shift")}: `,
 			value: __("Outside scheduled hours"),
 		};
 	}
@@ -1295,14 +1295,14 @@ const headerHrScheduleBadge = computed(() => {
 	if (!todayShiftsHasEmployee.value) {
 		return {
 			variant: "gray",
-			label: `${__("HR shift")}: `,
+			label: `${__("Shift")}: `,
 			value: __("No employee linked"),
 		};
 	}
 
 	return {
 		variant: "gray",
-		label: `${__("HR shift")}: `,
+		label: `${__("Shift")}: `,
 		value: __("Schedule not loaded"),
 	};
 });

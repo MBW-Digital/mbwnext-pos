@@ -965,13 +965,33 @@
 								</button>
 							</div>
 
-							<!-- Inline Item Discount Controls -->
+							<!-- Inline Item Discount Controls + DVNL -->
 							<div
-								v-if="settingsStore.allowItemDiscount"
+								v-if="
+									settingsStore.allowItemDiscount ||
+									item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')
+								"
 								class="mt-0.5 flex items-center justify-between gap-1 text-[10px] text-gray-600"
 								@click.stop
 							>
 								<div class="flex items-center gap-1 flex-1 min-w-0">
+									<label
+										v-if="item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')"
+										class="flex items-center gap-1 cursor-pointer select-none flex-shrink-0"
+									>
+										<input
+											type="checkbox"
+											:checked="isColdStorageCheckedForItem(item)"
+											@change="toggleColdStorageForItem(item, $event.target.checked, item.quantity)"
+											class="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+											:aria-label="__('Add hot/cold service for this item')"
+										/>
+										<span class="font-medium text-gray-500 whitespace-nowrap">
+											{{ __('DVNL') }}
+										</span>
+									</label>
+
+									<template v-if="settingsStore.allowItemDiscount">
 									<select
 										class="h-6 min-w-[100px] w-[100px] flex-shrink-0 border border-gray-300 rounded pl-1.5 pr-6 py-0 bg-white text-[10px] leading-tight text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
 										:value="getInlineDiscountType(item)"
@@ -1047,35 +1067,16 @@
 											}}
 										</span>
 									</div>
+									</template>
 								</div>
 
 								<!-- Discount amount preview -->
 								<div
-									v-if="item.discount_amount && item.discount_amount > 0"
+									v-if="settingsStore.allowItemDiscount && item.discount_amount && item.discount_amount > 0"
 									class="flex items-center gap-1 text-[10px] sm:text-xs text-red-600 font-semibold"
 								>
 									<span>-{{ formatCurrency(item.discount_amount) }}</span>
 								</div>
-							</div>
-
-							<!-- Dịch vụ làm nóng lạnh (checkbox trên từng dòng cart) -->
-							<div
-								v-if="item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')"
-								class="mt-0.5 flex items-center gap-1 text-[10px] text-gray-600"
-								@click.stop
-							>
-								<label class="flex items-center gap-1 cursor-pointer select-none">
-									<input
-										type="checkbox"
-										:checked="isColdStorageCheckedForItem(item)"
-										@change="toggleColdStorageForItem(item, $event.target.checked, item.quantity)"
-										class="w-3 h-3 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-										:aria-label="__('Add hot/cold service for this item')"
-									/>
-									<span class="font-medium text-gray-500 truncate">
-										{{ __('Dịch vụ làm nóng lạnh') }}
-									</span>
-								</label>
 							</div>
 						</div>
 					</div>
@@ -1115,7 +1116,8 @@
 						__("Grand Total")
 					}}</span>
 					<span
-						class="text-lg sm:text-xl font-extrabold text-blue-600 text-center min-w-[60px]"
+						class="text-xl sm:text-2xl !font-black text-red-600 text-end min-w-[80px] tabular-nums leading-none"
+						style="font-weight: 900"
 					>
 						{{ formatCurrency(displayGrandTotal) }}
 					</span>

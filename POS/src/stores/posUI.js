@@ -6,19 +6,25 @@ import {
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
-const LEFT_PANEL_MIN = 320
+const LEFT_PANEL_MIN = 520
 const RIGHT_PANEL_MIN = 320
-// ~42% product list / ~58% cart — balanced for browsing items and viewing cart
-const LEFT_PANEL_RATIO = 0.42
-const LEFT_PANEL_IDEAL_MAX = 560
+// ~50% product list — wide enough for list table columns including UOM
+const LEFT_PANEL_RATIO = 0.5
+const LEFT_PANEL_TABLE_MIN = 660
+const LEFT_PANEL_IDEAL_MAX = 720
 
 function getDefaultLeftPanelWidth(containerWidth) {
 	const safeContainerWidth =
 		Number.isFinite(containerWidth) && containerWidth > 0
 			? containerWidth
 			: LEFT_PANEL_MIN + RIGHT_PANEL_MIN
+	const maxWidth = Math.max(
+		LEFT_PANEL_MIN,
+		safeContainerWidth - RIGHT_PANEL_MIN,
+	)
 	const byRatio = Math.round(safeContainerWidth * LEFT_PANEL_RATIO)
-	return Math.min(Math.max(byRatio, LEFT_PANEL_MIN), LEFT_PANEL_IDEAL_MAX)
+	const preferred = Math.max(byRatio, LEFT_PANEL_TABLE_MIN)
+	return Math.min(Math.max(preferred, LEFT_PANEL_MIN), Math.min(maxWidth, LEFT_PANEL_IDEAL_MAX))
 }
 
 export const usePOSUIStore = defineStore("posUI", () => {
@@ -74,7 +80,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	)
 
 	// Layout state
-	const leftPanelWidth = ref(480)
+	const leftPanelWidth = ref(680)
 	const isResizing = ref(false)
 	let hasInitializedLayout = false
 

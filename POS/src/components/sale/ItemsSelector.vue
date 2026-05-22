@@ -1308,6 +1308,13 @@ defineExpose({
 	loadItems: () => itemStore.loadAllItems(props.posProfile),
 	loadItemGroups: () => itemStore.loadItemGroups(),
 	loadMoreItems: () => itemStore.loadMoreItems(),
+	focusSearch: () => {
+		const input = searchInputRef.value || document.getElementById("item-search")
+		input?.focus()
+		input?.select?.()
+	},
+	toggleAutoAdd,
+	toggleBarcodeScanner,
 })
 
 // Watch for view mode changes and rebind scroll listeners

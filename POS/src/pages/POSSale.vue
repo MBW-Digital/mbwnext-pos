@@ -143,6 +143,25 @@
 						</svg>
 						<span>{{ __("Return Invoice") }}</span>
 					</button>
+					<button
+						@click="uiStore.showKeyboardShortcutsDialog = true"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
+					>
+						<svg
+							class="w-5 h-5 text-gray-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+							/>
+						</svg>
+						<span>{{ __("Keyboard Shortcuts") }}</span>
+					</button>
 					<a
 						:href="externalAppUrl"
 						target="_blank"
@@ -352,6 +371,7 @@
 							style="min-width: 300px; contain: layout style paint"
 						>
 							<InvoiceCart
+								ref="invoiceCartRef"
 								:items="cartStore.invoiceItems"
 								:customer="cartStore.customer"
 								:subtotal="cartStore.subtotal"
@@ -964,6 +984,9 @@
 				</template>
 			</Dialog>
 
+			<!-- Keyboard Shortcuts Dialog -->
+			<KeyboardShortcutsDialog v-model="uiStore.showKeyboardShortcutsDialog" />
+
 			<!-- Clear Cache Overlay -->
 			<ClearCacheOverlay
 				ref="clearCacheOverlayRef"
@@ -982,6 +1005,7 @@ import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
 import NoShiftPlaceholder from "@/components/pos/NoShiftPlaceholder.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
+import KeyboardShortcutsDialog from "@/components/common/KeyboardShortcutsDialog.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 import ManagementSlider from "@/components/pos/ManagementSlider.vue";
 import POSHeader from "@/components/pos/POSHeader.vue";
@@ -1008,6 +1032,8 @@ import InvoiceDetailDialog from "@/components/invoices/InvoiceDetailDialog.vue";
 import { useRealtimeStock } from "@/composables/useRealtimeStock";
 import { usePOSEvents } from "@/composables/usePOSEvents";
 import { useLocale } from "@/composables/useLocale";
+import { usePosKeyboardShortcuts } from "@/composables/usePosKeyboardShortcuts";
+import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter";
 import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
@@ -1108,6 +1134,7 @@ const {
 
 // Initialize toast
 const { showSuccess, showError, showWarning } = useToast();
+const usbPrinter = useWebUSBPrinter();
 
 // Initialize logger
 const log = logger.create("POSSale");
@@ -1136,6 +1163,7 @@ const externalAppUrl = computed(() => {
 
 // Component refs
 const itemsSelectorRef = ref(null);
+const invoiceCartRef = ref(null);
 const offersDialogRef = ref(null);
 const containerRef = ref(null);
 const dividerRef = ref(null);
@@ -2572,6 +2600,78 @@ function handleAddInvoiceTab() {
 	const newId = invoiceTabsStore.addTab();
 	invoiceTabsStore.setActiveTab(newId);
 }
+
+async function openManualCashDrawer() {
+	if (!shiftStore.profileName) {
+		showWarning(__("POS Profile not found"));
+		return;
+	}
+	if (!Number(posSettingsStore.settings?.allow_manual_cash_drawer)) {
+		showWarning(__("Manual cash drawer open is not allowed"));
+		return;
+	}
+	if (!usbPrinter.isSupported.value) {
+		showWarning(__("WebUSB is not available in this browser"));
+		return;
+	}
+	if (!usbPrinter.isConnected.value) {
+		showWarning(__("Connect the USB printer first"));
+		return;
+	}
+	try {
+		await call("pos_next.api.till_exception.log_cash_drawer_event", {
+			pos_profile: shiftStore.profileName,
+			event_type: "Manual Open",
+		});
+		await usbPrinter.kickCashDrawer();
+		showSuccess(__("Event logged and cash drawer opened"));
+	} catch (error) {
+		log.error("Manual cash drawer failed:", error);
+		showError(error.message || __("Failed to open cash drawer"));
+	}
+}
+
+function toggleFullscreen() {
+	if (typeof document === "undefined") return;
+	if (!document.fullscreenElement) {
+		document.documentElement.requestFullscreen?.();
+		return;
+	}
+	document.exitFullscreen?.();
+}
+
+usePosKeyboardShortcuts({
+	isDisabled: () => uiStore.isLoading || !shiftStore.hasOpenShift,
+	isShortcutsDialogOpen: () => uiStore.showKeyboardShortcutsDialog,
+	onShowShortcuts: () => {
+		uiStore.showKeyboardShortcutsDialog = true;
+	},
+	onAddInvoice: handleAddInvoiceTab,
+	onToggleAutoPrint: () => {
+		const enabled = shiftStore.toggleAutoPrint();
+		if (enabled === null) return;
+		showSuccess(
+			enabled ? __("Auto-print enabled") : __("Auto-print disabled"),
+		);
+	},
+	onFocusItemSearch: () => itemsSelectorRef.value?.focusSearch?.(),
+	onFocusCustomerSearch: () => {
+		document.getElementById("cart-customer-search")?.focus();
+	},
+	onToggleQuantityMode: () => itemsSelectorRef.value?.toggleAutoAdd?.(),
+	onOpenCashDrawer: openManualCashDrawer,
+	onCustomerPayment: () => {
+		uiStore.showCustomerDialog = true;
+	},
+	onPayment: handleProceedToPayment,
+	onScaleBarcode: () => itemsSelectorRef.value?.toggleBarcodeScanner?.(),
+	onToggleFullscreen: toggleFullscreen,
+	onEditProductQuantity: () => invoiceCartRef.value?.keyboardFocusQuantity?.(),
+	onIncreaseQuantity: () => invoiceCartRef.value?.keyboardIncreaseQuantity?.(),
+	onDecreaseQuantity: () => invoiceCartRef.value?.keyboardDecreaseQuantity?.(),
+	onNextProduct: () => invoiceCartRef.value?.keyboardNextProduct?.(),
+	onPreviousProduct: () => invoiceCartRef.value?.keyboardPreviousProduct?.(),
+});
 
 function handleInvoiceTabClick(tabId) {
 	if (tabId === invoiceTabsStore.activeTabId) return;

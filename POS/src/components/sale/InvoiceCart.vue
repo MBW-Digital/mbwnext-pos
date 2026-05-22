@@ -699,8 +699,12 @@
 				<div
 					v-for="(item, index) in items"
 					:key="index"
+					:data-cart-line-index="index"
 					@click="openEditDialog(item)"
-					class="bg-white border border-gray-200 rounded-md p-1 hover:border-blue-300 hover:shadow-sm transition-all duration-200 active:scale-[0.99] cursor-pointer group"
+					:class="[
+						'bg-white border rounded-md p-1 hover:border-blue-300 hover:shadow-sm transition-all duration-200 active:scale-[0.99] cursor-pointer group',
+						focusedLineIndex === index ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200',
+					]"
 				>
 					<div class="flex gap-1.5">
 						<!-- Item Image Thumbnail -->
@@ -2077,6 +2081,73 @@ onMounted(() => {
 onBeforeUnmount(() => {
 	if (typeof document === "undefined") return;
 	document.removeEventListener("mousedown", handleOutsideClick);
+});
+
+const focusedLineIndex = ref(-1);
+
+function getFocusedItem() {
+	if (!props.items?.length) {
+		focusedLineIndex.value = -1;
+		return null;
+	}
+	if (
+		focusedLineIndex.value < 0 ||
+		focusedLineIndex.value >= props.items.length
+	) {
+		focusedLineIndex.value = 0;
+	}
+	return props.items[focusedLineIndex.value];
+}
+
+function moveFocusedLine(delta) {
+	if (!props.items?.length) return;
+	if (focusedLineIndex.value < 0) {
+		focusedLineIndex.value = 0;
+		return;
+	}
+	focusedLineIndex.value = Math.max(
+		0,
+		Math.min(props.items.length - 1, focusedLineIndex.value + delta),
+	);
+}
+
+function keyboardIncreaseQuantity() {
+	const item = getFocusedItem();
+	if (item) incrementQuantity(item);
+}
+
+function keyboardDecreaseQuantity() {
+	const item = getFocusedItem();
+	if (item) decrementQuantity(item);
+}
+
+function keyboardNextProduct() {
+	moveFocusedLine(1);
+}
+
+function keyboardPreviousProduct() {
+	moveFocusedLine(-1);
+}
+
+function keyboardFocusQuantity() {
+	const item = getFocusedItem();
+	if (!item) return;
+	nextTick(() => {
+		const row = document.querySelector(
+			`[data-cart-line-index="${focusedLineIndex.value}"]`,
+		);
+		const input = row?.querySelector('input[type="text"]');
+		input?.focus();
+		input?.select?.();
+	});
+}
+
+defineExpose({
+	keyboardIncreaseQuantity,
+	keyboardDecreaseQuantity,
+	keyboardNextProduct,
+	keyboardPreviousProduct,
+	keyboardFocusQuantity,
 });
 </script>
 ```

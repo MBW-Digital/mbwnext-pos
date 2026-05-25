@@ -826,7 +826,7 @@
 						<div :class="['bg-gray-100 rounded-lg', isCompactMode ? 'p-2 mb-2' : 'p-3 mb-3']">
 							<div dir="ltr" :class="['font-bold text-gray-900 text-center flex items-center justify-center gap-2', isCompactMode ? 'text-xl' : 'text-2xl']">
 								<span>{{ currencySymbol }}</span>
-								<span class="font-mono tracking-wider">{{ numpadDisplay || '0.00' }}</span>
+								<span class="font-mono tracking-wider">{{ numpadFormattedDisplay }}</span>
 							</div>
 						</div>
 
@@ -902,6 +902,7 @@
 								0
 							</button>
 							<button
+								v-if="decimalSeparator"
 								@click="numpadInput('.')"
 								:disabled="numpadDisplay.includes('.')"
 								:class="[
@@ -911,7 +912,7 @@
 										: 'bg-gray-50 border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-800'
 								]"
 							>
-								.
+								{{ decimalSeparator }}
 							</button>
 							</div>
 						</div>
@@ -1167,7 +1168,9 @@ function handleNumpadEnter(value) {
 // Use numpad composable for keypad input handling with keyboard support
 const {
 	numpadDisplay,
+	numpadFormattedDisplay,
 	numpadValue,
+	decimalSeparator,
 	numpadInput,
 	numpadBackspace,
 	numpadClear,

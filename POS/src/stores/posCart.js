@@ -293,6 +293,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		offerQueue.cancel()
 
 		clearInvoiceCart()
+		freeGiftItems.value = []
 		customer.value = null
 		appliedOffers.value = []
 		appliedCoupon.value = null
@@ -504,6 +505,54 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	}
 
 	/**
+	 * Free gift lines from pricing rules (different product not already in cart).
+	 */
+	const freeGiftItems = ref([])
+
+	function expandCartItemsForDisplay(paidItems = [], giftItems = []) {
+		const rows = []
+		for (const item of paidItems) {
+			rows.push({
+				...item,
+				is_free_display: false,
+				_rowKey: `${item.item_code}|${item.uom || item.stock_uom || ""}|paid`,
+			})
+			const freeQty = Number.parseFloat(item.free_qty) || 0
+			if (freeQty > 0) {
+				rows.push({
+					...item,
+					quantity: freeQty,
+					qty: freeQty,
+					rate: 0,
+					amount: 0,
+					discount_amount: 0,
+					discount_percentage: 0,
+					is_free_display: true,
+					is_free_item: true,
+					_rowKey: `${item.item_code}|${item.uom || item.stock_uom || ""}|free`,
+				})
+			}
+		}
+		for (const gift of giftItems) {
+			const qty = Number.parseFloat(gift.quantity || gift.qty) || 0
+			if (qty <= 0) continue
+			rows.push({
+				...gift,
+				quantity: qty,
+				qty: qty,
+				is_free_display: true,
+				is_free_item: true,
+				_rowKey: `gift|${gift.item_code}|${gift.uom || gift.stock_uom || ""}`,
+			})
+		}
+		return rows
+	}
+
+	const displayCartItems = computed(() =>
+		expandCartItemsForDisplay(invoiceItems.value, freeGiftItems.value),
+	)
+
+	/**
 	 * Parses the backend offer response and applies free item quantities to cart items
 	 *
 	 * @param {Array} freeItems - Array of free items from backend (e.g., [{item_code, qty, uom}])
@@ -512,20 +561,21 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @example
 	 * // Backend returns: [{ item_code: "SKU001", qty: 1, uom: "Nos" }]
 	 * // Cart has: [{ item_code: "SKU001", quantity: 2, uom: "Nos" }]
-	 * // Result: Cart item gets free_qty = 1 (shown as "2 items + 1 FREE")
+	 * // Result: separate free display line with qty = 1
 	 */
 	function processFreeItems(freeItems) {
 		// Reset all free quantities
 		invoiceItems.value.forEach(item => {
 			item.free_qty = 0
 		})
+		freeGiftItems.value = []
 
 		// Early return if no free items
 		if (!Array.isArray(freeItems) || freeItems.length === 0) {
 			return
 		}
 
-		// Match free items to cart items and set free_qty
+		// Match free items to cart items and set free_qty / gift lines
 		for (const freeItem of freeItems) {
 			const freeQty = Number.parseFloat(freeItem.qty) || 0
 			if (freeQty <= 0) continue
@@ -537,7 +587,19 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			)
 
 			if (cartItem) {
-				cartItem.free_qty = freeQty
+				cartItem.free_qty = (Number.parseFloat(cartItem.free_qty) || 0) + freeQty
+			} else {
+				freeGiftItems.value.push({
+					item_code: freeItem.item_code,
+					item_name: freeItem.item_name || freeItem.description || freeItem.item_code,
+					quantity: freeQty,
+					uom: freeItem.uom || freeItem.stock_uom || "",
+					stock_uom: freeItem.stock_uom || freeItem.uom || "",
+					rate: 0,
+					amount: 0,
+					is_free_item: true,
+					pricing_rules: freeItem.pricing_rules,
+				})
 			}
 		}
 	}
@@ -1810,6 +1872,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	return {
 		// State
 		invoiceItems,
+		freeGiftItems,
 		customer,
 		subtotal,
 		totalTax,
@@ -1832,6 +1895,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		offerProcessingState, // Offer processing state for UI feedback
 
 		// Computed
+		displayCartItems,
 		itemCount,
 		isEmpty,
 		hasCustomer,

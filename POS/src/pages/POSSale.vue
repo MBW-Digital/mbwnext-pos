@@ -372,7 +372,7 @@
 						>
 							<InvoiceCart
 								ref="invoiceCartRef"
-								:items="cartStore.invoiceItems"
+								:items="cartStore.displayCartItems"
 								:customer="cartStore.customer"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
@@ -482,7 +482,7 @@
 			:customer="cartStore.customer"
 			:company="shiftStore.profileCompany"
 			:additional-discount="cartStore.additionalDiscount"
-			:items="cartStore.invoiceItems"
+			:items="cartStore.displayCartItems"
 			:tax-amount="cartStore.totalTax"
 			:discount-amount="cartStore.totalDiscount"
 			:target-doctype="cartStore.targetDoctype"

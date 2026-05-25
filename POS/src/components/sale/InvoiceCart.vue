@@ -698,12 +698,13 @@
 			<div v-else class="flex flex-col gap-0.5 sm:gap-1">
 				<div
 					v-for="(item, index) in items"
-					:key="index"
+					:key="item._rowKey || index"
 					:data-cart-line-index="index"
-					@click="openEditDialog(item)"
+					@click="!item.is_free_display && openEditDialog(item)"
 					:class="[
-						'bg-white border rounded-md p-1 hover:border-blue-300 hover:shadow-sm transition-all duration-200 active:scale-[0.99] cursor-pointer group',
-						focusedLineIndex === index ? 'border-blue-400 ring-1 ring-blue-200' : 'border-gray-200',
+						'bg-white border rounded-md p-1 hover:border-blue-300 hover:shadow-sm transition-all duration-200 active:scale-[0.99] group',
+						item.is_free_display ? 'border-green-200 bg-green-50/40 cursor-default' : 'cursor-pointer',
+						focusedLineIndex === index ? 'border-blue-400 ring-1 ring-blue-200' : (item.is_free_display ? 'border-green-200' : 'border-gray-200'),
 					]"
 				>
 					<div class="flex gap-1.5">
@@ -743,16 +744,16 @@
 							<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
 								<div class="flex items-center gap-1 flex-1 min-w-0">
 									<h4
-										class="text-[11px] font-bold text-gray-900 truncate leading-tight min-w-0"
+										class="text-[11px] font-bold truncate leading-tight min-w-0"
+										:class="item.is_free_display ? 'text-green-800' : 'text-gray-900'"
 									>
 										{{ item.item_name }}
 									</h4>
 									<span
-										v-if="item.free_qty && item.free_qty > 0"
+										v-if="item.is_free_display"
 										class="inline-flex items-center px-1 py-0.5 bg-green-600 text-white rounded-full text-[8px] font-bold flex-shrink-0"
-										:title="__('{0} free item(s) included', [item.free_qty])"
 									>
-										{{ __("+{0}", [item.free_qty]) }}
+										{{ __("Free gift") }}
 									</span>
 									<div
 										v-if="item.discount_amount && item.discount_amount > 0"
@@ -768,7 +769,14 @@
 
 								<!-- Quantity -->
 								<div
-									v-if="item.has_serial_no && item.serial_no"
+									v-if="item.is_free_display"
+									class="flex items-center bg-green-50 border border-green-200 rounded px-1.5 h-6 flex-shrink-0"
+									@click.stop
+								>
+									<span class="text-[11px] font-bold text-green-700">{{ formatQuantity(item.quantity) }}</span>
+								</div>
+								<div
+									v-else-if="item.has_serial_no && item.serial_no"
 									class="flex items-center gap-0.5 flex-shrink-0"
 									@click.stop
 								>
@@ -943,20 +951,30 @@
 								</div>
 
 								<!-- Unit Price -->
-								<span class="text-[10px] font-medium text-gray-500 whitespace-nowrap flex-shrink-0">
+								<span
+									v-if="item.is_free_display"
+									class="text-[10px] font-bold text-green-700 whitespace-nowrap flex-shrink-0"
+								>
+									{{ __("Free") }}
+								</span>
+								<span v-else class="text-[10px] font-medium text-gray-500 whitespace-nowrap flex-shrink-0">
 									{{ formatCurrency(item.rate) }}
 								</span>
 
 								<!-- Line Total -->
-								<span class="text-[11px] font-bold text-red-600 whitespace-nowrap flex-shrink-0">
+								<span
+									class="text-[11px] font-bold whitespace-nowrap flex-shrink-0"
+									:class="item.is_free_display ? 'text-green-700' : 'text-red-600'"
+								>
 									{{
-										formatCurrency(
-											item.amount || item.rate * item.quantity
-										)
+										item.is_free_display
+											? __("Free")
+											: formatCurrency(item.amount || item.rate * item.quantity)
 									}}
 								</span>
 
 								<button
+									v-if="!item.is_free_display"
 									type="button"
 									@click.stop="$emit('remove-item', item.item_code, item.uom)"
 									class="text-gray-400 hover:text-red-600 transition-colors flex-shrink-0 p-0.5 touch-manipulation"
@@ -972,8 +990,9 @@
 							<!-- Inline Item Discount Controls + DVNL -->
 							<div
 								v-if="
-									settingsStore.allowItemDiscount ||
-									item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')
+									!item.is_free_display &&
+									(settingsStore.allowItemDiscount ||
+									item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh'))
 								"
 								class="mt-0.5 flex items-center justify-between gap-1 text-[10px] text-gray-600"
 								@click.stop
@@ -1496,16 +1515,10 @@ watch(customerResults, () => {
 });
 
 /**
- * Total quantity of all items in cart (including free items).
- * Sums quantity + free_qty for each cart item.
- * @returns {Number} Total item quantity
+ * Total quantity shown in cart header (paid + free gift lines).
  */
 const totalQuantity = computed(() => {
-	return props.items.reduce((sum, item) => {
-		const qty = item.quantity || 0;
-		const freeQty = item.free_qty || 0;
-		return sum + qty + freeQty;
-	}, 0);
+	return props.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
 });
 
 /**
@@ -1526,7 +1539,7 @@ function getItemKey(item) {
 // Sync coldStorageItems khi có fee lines sẵn (load từ cart cũ) - phân bổ theo thứ tự
 function syncColdStorageFromCart() {
 	const code = coldStorageFeeItemCode.value;
-	const items = (props.items || []).filter((i) => i.item_code !== code);
+	const items = (props.items || []).filter((i) => i.item_code !== code && !i.is_free_display);
 	const totalFee = (props.items || [])
 		.filter((i) => i.item_code === code)
 		.reduce((sum, i) => sum + (Number(i.quantity) || 0), 0);

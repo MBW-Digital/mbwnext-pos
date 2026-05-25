@@ -275,18 +275,27 @@
 						<div v-if="items.length > 0" class="flex-1 overflow-y-auto divide-y divide-gray-100 min-h-0">
 							<div
 								v-for="(item, index) in items"
-								:key="index"
+								:key="item._rowKey || index"
 								class="px-3 py-2 hover:bg-gray-50"
+								:class="item.is_free_display ? 'bg-green-50/40' : ''"
 							>
 								<div class="flex items-start justify-between gap-2">
 									<div class="flex-1 min-w-0 text-start">
-										<div class="font-medium text-sm text-gray-900 truncate">{{ item.item_name || item.item_code }}</div>
+										<div class="font-medium text-sm truncate" :class="item.is_free_display ? 'text-green-800' : 'text-gray-900'">
+											{{ item.item_name || item.item_code }}
+											<span v-if="item.is_free_display" class="ms-1 text-[10px] font-bold text-green-700">({{ __("Free gift") }})</span>
+										</div>
 										<div class="text-xs text-gray-500 mt-0.5">
-											{{ formatCurrency(item.rate || item.price_list_rate) }} × {{ item.qty || item.quantity }}
+											<template v-if="item.is_free_display">
+												{{ __("Free") }} × {{ item.qty || item.quantity }}
+											</template>
+											<template v-else>
+												{{ formatCurrency(item.rate || item.price_list_rate) }} × {{ item.qty || item.quantity }}
+											</template>
 										</div>
 									</div>
-									<div class="text-sm font-semibold text-gray-900 text-end">
-										{{ formatCurrency(item.amount || ((item.qty || item.quantity) * (item.rate || item.price_list_rate))) }}
+									<div class="text-sm font-semibold text-end" :class="item.is_free_display ? 'text-green-700' : 'text-gray-900'">
+										{{ item.is_free_display ? __("Free") : formatCurrency(item.amount || ((item.qty || item.quantity) * (item.rate || item.price_list_rate))) }}
 									</div>
 								</div>
 							</div>

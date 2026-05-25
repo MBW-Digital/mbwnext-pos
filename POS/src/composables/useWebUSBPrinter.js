@@ -309,7 +309,7 @@ async function printInvoice(invoiceData, opts = {}) {
 	}
 
 	const bytes = mode === 'bitmap'
-		? buildReceiptBitmap(invoiceData, printOpts)
+		? await buildReceiptBitmap(invoiceData, printOpts)
 		: buildReceiptESCPOS(invoiceData, printOpts)
 	await sendRaw(bytes)
 	log.info(`Printed to ${deviceName.value} (${width}mm, ${mode}, ${bytes.length} bytes)`)

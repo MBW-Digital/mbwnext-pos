@@ -228,6 +228,15 @@ show_sidebar: 0
         <button class="tab-btn" id="tab-company" onclick="setType('company')">🏢 Doanh nghiệp / Tổ chức</button>
       </div>
 
+      <!-- Retail-only: Mã số thuế cá nhân (optional) -->
+      <div id="retail-fields">
+        <div class="form-group">
+          <label>Mã số thuế cá nhân</label>
+          <input type="text" id="personal-tax-id" placeholder="VD: 0123456789" inputmode="numeric" maxlength="14">
+          <div class="hint">Không bắt buộc — điền nếu bạn có mã số thuế cá nhân</div>
+        </div>
+      </div>
+
       <!-- Company-only: MST -->
       <div id="company-fields" class="hidden">
         <div class="form-group">
@@ -378,6 +387,7 @@ show_sidebar: 0
     buyerType = type;
     document.getElementById("tab-retail").classList.toggle("active", type === "retail");
     document.getElementById("tab-company").classList.toggle("active", type === "company");
+    document.getElementById("retail-fields").classList.toggle("hidden", type !== "retail");
     document.getElementById("company-fields").classList.toggle("hidden", type !== "company");
     document.getElementById("name-label").textContent = type === "company" ? "Tên công ty / Tổ chức" : "Họ và tên";
     setFormAlert(null);
@@ -424,9 +434,15 @@ show_sidebar: 0
     var addr = document.getElementById("buyer-address").value.trim();
     var email = document.getElementById("buyer-email").value.trim();
     var phone = document.getElementById("buyer-phone").value.trim();
-    var taxId = buyerType === "company" ? document.getElementById("tax-id").value.trim() : "";
+    var taxId = buyerType === "company"
+      ? document.getElementById("tax-id").value.trim()
+      : document.getElementById("personal-tax-id").value.trim();
 
     if (buyerType === "company" && !taxId) { setFormAlert("Vui lòng nhập Mã số thuế.", "error"); return; }
+    if (buyerType === "retail" && taxId && taxId.replace(/[^0-9]/g, "").length < 10) {
+      setFormAlert("Mã số thuế cá nhân không hợp lệ (tối thiểu 10 chữ số).", "error");
+      return;
+    }
     if (!name) { setFormAlert("Vui lòng nhập " + (buyerType === "company" ? "tên công ty" : "họ và tên") + ".", "error"); return; }
     if (!addr) { setFormAlert("Vui lòng nhập địa chỉ.", "error"); return; }
     if (!email || !email.includes("@")) { setFormAlert("Vui lòng nhập email hợp lệ.", "error"); return; }

@@ -5,6 +5,15 @@ import { logCashDrawerPrintBill } from "@/utils/tillExceptionLog"
 
 const log = logger.create('PrintInvoice')
 
+const RECEIPT_LOGO_URL = "/assets/pos_next/images/bhbuudien-logo.png"
+
+function receiptLogoUrl() {
+	if (typeof window !== "undefined" && window.location?.origin) {
+		return `${window.location.origin}${RECEIPT_LOGO_URL}`
+	}
+	return RECEIPT_LOGO_URL
+}
+
 /** Định dạng số kiểu vi-VN (dùng cho phiếu in HTML fallback). */
 function formatVN(amount, decimals = 0) {
 	const n = Number.parseFloat(amount || 0)
@@ -487,6 +496,9 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 						.join("")
 
 					return `
+				<div style="text-align:center;margin-bottom:8px;">
+					<img src="${receiptLogoUrl()}" alt="Bách Hóa Bưu Điện" style="max-width:100%;width:${paperWidth === 58 ? "52mm" : "68mm"};height:auto;display:block;margin:0 auto;" />
+				</div>
 				<div style="text-align:center;font-weight:bold;font-size:15px;margin-bottom:4px;">${storeName}</div>
 				<div style="text-align:center;font-size:11px;line-height:1.35;">
 					<div><b>Chi nhánh:</b> ${branch}</div>

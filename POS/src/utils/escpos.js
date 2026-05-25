@@ -434,6 +434,32 @@ const BITMAP_DOTS      = { 58: 384, 80: 576 }
 const BITMAP_THRESHOLD = 80   // 31 % luminance → black
 const BITMAP_FONT_80   = 26   // px, for 80 mm paper
 const BITMAP_FONT_58   = 22   // px, for 58 mm paper
+const RECEIPT_LOGO_URL = "/assets/pos_next/images/bhbuudien-logo.png"
+
+let _receiptLogoImage = null
+let _receiptLogoPromise = null
+
+function loadReceiptLogoImage() {
+	if (_receiptLogoImage) return Promise.resolve(_receiptLogoImage)
+	if (_receiptLogoPromise) return _receiptLogoPromise
+	if (typeof window === "undefined" || typeof Image === "undefined") {
+		return Promise.resolve(null)
+	}
+	_receiptLogoPromise = new Promise((resolve) => {
+		const img = new Image()
+		img.crossOrigin = "anonymous"
+		img.onload = () => {
+			_receiptLogoImage = img
+			resolve(img)
+		}
+		img.onerror = () => resolve(null)
+		const src = RECEIPT_LOGO_URL.startsWith("http")
+			? RECEIPT_LOGO_URL
+			: `${window.location.origin}${RECEIPT_LOGO_URL}`
+		img.src = src
+	})
+	return _receiptLogoPromise
+}
 
 class BitmapReceiptBuilder {
 	constructor(paperWidth = 80) {
@@ -493,6 +519,16 @@ class BitmapReceiptBuilder {
 		return this
 	}
 
+	image(img) {
+		if (!img?.width || !img?.height) return this
+		const maxW = this._iW
+		const scale = Math.min(1, maxW / img.width)
+		const w = Math.max(1, Math.round(img.width * scale))
+		const h = Math.max(1, Math.round(img.height * scale))
+		this._rows.push({ type: 'img', img, w, h, lh: h + this._mg })
+		return this
+	}
+
 	qr(data, size = 4) {
 		if (data) this._app.push({ type: 'qr', data, size })
 		return this
@@ -538,6 +574,9 @@ class BitmapReceiptBuilder {
 				ctx.font = this._font(false, false)
 				ctx.textAlign = 'left';  ctx.fillText(row.l, this._mg, y)
 				ctx.textAlign = 'right'; ctx.fillText(row.r, W - this._mg, y)
+			} else if (row.type === 'img') {
+				const x = this._mg + Math.floor((this._iW - row.w) / 2)
+				ctx.drawImage(row.img, x, y, row.w, row.h)
 			}
 			y += row.lh
 		}
@@ -602,7 +641,7 @@ class BitmapReceiptBuilder {
  * Build a full bitmap receipt (supports full Vietnamese/Unicode via canvas rendering).
  * Stream: [init] → [main bitmap] → [native QR/barcode cmds] → [footer bitmap] → [cut] → [kick]
  */
-export function buildReceiptBitmap(invoiceData, options = {}) {
+export async function buildReceiptBitmap(invoiceData, options = {}) {
 	const {
 		paperWidth = 80,
 		einvoiceQr,
@@ -611,6 +650,9 @@ export function buildReceiptBitmap(invoiceData, options = {}) {
 		cashDrawerPin  = 0,
 	} = options
 	const b = new BitmapReceiptBuilder(paperWidth)
+
+	const logo = await loadReceiptLogoImage()
+	if (logo) b.image(logo)
 
 	const storeName =
 		invoiceData.receipt_company_display_name || invoiceData.company || 'POS Next'

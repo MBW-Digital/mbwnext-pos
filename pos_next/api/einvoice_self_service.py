@@ -260,7 +260,7 @@ def submit_self_service_einvoice(
 		return {"ok": False, "message": str(msg)}
 
 	buyer_type = (buyer_type or "retail").strip().lower()
-	tax_id = _normalize_tax_id(tax_id or "") if buyer_type == "company" else ""
+	tax_id = _normalize_tax_id(tax_id or "")
 	buyer_name = (buyer_name or "").strip()
 	buyer_address = (buyer_address or "").strip()
 	email = (email or "").strip()
@@ -278,6 +278,8 @@ def submit_self_service_einvoice(
 	else:
 		if not buyer_name:
 			return {"ok": False, "message": _("Please enter buyer name.")}
+		if tax_id and len(tax_id) < 10:
+			return {"ok": False, "message": _("Please enter a valid personal tax ID.")}
 
 	if not buyer_address:
 		return {"ok": False, "message": _("Please enter address.")}

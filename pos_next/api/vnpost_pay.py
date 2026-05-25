@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Copyright (c) 2025, BrainWise and contributors
-# VNPost Pay — luồng SDK (VNPD_SDK): auth + iframe; không gọi partner /pob/payment
+# VNPost Pay — ưu tiên VietQR qua API /pob/payment; fallback Web SDK iframe
 from __future__ import unicode_literals
 
 import base64
@@ -146,6 +146,70 @@ def _http_post_json(url, body, timeout=60):
 		return {}
 
 
+def _generate_qr_svg_data_uri(content):
+	"""Render VietQR EMV payload as inline SVG data URI for POS UI."""
+	if not content:
+		return ""
+	try:
+		from io import BytesIO
+
+		from pyqrcode import create as qrcreate
+
+		qr = qrcreate(str(content), error="M")
+		stream = BytesIO()
+		try:
+			qr.svg(stream, scale=3, background="white", module_color="black")
+			svg = stream.getvalue().decode().replace("\n", "")
+			return "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+		finally:
+			stream.close()
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "VNPost QR render")
+		return ""
+
+
+def _call_vnpost_payment_api(settings, meta, amount_i, note, request_id):
+	"""Partner /pob/payment — trả body có field `qr` (EMV VietQR)."""
+	from frappe.utils import get_datetime as _gdt
+
+	dt_str = _gdt(now_datetime()).strftime("%d/%m/%Y %H:%M:%S")
+	raw_pay = "|".join([request_id, str(PAY_TYPE_VIETQR), str(amount_i)])
+	pay_sig = _rsa_sign_sha256_b64(raw_pay, settings.private_key_pem)
+	pbody = {
+		"token": meta["token"],
+		"type": PAY_TYPE_VIETQR,
+		"amount": amount_i,
+		"note": note,
+		"dateTime": dt_str,
+		"requestId": request_id,
+		"signature": pay_sig,
+	}
+	pres = _http_post_json(_url_join(settings.base_url, PAYMENT_PATH), pbody)
+	code = (pres.get("code") or "").strip()
+	if code and code not in ("API000", "200", "0"):
+		return None, pres
+	pbd = pres.get("body") or pres.get("data") or {}
+	if not isinstance(pbd, dict) or not pbd.get("qr"):
+		return None, pres
+	return pbd, pres
+
+
+def _payment_body_fields(pbd, settings):
+	"""Map optional display fields from payment API body."""
+	return {
+		"account_number": (
+			pbd.get("accNo")
+			or pbd.get("accountNo")
+			or pbd.get("account_number")
+			or settings.partner_acc_no
+			or ""
+		),
+		"bank_code": pbd.get("bankCode") or pbd.get("bank_code") or "",
+		"account_holder": pbd.get("accName") or pbd.get("account_holder") or "",
+		"trans_id": pbd.get("transId") or pbd.get("trans_id"),
+	}
+
+
 def _is_vnpost_dev_api_base(base_url):
 	return "api-bdvn-dev" in (base_url or "").lower()
 
@@ -248,7 +312,7 @@ def _get_vnpost_settings(pos_profile):
 	service = (doc.get("vnpost_service_code") or "").strip()
 	partner = (doc.get("vnpost_partner_code") or "").strip()
 	acc = (doc.get("vnpost_partner_acc_no") or "").strip()
-	po = (doc.get("vnpost_pocode") or "").strip()  # optional — not in signature
+	po = (doc.get("vnpost_pocode") or "").strip()  # để trống nếu không cần; điền sai → auth fail → SDK fallback
 	pvk = (doc.get("vnpost_rsa_private_key") or "").strip()
 
 	if not (base and user and service and partner and acc and pvk):
@@ -266,6 +330,29 @@ def _get_vnpost_settings(pos_profile):
 		public_key_pem=(doc.get("vnpost_vnpd_public_key") or "").strip(),
 		pos_profile=pos_profile,
 	)
+
+
+def _get_vnpost_payable_amount(invoice_id, fallback_amount):
+	"""
+	Số tiền VNPost cần thu.
+	- Nếu invoice đã submit (docstatus=1): dùng outstanding_amount.
+	- Nếu là draft: fallback_amount từ frontend (grand_total - other_payments thực sự).
+	  Không tính lại từ inv.payments vì set_missing_values() tự thêm Cash payment
+	  từ POS Profile mặc định, khiến payable = 0 và rơi vào fallback sai.
+	"""
+	if invoice_id:
+		doctype = "Sales Invoice"
+		if not frappe.db.exists(doctype, invoice_id):
+			# Thử Sales Order
+			doctype = "Sales Order"
+		if frappe.db.exists(doctype, invoice_id):
+			inv = frappe.get_doc(doctype, invoice_id)
+			if inv.docstatus == 1:
+				payable = flt(inv.get("outstanding_amount") or inv.get("grand_total"), 2)
+				if payable > 0:
+					return int(flt(payable, 0))
+	# Draft hoặc không tìm thấy: tin tưởng giá trị frontend đã tính đúng
+	return int(flt(fallback_amount, 0))
 
 
 def get_auth_token_with_meta(settings, request_id_for_auth):
@@ -346,7 +433,7 @@ def get_auth_token_with_meta(settings, request_id_for_auth):
 @frappe.whitelist()
 def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 	"""
-	Trả dữ liệu cho UI: SDK iframe (theo VNPD_SDK). Luồng: auth + mở iframe — không gọi /pob/payment.
+	Trả dữ liệu cho UI: ưu tiên VietQR từ API /pob/payment; fallback SDK iframe.
 	"""
 	_ = template
 	return get_vnpost_payment_qr_data(pos_profile, amount, invoice_id)
@@ -355,8 +442,8 @@ def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 @frappe.whitelist()
 def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
 	"""
-	Chỉ SDK (VNPD_SDK_integration): /auth lấy token → build URL iframe.
-	Giao dịch chờ / VietQR do SDK tạo nội bộ; partner /pob/payment không được gọi.
+	VNPost Pay: ưu tiên VietQR qua API /pob/payment (không spinner SDK).
+	Nếu API lỗi thì fallback iframe Web SDK (VNPD_SDK).
 	"""
 	settings = _get_vnpost_settings(pos_profile)
 	if not settings:
@@ -365,7 +452,7 @@ def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
 			"message": _("VNPost Pay is not fully configured for this POS Profile"),
 		}
 
-	amount_i = int(flt(amount, 0))
+	amount_i = _get_vnpost_payable_amount(invoice_id, amount)
 	if not amount_i or amount_i < 0:
 		return {"enabled": False, "message": _("Invalid amount")}
 
@@ -392,6 +479,59 @@ def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
 		request_id = f"R{frappe.generate_hash(length=20)}"
 
 	order_code = str(invoice_id or request_id).strip()
+
+	# --- Primary: partner payment API → static VietQR (no SDK spinner) ---
+	pbd, pres = _call_vnpost_payment_api(settings, meta, amount_i, note, request_id)
+	if pbd:
+		qr_emv = pbd.get("qr") or ""
+		display = _payment_body_fields(pbd, settings)
+		acc_no_suggestion = extract_vnpost_dev_acc_no_from_qr(qr_emv)
+		vnpd_dev_simulation = None
+		if _vnpd_dev_callback_simulation_allowed(settings):
+			vnpd_dev_simulation = {
+				"show": True,
+				"acc_no_suggestion": acc_no_suggestion,
+				"fixed_amount": amount_i,
+				"hint": _("Dev-only: PostPay callbackQR."),
+			}
+		return {
+			"enabled": True,
+			"qr_url": _generate_qr_svg_data_uri(qr_emv),
+			"qr_emv": qr_emv,
+			"sdk_iframe_url": "",
+			"account_number": display["account_number"],
+			"bank_code": display["bank_code"],
+			"account_holder": display["account_holder"],
+			"amount": amount_i,
+			"content": note,
+			"request_id": request_id,
+			"trans_id": display["trans_id"],
+			"sdk": None,
+			"raw_body": pbd,
+			"vnpd_dev_simulation": vnpd_dev_simulation,
+			"message": "",
+			"payment_api_warning": "",
+			"payment_mode": "api_qr",
+		}
+
+	payment_api_warning = ""
+	if pres:
+		payment_api_warning = " ".join(
+			filter(
+				None,
+				[
+					str(pres.get("code") or "").strip(),
+					str(pres.get("message") or "").strip(),
+				],
+			)
+		)
+		po_hint = f"POCode='{settings.po_code}'" if settings.po_code else "POCode=<trống>"
+		frappe.logger("vnpost_pay").warning(
+			f"VNPost /pob/payment fail ({po_hint}) → fallback SDK. "
+			f"Response: code={pres.get('code')!r} msg={pres.get('message')!r}"
+		)
+
+	# --- Fallback: Web SDK iframe ---
 	sdk_iframe_url = _build_vnpd_sdk_iframe_url(
 		sdk_ui_base, meta, settings, amount_i, note, request_id, order_code, show_pttt
 	)
@@ -400,42 +540,16 @@ def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
 		return {
 			"enabled": False,
 			"message": _(
-				"Could not build VNPost SDK URL. Set VNPost SDK UI URL on POS Profile or check API base hostname."
+				"Could not create VNPost payment. Payment API failed and SDK URL could not be built."
 			),
+			"payment_api_warning": payment_api_warning,
 		}
-
-	pbd = {}
-	acc_no_suggestion = ""
-
-	# Trên dev: gọi /pob/payment ngầm để trích accNo từ field `qr` (nếu server trả).
-	# Lỗi từ bước này không chặn iframe — bỏ qua hoàn toàn khi production.
-	if _vnpd_dev_callback_simulation_allowed(settings):
-		try:
-			from frappe.utils import get_datetime as _gdt
-			dt_str = _gdt(now_datetime()).strftime("%d/%m/%Y %H:%M:%S")
-			raw_pay = "|".join([request_id, str(PAY_TYPE_VIETQR), str(amount_i)])
-			pay_sig = _rsa_sign_sha256_b64(raw_pay, settings.private_key_pem)
-			pbody = {
-				"token": meta["token"],
-				"type": PAY_TYPE_VIETQR,
-				"amount": amount_i,
-				"note": note,
-				"dateTime": dt_str,
-				"requestId": request_id,
-				"signature": pay_sig,
-			}
-			pres_dev = _http_post_json(_url_join(settings.base_url, PAYMENT_PATH), pbody)
-			pbd_dev = pres_dev.get("body") or pres_dev.get("data") or {}
-			qr_emv = pbd_dev.get("qr") or "" if isinstance(pbd_dev, dict) else ""
-			acc_no_suggestion = extract_vnpost_dev_acc_no_from_qr(qr_emv)
-		except Exception:
-			pass
 
 	vnpd_dev_simulation = None
 	if _vnpd_dev_callback_simulation_allowed(settings):
 		vnpd_dev_simulation = {
 			"show": True,
-			"acc_no_suggestion": acc_no_suggestion,
+			"acc_no_suggestion": "",
 			"fixed_amount": amount_i,
 			"hint": _("Dev-only: PostPay callbackQR."),
 		}
@@ -451,12 +565,15 @@ def get_vnpost_payment_qr_data(pos_profile, amount, invoice_id=None):
 		"content": note,
 		"request_id": request_id,
 		"trans_id": None,
-		"sdk": None,
-		"raw_body": pbd,
+		"sdk": {
+			"baseUrl": meta.get("baseUrl") or settings.base_url,
+			"socketUrl": meta.get("socketUrl") or "",
+		},
+		"raw_body": {},
 		"vnpd_dev_simulation": vnpd_dev_simulation,
 		"message": "",
-		"payment_api_warning": "",
-		"sdk_only": True,
+		"payment_api_warning": payment_api_warning,
+		"payment_mode": "sdk_iframe",
 	}
 
 
@@ -487,16 +604,23 @@ def manual_confirm_vnpost_payment(invoice_name):
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
 		return {"success": True, "paid": True, "message": _("Invoice already submitted")}
-	amount = flt(doc.grand_total, 2)
 	try:
 		if doc.docstatus == 0:
 			doc.flags.ignore_permissions = True
 			frappe.flags.ignore_account_permission = True
 			doc.submit()
+			frappe.db.commit()
+			doc.reload()
+		amount = flt(doc.outstanding_amount, 2)
+		if amount <= 0:
+			return {"success": True, "paid": True, "message": _("Invoice already paid")}
 		mode_of_payment = get_bank_transfer_mode_of_payment()
 		from pos_next.api.partial_payments import create_payment_entry
 		create_payment_entry(
-			invoice_name=invoice_name, amount=amount, mode_of_payment=mode_of_payment, remarks="VNPost Pay manual confirm"
+			invoice_name=invoice_name,
+			amount=amount,
+			mode_of_payment=mode_of_payment,
+			remarks="VNPost Pay manual confirm",
 		)
 		return {"success": True, "paid": True, "invoice_name": invoice_name}
 	except Exception as e:

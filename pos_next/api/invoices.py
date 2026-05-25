@@ -2415,23 +2415,51 @@ def _get_rule_discount_values(rule_doc):
 
 
 def _fetch_transaction_pricing_rules(company, selected_offer_names=None):
-    """Load Transaction apply_on pricing rules, optionally limited to selection."""
-    filters = {
+    """Load Transaction apply_on pricing rules.
+
+    Non-coupon-based rules are always fetched (auto-applied by ERPNext regardless of selection).
+    Coupon-based rules are only fetched when explicitly selected.
+    """
+    base_filters = {
         "apply_on": "Transaction",
         "disable": 0,
         "selling": 1,
         "company": company,
         "price_or_product_discount": "Price",
     }
-    if selected_offer_names:
-        filters["name"] = ["in", list(selected_offer_names)]
 
-    return frappe.get_all(
+    # Always include auto-applicable (non-coupon-based) transaction rules
+    auto_filters = {**base_filters, "coupon_code_based": 0}
+    auto_rules = frappe.get_all(
         "Pricing Rule",
-        filters=filters,
+        filters=auto_filters,
         fields=["*"],
         order_by="priority desc, name asc",
     )
+
+    # Also include explicitly selected coupon-based rules
+    coupon_rules = []
+    if selected_offer_names:
+        coupon_filters = {
+            **base_filters,
+            "coupon_code_based": 1,
+            "name": ["in", list(selected_offer_names)],
+        }
+        coupon_rules = frappe.get_all(
+            "Pricing Rule",
+            filters=coupon_filters,
+            fields=["*"],
+            order_by="priority desc, name asc",
+        )
+
+    seen = set()
+    merged = []
+    for r in auto_rules + coupon_rules:
+        if r.name not in seen:
+            seen.add(r.name)
+            merged.append(r)
+    merged.sort(key=lambda r: (-cint(r.get("priority") or 0), r.name))
+    return merged
 
 
 def _resolve_transaction_pricing_rule(doc, company, selected_offer_names, discount_pct, discount_amt):
@@ -2656,7 +2684,14 @@ def _apply_transaction_pricing_rules(
         and applied_rule_name
         and applied_rule_name not in selected_offer_names
     ):
-        return frappe._dict()
+        # Chỉ bỏ qua rule coupon-based (cần chọn thủ công).
+        # Rule không phải coupon-based thì luôn auto-apply dù không trong selected_offer_names.
+        try:
+            is_coupon = frappe.db.get_value("Pricing Rule", applied_rule_name, "coupon_code_based")
+        except Exception:
+            is_coupon = False
+        if is_coupon:
+            return frappe._dict()
 
     # Use line net × % so POS matches ERPNext (not Frappe doc.discount_amount alone)
     if discount_pct and line_net:

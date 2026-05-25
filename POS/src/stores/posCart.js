@@ -91,6 +91,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		payments,
 		salesTeam,
 		additionalDiscount,
+		additionalDiscountPercentage,
 		taxInclusive,
 		isSubmitting,
 		addItem: addItemToInvoice,
@@ -558,8 +559,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			items: Array.isArray(payload.items) ? payload.items : [],
 			freeItems: Array.isArray(payload.free_items) ? payload.free_items : [],
 			// CRITICAL: Only trust explicitly returned rules - NO FALLBACK
-			// If backend doesn't return applied_pricing_rules, NO offers were applied
-			appliedRules: Array.isArray(payload.applied_pricing_rules) ? payload.applied_pricing_rules : []
+			appliedRules: Array.isArray(payload.applied_pricing_rules) ? payload.applied_pricing_rules : [],
+			// Invoice-level additional discount from Pricing Rule (e.g. "5% off for members")
+			additionalDiscountPct: Number(payload.additional_discount_percentage) || 0,
 		}
 	}
 
@@ -624,33 +626,37 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				// Check if cancelled during API call
 				if (signal?.aborted) return
 
-				const { items: responseItems, freeItems, appliedRules } =
-					parseOfferResponse(response)
+			const { items: responseItems, freeItems, appliedRules, additionalDiscountPct } =
+				parseOfferResponse(response)
 
-				suppressOfferReapply.value = true
-				applyDiscountsFromServer(responseItems)
-				processFreeItems(freeItems)
-				filterActiveOffers(appliedRules)
+			suppressOfferReapply.value = true
+			applyDiscountsFromServer(responseItems)
+			processFreeItems(freeItems)
+			filterActiveOffers(appliedRules)
+			additionalDiscountPercentage.value = additionalDiscountPct
 
-				const offerApplied = appliedRules.includes(offerCode)
+			const offerApplied = appliedRules.includes(offerCode)
 
-				if (!offerApplied) {
-					// No new offer applied - restore previous state without new offer
-					if (existingCodes.length) {
-						try {
-							const rollbackResponse = await applyOffersResource.submit({
-								invoice_data: invoiceData,
-								selected_offers: existingCodes,
-							})
-							const {
-								items: rollbackItems,
-								freeItems: rollbackFreeItems,
-								appliedRules: rollbackRules,
-							} = parseOfferResponse(rollbackResponse)
+			if (!offerApplied) {
+				// No new offer applied - restore previous state without new offer
+				additionalDiscountPercentage.value = 0
+				if (existingCodes.length) {
+					try {
+						const rollbackResponse = await applyOffersResource.submit({
+							invoice_data: invoiceData,
+							selected_offers: existingCodes,
+						})
+						const {
+							items: rollbackItems,
+							freeItems: rollbackFreeItems,
+							appliedRules: rollbackRules,
+							additionalDiscountPct: rollbackPct,
+						} = parseOfferResponse(rollbackResponse)
 
-							applyDiscountsFromServer(rollbackItems)
-							processFreeItems(rollbackFreeItems)
-							filterActiveOffers(rollbackRules)
+						applyDiscountsFromServer(rollbackItems)
+						processFreeItems(rollbackFreeItems)
+						filterActiveOffers(rollbackRules)
+						additionalDiscountPercentage.value = rollbackPct
 						} catch (rollbackError) {
 							console.error("Error rolling back offers:", rollbackError)
 						}
@@ -766,17 +772,18 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 				if (signal?.aborted) return
 
-				const { items: responseItems, freeItems, appliedRules } =
-					parseOfferResponse(response)
+			const { items: responseItems, freeItems, appliedRules, additionalDiscountPct } =
+				parseOfferResponse(response)
 
-				suppressOfferReapply.value = true
-				applyDiscountsFromServer(responseItems)
-				processFreeItems(freeItems)
-				filterActiveOffers(appliedRules)
+			suppressOfferReapply.value = true
+			applyDiscountsFromServer(responseItems)
+			processFreeItems(freeItems)
+			filterActiveOffers(appliedRules)
+			additionalDiscountPercentage.value = additionalDiscountPct
 
-				appliedOffers.value = appliedOffers.value.filter((entry) =>
-					remainingCodes.includes(entry.code),
-				)
+			appliedOffers.value = appliedOffers.value.filter((entry) =>
+				remainingCodes.includes(entry.code),
+			)
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -885,17 +892,18 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 					if (signal?.aborted) return false
 
-					const { items: responseItems, freeItems, appliedRules } =
-						parseOfferResponse(response)
+				const { items: responseItems, freeItems, appliedRules, additionalDiscountPct } =
+					parseOfferResponse(response)
 
-					applyDiscountsFromServer(responseItems)
-					processFreeItems(freeItems)
-					filterActiveOffers(appliedRules)
+				applyDiscountsFromServer(responseItems)
+				processFreeItems(freeItems)
+				filterActiveOffers(appliedRules)
+				additionalDiscountPercentage.value = additionalDiscountPct
 
-					// Update appliedOffers to only include valid ones
-					appliedOffers.value = appliedOffers.value.filter(entry =>
-						appliedRules.includes(entry.code)
-					)
+				// Update appliedOffers to only include valid ones
+				appliedOffers.value = appliedOffers.value.filter(entry =>
+					appliedRules.includes(entry.code)
+				)
 				}
 
 				// Wait for Vue to update before showing toast
@@ -971,14 +979,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Check for cancellation after API call
 			if (signal?.aborted) return
 
-			const { items: responseItems, freeItems, appliedRules } =
-				parseOfferResponse(response)
+		const { items: responseItems, freeItems, appliedRules, additionalDiscountPct } =
+			parseOfferResponse(response)
 
-			applyDiscountsFromServer(responseItems)
-			processFreeItems(freeItems)
-			filterActiveOffers(appliedRules)
+		applyDiscountsFromServer(responseItems)
+		processFreeItems(freeItems)
+		filterActiveOffers(appliedRules)
+		additionalDiscountPercentage.value = additionalDiscountPct
 
-			// Collect newly applied offers for notification
+		// Collect newly applied offers for notification
 			const newlyAppliedOffers = []
 
 			// Add newly applied offers to the list
@@ -1811,6 +1820,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		payments,
 		salesTeam,
 		additionalDiscount,
+		additionalDiscountPercentage,
 		taxInclusive,
 		pendingItem,
 		pendingItemQty,

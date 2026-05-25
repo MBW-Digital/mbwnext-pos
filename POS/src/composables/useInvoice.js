@@ -27,6 +27,9 @@ export function useInvoice() {
 	const posProfile = ref(null)
 	const posOpeningShift = ref(null) // POS Opening Shift name
 	const additionalDiscount = ref(0)
+	// Discount từ Pricing Rule ở cấp invoice (additional_discount_percentage, %)
+	// Áp dụng sau khi tính subtotal + tax - item_discounts - manualDiscount
+	const additionalDiscountPercentage = ref(0)
 	const couponCode = ref(null)
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
@@ -147,17 +150,22 @@ export function useInvoice() {
 		const discount =
 			_cachedTotalDiscount.value + (additionalDiscount.value || 0)
 
+		let gt
 		if (taxInclusive.value) {
-			// Tax inclusive: Subtotal already includes tax, so don't add it again
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(_cachedSubtotal.value - discount)
+			gt = _cachedSubtotal.value - discount
 		} else {
-			// Tax exclusive: Add tax on top of subtotal
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(
-				_cachedSubtotal.value + _cachedTotalTax.value - discount,
-			)
+			gt = _cachedSubtotal.value + _cachedTotalTax.value - discount
 		}
+
+		// Áp dụng additional_discount_percentage từ Pricing Rule (cấp invoice).
+		// Khi discount trên "Net Total", thuế cũng giảm tỷ lệ → kết quả bằng
+		// gt * (1 - pct/100). Xem bình luận chi tiết trong posCart.js.
+		const pct = additionalDiscountPercentage.value || 0
+		if (pct > 0) {
+			gt = gt * (1 - pct / 100)
+		}
+
+		return roundCurrency(gt)
 	})
 	const totalPaid = computed(() => _cachedTotalPaid.value)
 
@@ -825,20 +833,21 @@ export function useInvoice() {
 				amount: p.amount,
 				type: p.type,
 			})),
-			discount_amount: additionalDiscount.value || 0,
-			coupon_code: couponCode.value,
-			is_pos: 1,
-			update_stock: 1,
-		}
+		discount_amount: additionalDiscount.value || 0,
+		additional_discount_percentage: additionalDiscountPercentage.value || 0,
+		coupon_code: couponCode.value,
+		is_pos: 1,
+		update_stock: 1,
+	}
 
-		if (targetDoctype === "Sales Order") {
-			const today = new Date().toISOString().split("T")[0]
-			invoiceData.delivery_date = today
-			invoiceData.transaction_date = today
-		}
+	if (targetDoctype === "Sales Order") {
+		const today = new Date().toISOString().split("T")[0]
+		invoiceData.delivery_date = today
+		invoiceData.transaction_date = today
+	}
 
-		const result = await updateInvoiceResource.submit({ data: invoiceData })
-		return result?.data || result
+	const result = await updateInvoiceResource.submit({ data: invoiceData })
+	return result?.data || result
 	}
 
 	async function submitInvoice(
@@ -889,15 +898,16 @@ export function useInvoice() {
 						amount: p.amount,
 						type: p.type,
 					})),
-					discount_amount: additionalDiscount.value || 0,
-					coupon_code: couponCode.value,
-					is_pos: 1,
-					update_stock: 1, // Critical: Ensures stock is updated
-				}
+				discount_amount: additionalDiscount.value || 0,
+				additional_discount_percentage: additionalDiscountPercentage.value || 0,
+				coupon_code: couponCode.value,
+				is_pos: 1,
+				update_stock: 1, // Critical: Ensures stock is updated
+			}
 
-				if (targetDoctype === "Sales Order" && deliveryDate) {
-					invoiceData.delivery_date = deliveryDate
-				}
+			if (targetDoctype === "Sales Order" && deliveryDate) {
+				invoiceData.delivery_date = deliveryDate
+			}
 
 				// Add sales_team if provided
 				if (rawSalesTeam && rawSalesTeam.length > 0) {
@@ -1035,16 +1045,17 @@ export function useInvoice() {
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
 			items: formatItemsForSubmission(rawItems),
-			payments: paymentsForInvoice,
-			discount_amount: additionalDiscount.value || 0,
-			coupon_code: couponCode.value,
-			is_pos: 1,
-			update_stock: 1,
-		}
+		payments: paymentsForInvoice,
+		discount_amount: additionalDiscount.value || 0,
+		additional_discount_percentage: additionalDiscountPercentage.value || 0,
+		coupon_code: couponCode.value,
+		is_pos: 1,
+		update_stock: 1,
+	}
 
-		if (targetDoctype === "Sales Order" && deliveryDate) {
-			invoiceData.delivery_date = deliveryDate
-		}
+	if (targetDoctype === "Sales Order" && deliveryDate) {
+		invoiceData.delivery_date = deliveryDate
+	}
 
 		if (rawSalesTeam && rawSalesTeam.length > 0) {
 			invoiceData.sales_team = rawSalesTeam.map((member) => ({
@@ -1063,13 +1074,14 @@ export function useInvoice() {
 			throw new Error("Failed to create draft invoice for bank transfer")
 		}
 
-		const grandTotal = invoiceDoc.grand_total || grandTotal.value
+		// Dùng grand_total từ backend (đã tính đúng với thuế + discount/pricing rule).
+		const invoiceGrandTotal = invoiceDoc.grand_total
 		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
-		const vnpostAmount = grandTotal - paidAmount
+		const vnpostAmount = invoiceGrandTotal - paidAmount
 
 		return {
 			name: invoiceDoc.name,
-			grand_total: grandTotal,
+			grand_total: invoiceGrandTotal,
 			vnpost_amount: vnpostAmount,
 		}
 	}
@@ -1116,6 +1128,7 @@ export function useInvoice() {
 		invoiceItems.value = []
 		payments.value = []
 		additionalDiscount.value = 0
+		additionalDiscountPercentage.value = 0
 		couponCode.value = null
 
 		// Reset incremental cache
@@ -1143,6 +1156,7 @@ export function useInvoice() {
 		invoiceItems.value = []
 		payments.value = []
 		additionalDiscount.value = 0
+		additionalDiscountPercentage.value = 0
 		couponCode.value = null
 
 		// Reset incremental cache
@@ -1218,6 +1232,7 @@ export function useInvoice() {
 		posProfile,
 		posOpeningShift,
 		additionalDiscount,
+		additionalDiscountPercentage,
 		couponCode,
 		taxRules,
 		taxInclusive,

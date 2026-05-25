@@ -1635,18 +1635,10 @@ const displaySubtotal = computed(() => {
 });
 
 /**
- * Display grand total that visually equals Subtotal + Tax - Discount.
- *
- * This ensures the math is intuitive for cashiers:
- * Grand Total = displaySubtotal + Tax - Discount
- *
- * @returns {Number} Grand total amount to display
+ * Display grand total — dùng thẳng grandTotal từ store (đã tính additional discount).
+ * Không tính lại từ subtotal+tax-discount vì sẽ bỏ sót invoice-level discount (pricing rule).
  */
-const displayGrandTotal = computed(() => {
-	// Always: displaySubtotal + tax - discount
-	// This makes the display consistent and intuitive
-	return displaySubtotal.value + props.taxAmount - props.discountAmount;
-});
+const displayGrandTotal = computed(() => props.grandTotal);
 
 /**
  * ============================================================================

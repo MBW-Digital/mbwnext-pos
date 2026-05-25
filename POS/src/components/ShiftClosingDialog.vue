@@ -237,7 +237,7 @@
                     </div>
 
                     <!-- Simple Input with Native Arrows -->
-                    <div class="w-40 md:w-48">
+                    <div v-if="!isCashMethod(payment.mode_of_payment)" class="w-40 md:w-48">
                       <Input
                         :id="`payment-${idx}`"
                         :modelValue="payment.closing_amount"
@@ -251,6 +251,21 @@
                         class="text-base md:text-lg text-center font-semibold"
                       />
                     </div>
+                    <div v-else class="text-end">
+                      <div class="text-xs uppercase text-gray-500">{{ __('Total') }}</div>
+                      <div class="text-base md:text-lg font-bold text-gray-900">
+                        {{ formatCurrency(payment.closing_amount || 0) }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div v-if="isCashMethod(payment.mode_of_payment)" class="mt-3">
+                    <CashDenominationCounter
+                      :input-id-prefix="`closing-entry-${idx}`"
+                      :modelValue="payment.closing_amount"
+                      @update:modelValue="(value) => updateClosingAmount(payment, value)"
+                      :disabled="submitResource.loading"
+                    />
                   </div>
                 </div>
               </div>
@@ -328,6 +343,7 @@
                         {{ __('Actual Amount *') }}
                       </label>
                       <Input
+                        v-if="!isCashMethod(payment.mode_of_payment)"
                         :modelValue="payment.closing_amount"
                         @update:modelValue="(value) => updateClosingAmount(payment, value)"
                         type="number"
@@ -338,10 +354,25 @@
                         :aria-label="`Enter actual amount for ${payment.mode_of_payment}`"
                         class="text-base md:text-lg"
                       />
+                      <div v-else class="text-base md:text-lg font-semibold text-gray-900">
+                        {{ formatCurrency(payment.closing_amount || 0) }}
+                      </div>
                       <div class="text-xs text-gray-500 mt-0.5 md:mt-1 hidden sm:block">
                         {{ showSuccessReport ? __('Final Amount') : __('Count & enter') }}
                       </div>
                     </div>
+                  </div>
+
+                  <div
+                    v-if="isCashMethod(payment.mode_of_payment) && !showSuccessReport"
+                    class="mt-3"
+                  >
+                    <CashDenominationCounter
+                      :input-id-prefix="`closing-review-${idx}`"
+                      :modelValue="payment.closing_amount"
+                      @update:modelValue="(value) => updateClosingAmount(payment, value)"
+                      :disabled="submitResource.loading"
+                    />
                   </div>
 
                   <!-- Difference Alert -->
@@ -504,7 +535,9 @@ import { storeToRefs } from "pinia"
 import { useShift } from "../composables/useShift"
 import { useFormatters } from "../composables/useFormatters"
 import { usePOSSettingsStore } from "../stores/posSettings"
+import CashDenominationCounter from "./common/CashDenominationCounter.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
+import { isCashPaymentMethod } from "../composables/useCashDenominations"
 
 const props = defineProps({
 	modelValue: {
@@ -559,8 +592,9 @@ async function loadClosingData() {
 			data.payment_reconciliation = data.payment_reconciliation.map((payment) =>
 				reactive({
 					...payment,
-					closing_amount:
-						payment.closing_amount ?? payment.expected_amount ?? 0,
+					closing_amount: hideExpectedAmount.value
+						? payment.closing_amount ?? null
+						: payment.closing_amount ?? payment.expected_amount ?? 0,
 					difference: 0,
 				}),
 			)
@@ -624,18 +658,8 @@ async function submitClosing() {
 		// Submit to server
 		await submitResource.submit({ closing_shift: closingData.value })
 
-		// If hideExpectedAmount is enabled, show success report before closing
-		if (hideExpectedAmount.value) {
-			showSuccessReport.value = true
-			// Auto-expand invoice details in success report
-			if (invoiceCount.value > 0 && invoiceCount.value <= 10) {
-				showInvoiceDetails.value = true
-			}
-		} else {
-			// Normal mode: close immediately
-			emit("shift-closed")
-			closeDialog()
-		}
+		emit("shift-closed")
+		closeDialog()
 	} catch (error) {
 		console.error("Error submitting closing shift:", error)
 		errorMessage.value = 'Failed to close shift. Please verify all amounts and try again.'
@@ -656,9 +680,7 @@ function closeDialog() {
 }
 
 // UI State Computed Properties
-const shouldShowSummary = computed(() =>
-	!hideExpectedAmount.value || showSuccessReport.value
-)
+const shouldShowSummary = computed(() => !hideExpectedAmount.value)
 
 const isInEntryMode = computed(() =>
 	hideExpectedAmount.value && !showSuccessReport.value
@@ -666,12 +688,9 @@ const isInEntryMode = computed(() =>
 
 const reconciliationMessage = computed(() => {
 	if (isInEntryMode.value) {
-		return 'Enter the actual counted amounts for each payment method'
+		return __('Count cash by denomination and enter actual amounts for each payment method')
 	}
-	if (showSuccessReport.value && hideExpectedAmount.value) {
-		return 'Shift closed successfully - Review the final reconciliation below'
-	}
-	return 'Count your cash and enter actual amounts below'
+	return __('Count your cash and enter actual amounts below')
 })
 
 // Computed properties for real-time recalculation
@@ -744,9 +763,13 @@ function getShiftDuration() {
 	const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
 
 	if (hours > 0) {
-    return __('{0}h {1}m', [hours, minutes])
+		return __('{0}h {1}m', [hours, minutes])
 	}
 	return __('{0}m', [minutes])
+}
+
+function isCashMethod(methodName) {
+	return isCashPaymentMethod(methodName)
 }
 
 function getPaymentIcon(method) {

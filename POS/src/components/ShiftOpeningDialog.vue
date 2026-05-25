@@ -69,20 +69,35 @@
               <div
                 v-for="method in paymentMethods"
                 :key="method.name"
-                class="flex items-center gap-3 p-3 border rounded-lg"
+                class="rounded-lg border p-3"
               >
-                <div class="flex-1 text-start">
-                  <label class="text-sm font-medium text-gray-700">
-                    {{ method.mode_of_payment }}
-                  </label>
+                <div class="flex items-center gap-3">
+                  <div class="flex-1 text-start">
+                    <label class="text-sm font-medium text-gray-700">
+                      {{ method.mode_of_payment }}
+                    </label>
+                  </div>
+                  <div v-if="!isCashMethod(method.mode_of_payment)" class="w-32">
+                    <Input
+                      v-model="openingBalances[method.mode_of_payment]"
+                      type="number"
+                      placeholder="0.00"
+                      step="0.01"
+                      min="0"
+                    />
+                  </div>
+                  <div v-else class="text-end">
+                    <div class="text-xs uppercase text-gray-500">{{ __('Total') }}</div>
+                    <div class="text-base font-semibold text-gray-900">
+                      {{ formatCurrency(openingBalances[method.mode_of_payment] || 0) }}
+                    </div>
+                  </div>
                 </div>
-                <div class="w-32">
-                  <Input
+
+                <div v-if="isCashMethod(method.mode_of_payment)" class="mt-3">
+                  <CashDenominationCounter
+                    :input-id-prefix="`opening-${method.mode_of_payment}`"
                     v-model="openingBalances[method.mode_of_payment]"
-                    type="number"
-                    placeholder="0.00"
-                    step="0.01"
-                    min="0"
                   />
                 </div>
               </div>
@@ -197,8 +212,10 @@ import { useShift } from "../composables/useShift"
 import { useFormatters } from "../composables/useFormatters"
 import { useToast } from "../composables/useToast"
 import { call } from "../utils/apiWrapper"
+import CashDenominationCounter from "./common/CashDenominationCounter.vue"
 import ShiftClosingDialog from "./ShiftClosingDialog.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
+import { isCashPaymentMethod } from "../composables/useCashDenominations"
 
 const props = defineProps({
 	modelValue: Boolean,
@@ -213,7 +230,11 @@ const open = computed({
 
 const { createOpeningShift, getOpeningDialogData, checkOpeningShift } =
 	useShift()
-const { formatDateTime } = useFormatters()
+const { formatDateTime, formatCurrency } = useFormatters()
+
+function isCashMethod(methodName) {
+	return isCashPaymentMethod(methodName)
+}
 const { showError } = useToast()
 
 async function ensureNotClosedToday() {
@@ -327,6 +348,11 @@ function selectPosProfile(profile) {
 async function nextStep() {
 	if (step.value === 1 && selectedProfile.value) {
 		await dialogDataResource.fetch()
+		const balances = {}
+		for (const method of paymentMethods.value) {
+			balances[method.mode_of_payment] = 0
+		}
+		openingBalances.value = balances
 		step.value = 2
 	}
 }

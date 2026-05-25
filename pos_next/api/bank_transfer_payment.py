@@ -142,22 +142,24 @@ def process_incoming_transfer_for_invoice(
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
 		return
-	outstanding = flt(doc.outstanding_amount, 2)
-	if abs(flt(amount, 2) - outstanding) > 0.01:
-		frappe.log_error(
-			f"VNPost amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}",
-			"VNPost Pay",
-		)
-		return
-	mode_of_payment = get_bank_transfer_mode_of_payment()
 	if doc.docstatus == 0:
 		doc.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
 		doc.submit()
 		frappe.db.commit()
 		doc = frappe.get_doc("Sales Invoice", invoice_name)
+	outstanding = flt(doc.outstanding_amount, 2)
+	if outstanding <= 0:
+		return
+	pay_amount = min(flt(amount, 2), outstanding)
+	if abs(flt(amount, 2) - outstanding) > 0.01:
+		frappe.log_error(
+			f"VNPost amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}; paying {pay_amount}",
+			"VNPost Pay",
+		)
+	mode_of_payment = get_bank_transfer_mode_of_payment()
 	add_bank_transfer_payment_to_invoice(
-		doc, amount, mode_of_payment, reference_code or str(gateway_transaction_id), gateway_transaction_id
+		doc, pay_amount, mode_of_payment, reference_code or str(gateway_transaction_id), gateway_transaction_id
 	)
 	if gateway_transaction_id:
 		gateway_dedup_log(

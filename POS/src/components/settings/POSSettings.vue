@@ -368,6 +368,11 @@
 											:label="__('Allow Manual Cash Drawer Open')"
 											:description="__('When enabled, cashiers can use Open Cash Drawer below. Each open is saved on the server with exact time (Till Exception Report).')"
 										/>
+										<CheckboxField
+											v-model="settings.hide_expected_amount"
+											:label="__('Blind Shift Closure')"
+											:description="__('Hide theoretical/expected amounts from cashiers during shift close. Cashiers only count and enter actual amounts.')"
+										/>
 										<div
 											v-if="Number(settings.allow_manual_cash_drawer)"
 											class="flex flex-col gap-2 pt-1 border-t border-gray-100"
@@ -580,6 +585,7 @@ const settings = ref({
 				allow_negative_stock: 0,
 	tax_inclusive: 0,
 	allow_manual_cash_drawer: 0,
+	hide_expected_amount: 0,
 })
 
 // Stock Sync Settings (localStorage persisted)

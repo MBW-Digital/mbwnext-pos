@@ -382,12 +382,17 @@
 								<span class="text-gray-600 text-start">{{ __('Tax') }}</span>
 								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(taxAmount) }}</span>
 							</div>
-							<!-- Discount (shows the calculated additional discount amount) -->
-							<div v-if="discountAmount > 0" class="flex items-center justify-between text-sm">
-								<span class="text-gray-600 text-start">{{ __('Discount') }}</span>
-								<span class="font-medium text-red-600 text-end">-{{ formatCurrency(discountAmount) }}</span>
-							</div>
-							<!-- Grand Total -->
+						<!-- Discount (shows the calculated additional discount amount) -->
+						<div v-if="discountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(discountAmount) }}</span>
+						</div>
+						<!-- Pricing Rule invoice-level discount -->
+						<div v-if="pricingRuleDiscountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Additional Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(pricingRuleDiscountAmount) }}</span>
+						</div>
+						<!-- Grand Total -->
 							<div class="flex items-center justify-between pt-2 mt-1 border-t border-gray-300">
 								<span :class="['font-bold text-gray-900 text-start', isCompactMode ? 'text-sm' : 'text-base']">{{ __('Grand Total') }}</span>
 								<span :class="['font-bold text-gray-900 text-end', dynamicTextSize.grandTotal]">{{ formatCurrency(grandTotal) }}</span>
@@ -1625,6 +1630,14 @@ const remainingAvailableCredit = computed(() => {
 	const usedCredit = getMethodTotal("Customer Credit")
 	const remaining = totalAvailableCredit.value - usedCredit
 	return remaining > 0 ? roundCurrency(remaining) : 0
+})
+
+// Discount từ invoice-level pricing rule (additional_discount_percentage):
+// = (subtotal + tax - item_discount) - grandTotal
+const pricingRuleDiscountAmount = computed(() => {
+	const beforeAdditional = props.subtotal + props.taxAmount - props.discountAmount
+	const diff = roundCurrency(beforeAdditional - props.grandTotal)
+	return diff > 0.01 ? diff : 0
 })
 
 // Calculate the actual discount amount based on type (percentage or fixed amount)

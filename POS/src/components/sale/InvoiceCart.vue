@@ -952,12 +952,9 @@
 
 								<!-- Unit Price -->
 								<span
-									v-if="item.is_free_display"
-									class="text-[10px] font-bold text-green-700 whitespace-nowrap flex-shrink-0"
+									v-if="!item.is_free_display"
+									class="text-[10px] font-medium text-gray-500 whitespace-nowrap flex-shrink-0"
 								>
-									{{ __("Free") }}
-								</span>
-								<span v-else class="text-[10px] font-medium text-gray-500 whitespace-nowrap flex-shrink-0">
 									{{ formatCurrency(item.rate) }}
 								</span>
 

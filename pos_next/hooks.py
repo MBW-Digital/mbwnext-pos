@@ -230,7 +230,8 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
-		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event"
+		"validate": "pos_next.api.pos_profile_hooks.validate",
+		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
 	}
 }
 

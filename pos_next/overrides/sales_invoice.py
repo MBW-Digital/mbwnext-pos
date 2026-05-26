@@ -157,10 +157,7 @@ class CustomSalesInvoice(SalesInvoice):
 		return party_type, party
 
 	def make_loyalty_point_entry(self):
-		if not (cint(self.is_pos) and self.pos_profile):
-			return super().make_loyalty_point_entry()
-
-		excluded_item_lines = get_loyalty_excluded_item_lines(self.pos_profile)
+		excluded_item_lines = get_loyalty_excluded_item_lines(self.loyalty_program)
 		if not excluded_item_lines:
 			return super().make_loyalty_point_entry()
 

@@ -4,5 +4,5 @@
 from frappe.model.document import Document
 
 
-class POSProfileLoyaltyExcludedItemLine(Document):
+class LoyaltyProgramExcludedItemLine(Document):
 	pass

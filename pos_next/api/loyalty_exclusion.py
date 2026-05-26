@@ -5,13 +5,13 @@ import frappe
 from frappe.utils import cint, flt
 
 
-def get_loyalty_excluded_item_lines(pos_profile):
+def get_loyalty_excluded_item_lines(loyalty_program):
 	"""Return all Item Line names excluded from loyalty (including descendants)."""
-	if not pos_profile:
+	if not loyalty_program:
 		return set()
 
-	profile = frappe.get_cached_doc("POS Profile", pos_profile)
-	rows = profile.get("loyalty_excluded_item_lines") or []
+	program = frappe.get_cached_doc("Loyalty Program", loyalty_program)
+	rows = program.get("loyalty_excluded_item_lines") or []
 	if not rows:
 		return set()
 

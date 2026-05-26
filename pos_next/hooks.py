@@ -230,9 +230,11 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
-		"validate": "pos_next.api.pos_profile_hooks.validate",
 		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
-	}
+	},
+	"Loyalty Program": {
+		"validate": "pos_next.api.loyalty_program_hooks.validate",
+	},
 }
 
 # Scheduled Tasks

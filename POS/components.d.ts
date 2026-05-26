@@ -11,6 +11,7 @@ declare module 'vue' {
     ActionButton: typeof import('./src/components/common/ActionButton.vue')['default']
     AutocompleteSelect: typeof import('./src/components/common/AutocompleteSelect.vue')['default']
     BatchSerialDialog: typeof import('./src/components/sale/BatchSerialDialog.vue')['default']
+    BundleChoiceDialog: typeof import('./src/components/sale/BundleChoiceDialog.vue')['default']
     CameraBarcodeDialog: typeof import('./src/components/sale/CameraBarcodeDialog.vue')['default']
     CashDenominationCounter: typeof import('./src/components/common/CashDenominationCounter.vue')['default']
     CheckboxField: typeof import('./src/components/settings/CheckboxField.vue')['default']

@@ -483,6 +483,42 @@
 		<!-- Cart Items -->
 		<div class="flex-1 overflow-y-auto p-0.5 sm:p-1.5 bg-gray-50">
 			<div
+				v-if="cartStore.bundleSuggestions.length > 0"
+				class="mx-1 mb-2 rounded-lg border border-amber-200 bg-amber-50 p-2"
+			>
+				<p class="text-[11px] font-semibold text-amber-900 mb-1.5">
+					{{ __("Product bundle suggestions") }}
+					<span class="font-normal text-amber-700">
+						({{ cartStore.bundleSuggestions.length }})
+					</span>
+				</p>
+				<div class="max-h-48 overflow-y-auto flex flex-col gap-1.5 pe-0.5">
+					<div
+						v-for="suggestion in cartStore.bundleSuggestions"
+						:key="suggestion.bundle_code"
+						class="rounded-md bg-white border border-amber-100 p-2"
+					>
+					<p class="text-[11px] font-semibold text-gray-900">
+						{{ suggestion.bundle_name }}
+					</p>
+					<p class="text-[10px] text-gray-600 mt-1">
+						{{ __("Add missing items to complete this bundle:") }}
+					</p>
+					<div class="flex flex-wrap gap-1 mt-1.5">
+						<button
+							v-for="missing in suggestion.missing_items"
+							:key="`${suggestion.bundle_code}-${missing.item_code}`"
+							type="button"
+							class="inline-flex items-center rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-900 hover:bg-amber-200"
+							@click="cartStore.addBundleSuggestionItem(suggestion, missing)"
+						>
+							+ {{ formatQuantity(missing.qty) }} {{ missing.item_name }}
+						</button>
+					</div>
+				</div>
+				</div>
+			</div>
+			<div
 				v-if="items.length === 0"
 				class="flex flex-col items-center justify-center h-full px-3 sm:px-4 py-6"
 			>
@@ -834,7 +870,7 @@
 										inputmode="decimal"
 										:disabled="item.is_resolved_barcode"
 										:class="[
-											'w-9 h-6 text-center border-0 text-[11px] font-bold focus:outline-none',
+											'w-14 min-w-[3.5rem] h-6 text-center border-0 text-[11px] font-bold focus:outline-none tabular-nums',
 											item.is_resolved_barcode
 												? 'bg-amber-50 text-amber-700 cursor-not-allowed'
 												: 'bg-white text-gray-900 focus:ring-1 focus:ring-blue-500'

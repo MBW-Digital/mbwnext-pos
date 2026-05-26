@@ -595,6 +595,12 @@
 				"
 			/>
 
+			<BundleChoiceDialog
+				v-model="cartStore.showBundleChoiceDialog"
+				:choices="cartStore.bundleMatchChoices"
+				@select="cartStore.confirmBundleChoice"
+			/>
+
 			<!-- Batch/Serial Dialog -->
 			<BatchSerialDialog
 				v-model="uiStore.showBatchSerialDialog"
@@ -1020,6 +1026,7 @@ import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";
 import OffersDialog from "@/components/sale/OffersDialog.vue";
+import BundleChoiceDialog from "@/components/sale/BundleChoiceDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";

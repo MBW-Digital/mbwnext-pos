@@ -1,26 +1,18 @@
 import { db, getSetting, setSetting } from "./db";
+import { sanitizeItemsForCache } from "./itemCacheSanitizer";
 
 // Cache items in IndexedDB
 export const cacheItems = async (items, priceList = null) => {
 	try {
-		if (!items || items.length === 0) return;
-
-		// Process items with barcodes
-		const processedItems = items.map((item) => ({
-			...item,
-			barcodes: item.item_barcode
-				? Array.isArray(item.item_barcode)
-					? item.item_barcode.map((b) => b.barcode).filter(Boolean)
-					: [item.item_barcode]
-				: [],
-		}));
+		const processedItems = sanitizeItemsForCache(items);
+		if (processedItems.length === 0) return;
 
 		// Save to items table
 		await db.items.bulkPut(processedItems);
 
 		// Save prices if price list is provided
 		if (priceList) {
-			const prices = items.map((item) => ({
+			const prices = processedItems.map((item) => ({
 				price_list: priceList,
 				item_code: item.item_code,
 				rate: item.rate || item.price_list_rate || 0,
@@ -32,7 +24,7 @@ export const cacheItems = async (items, priceList = null) => {
 		// Update last sync time
 		await setSetting("items_last_sync", Date.now());
 
-		console.log(`Cached ${items.length} items`);
+		console.log(`Cached ${processedItems.length} items`);
 		return true;
 	} catch (error) {
 		console.error("Error caching items:", error);

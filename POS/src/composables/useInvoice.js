@@ -181,6 +181,35 @@ export function useInvoice() {
 
 	// Actions
 	/**
+	 * Find an existing cart line that can receive merged quantity.
+	 * Lines merge when item, UOM, batch, price list rate, and discount tier match.
+	 */
+	function findMergeableLine(item) {
+		const itemUom = item.uom || item.stock_uom || ""
+		return (
+			invoiceItems.value.find((line) => {
+				if (line.item_code !== item.item_code) {
+					return false
+				}
+				const lineUom = line.uom || line.stock_uom || ""
+				if (lineUom !== itemUom) {
+					return false
+				}
+				if (!(line.has_serial_no || item.has_serial_no)) {
+					if (String(line.batch_no ?? "") !== String(item.batch_no ?? "")) {
+						return false
+					}
+				}
+				const lineRate = roundCurrency(line.price_list_rate || line.rate || 0)
+				const itemRate = roundCurrency(item.price_list_rate || item.rate || 0)
+				const lineDisc = Number.parseFloat(line.discount_percentage) || 0
+				const itemDisc = Number.parseFloat(item.discount_percentage) || 0
+				return lineRate === itemRate && lineDisc === itemDisc
+			}) || null
+		)
+	}
+
+	/**
 	 * @param {Object} item - Item to add
 	 * @param {number} quantity - Quantity
 	 * @param {{ merge?: boolean }} options - merge: false = always add as new line (do not merge with existing)
@@ -188,20 +217,7 @@ export function useInvoice() {
 	function addItem(item, quantity = 1, options = {}) {
 		const itemUom = item.uom || item.stock_uom
 		const shouldMerge = options.merge !== false
-		const existingItem = shouldMerge
-			? invoiceItems.value.find((i) => {
-					if (i.item_code !== item.item_code || i.uom !== itemUom) {
-						return false
-					}
-					// Batch lines with different batches (or populated vs unset) stay separate rows
-					if (!(i.has_serial_no || item.has_serial_no)) {
-						return (
-							String(i.batch_no ?? "") === String(item.batch_no ?? "")
-						)
-					}
-					return true
-				})
-			: null
+		const existingItem = shouldMerge ? findMergeableLine(item) : null
 
 		if (existingItem) {
 			// Store old values before update for incremental cache adjustment

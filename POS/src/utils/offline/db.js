@@ -71,6 +71,9 @@ const CURRENT_SCHEMA = {
 	// Indexed by name (unique), filterable by pos_profile
 	offers: "&name, pos_profile, apply_on, valid_upto",
 
+	// Product Bundle definitions for offline combo detection
+	product_bundles: "&bundle_code, pos_profile",
+
 	// Invoice history cache for offline viewing
 	// Stores submitted invoices for offline access
 	invoice_history: "&name, pos_profile, posting_date, customer",

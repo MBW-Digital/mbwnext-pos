@@ -7,7 +7,14 @@ import {
 	formatStockError,
 } from "@/utils/stockValidator"
 import { offlineState } from "@/utils/offline/offlineState"
+import { offlineWorker } from "@/utils/offline/workerClient"
+import { evaluateProductBundleMatches } from "@/utils/productBundleMatch"
+import { cacheItems, getCachedItemByCodeOrName, getItemWithPrice } from "@/utils/offline/items"
+import { useItemSearchStore } from "@/stores/itemSearch"
 import { useToast } from "@/composables/useToast"
+import { call } from "@/utils/apiWrapper"
+import { roundCurrency } from "@/utils/currency"
+import { CoalescingMutex } from "@/utils/mutex"
 import { defineStore } from "pinia"
 import { computed, nextTick, ref, toRaw, watch } from "vue"
 
@@ -114,6 +121,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	const offersStore = usePOSOffersStore()
 	const settingsStore = usePOSSettingsStore()
+	const itemSearchStore = useItemSearchStore()
 
 	// Additional cart state
 	const pendingItem = ref(null)
@@ -140,6 +148,429 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	// Async queue for sequential offer processing
 	const offerQueue = createAsyncQueue()
+
+	// Product Bundle auto-match state
+	const bundleMatchChoices = ref([])
+	const showBundleChoiceDialog = ref(false)
+	const bundleSuggestions = ref([])
+	const suppressBundleMatch = ref(false)
+	const lastBundlePromptHash = ref("")
+	const isProcessingBundleMatch = ref(false)
+	const bundleSuggestionAddMutex = new CoalescingMutex({
+		name: "BundleSuggestionAdd",
+		timeout: 15000,
+	})
+
+	function findCartLineForItem(itemCode, { excludeDiscounted = true } = {}) {
+		return invoiceItems.value.find((line) => {
+			if (line.item_code !== itemCode || line.is_free_item) {
+				return false
+			}
+			if (
+				excludeDiscounted &&
+				(Number.parseFloat(line.discount_percentage) || 0) > 0
+			) {
+				return false
+			}
+			return true
+		})
+	}
+
+	function buildBundleCartPayload() {
+		return (invoiceItems.value || []).map((item) => ({
+			item_code: item.item_code,
+			quantity: item.quantity,
+			uom: item.uom,
+			is_free_item: item.is_free_item ? 1 : 0,
+		}))
+	}
+
+	function consumeComponentsFromCart(consumeList = []) {
+		for (const entry of consumeList) {
+			let remaining = Number.parseFloat(entry.qty) || 0
+			if (remaining <= 1e-9) continue
+
+			// Match by item_code only — UOM on cart lines may differ from bundle definition
+			const lines = invoiceItems.value.filter(
+				(line) => line.item_code === entry.item_code && !line.is_free_item,
+			)
+
+			for (const line of lines) {
+				if (remaining <= 1e-9) break
+				const lineQty = Number.parseFloat(line.quantity) || 0
+				if (lineQty <= remaining + 1e-9) {
+					remaining -= lineQty
+					removeItem(line.item_code, line.uom)
+				} else {
+					updateItemQuantity(line.item_code, lineQty - remaining, line.uom)
+					remaining = 0
+				}
+			}
+		}
+	}
+
+	let lastBundleCacheProfile = null
+
+	async function ensureProductBundleCache() {
+		if (offlineState.isOffline || !posProfile.value) {
+			return
+		}
+		if (lastBundleCacheProfile === posProfile.value) {
+			return
+		}
+		await refreshProductBundleCache()
+		lastBundleCacheProfile = posProfile.value
+	}
+
+	async function refreshProductBundleCache() {
+		if (offlineState.isOffline || !posProfile.value) {
+			return
+		}
+		try {
+			const response = await call(
+				"pos_next.api.product_bundle_match.get_product_bundle_definitions",
+			)
+			const bundles = response?.message || response || []
+			if (!Array.isArray(bundles) || bundles.length === 0) {
+				return
+			}
+			await offlineWorker.cacheProductBundles(bundles, posProfile.value)
+
+			for (const bundle of bundles) {
+				if (!bundle?.bundle_code) continue
+				const existing = await getCachedItemByCodeOrName(bundle.bundle_code)
+				if (existing?.item_code) continue
+				try {
+					const details = await getItemDetailsResource.submit({
+						item_code: bundle.bundle_code,
+						pos_profile: posProfile.value,
+						customer: customer.value?.name || customer.value,
+						qty: 1,
+					})
+					if (details?.item_code) {
+						await cacheItems(
+							[{ ...details, is_bundle: 1 }],
+							details.price_list || details.selling_price_list,
+						)
+					}
+				} catch (cacheError) {
+					console.warn(
+						"refreshProductBundleCache item:",
+						bundle.bundle_code,
+						cacheError,
+					)
+				}
+			}
+		} catch (error) {
+			console.warn("refreshProductBundleCache:", error)
+		}
+	}
+
+	async function resolveOfflineBundleItem(match) {
+		let item =
+			(await getCachedItemByCodeOrName(match.bundle_code)) ||
+			itemSearchStore.allItems.find(
+				(row) => row.item_code === match.bundle_code,
+			)
+
+		if (!item?.item_code && match.bundle_name) {
+			item = await getCachedItemByCodeOrName(match.bundle_name)
+		}
+
+		if (!item?.item_code) {
+			const cachedBundles = await offlineWorker.getCachedProductBundles(
+				posProfile.value,
+			)
+			const bundleDef = (cachedBundles || []).find(
+				(row) => row.bundle_code === match.bundle_code,
+			)
+			if (bundleDef) {
+				item = {
+					item_code: bundleDef.bundle_code,
+					item_name: bundleDef.item_name || bundleDef.bundle_name,
+					stock_uom: bundleDef.stock_uom,
+					uom: bundleDef.stock_uom,
+					description: bundleDef.description,
+					image: bundleDef.image,
+					is_stock_item: bundleDef.is_stock_item || 0,
+					is_bundle: 1,
+					rate: 0,
+					price_list_rate: 0,
+				}
+			}
+		}
+
+		return item
+	}
+
+	async function applyProductBundleMatch(match) {
+		if (!match?.bundle_code || !match.complete_sets || match.complete_sets < 1) {
+			return false
+		}
+
+		suppressBundleMatch.value = true
+		try {
+			let bundleItem = null
+			if (offlineState.isOffline) {
+				bundleItem = await resolveOfflineBundleItem(match)
+			} else {
+				bundleItem = await getItemDetailsResource.submit({
+					item_code: match.bundle_code,
+					pos_profile: posProfile.value,
+					customer: customer.value?.name || customer.value,
+					qty: match.complete_sets,
+				})
+			}
+
+			if (!bundleItem?.item_code) {
+				throw new Error(__("Unable to load product bundle item"))
+			}
+
+			const row = offlineState.isOffline
+				? { ...bundleItem, is_bundle: 1 }
+				: await enrichItemTaxIfNeeded(
+						{
+							...bundleItem,
+							item_code: bundleItem.item_code || match.bundle_code,
+							item_name:
+								bundleItem.item_name || match.bundle_name || match.bundle_code,
+							is_bundle: 1,
+						},
+						match.complete_sets,
+					)
+
+			consumeComponentsFromCart(match.consume || [])
+
+			const bundleCode = bundleItem.item_code || match.bundle_code
+			const existingParent = invoiceItems.value.find(
+				(line) => line.item_code === bundleCode,
+			)
+
+			if (existingParent) {
+				const newQty =
+					(Number.parseFloat(existingParent.quantity) || 0) +
+					match.complete_sets
+				updateItemQuantity(existingParent.item_code, newQty, existingParent.uom)
+			} else {
+				await addItem(row, match.complete_sets, true, posProfile.value, {
+					merge: true,
+				})
+			}
+
+			showSuccess(
+				__("Applied product bundle: {0}", [
+					match.bundle_name || match.bundle_code,
+				]),
+			)
+			bundleMatchChoices.value = []
+			showBundleChoiceDialog.value = false
+			bundleSuggestions.value = []
+			debouncedProcessOffers()
+			return true
+		} catch (error) {
+			console.error("applyProductBundleMatch:", error)
+			showError(parseError(error))
+			return false
+		} finally {
+			await nextTick()
+			suppressBundleMatch.value = false
+		}
+	}
+
+	async function processBundleMatchInternal() {
+		if (
+			suppressBundleMatch.value ||
+			isProcessingBundleMatch.value ||
+			!posProfile.value ||
+			!invoiceItems.value.length
+		) {
+			if (!suppressBundleMatch.value) {
+				bundleSuggestions.value = []
+			}
+			return
+		}
+
+		const cartHash = generateCartHash()
+		isProcessingBundleMatch.value = true
+		try {
+			let result = { auto_apply: null, choices: [], suggestions: [] }
+
+			if (offlineState.isOffline) {
+				const bundles = await offlineWorker.getCachedProductBundles(
+					posProfile.value,
+				)
+				if (!bundles?.length) {
+					bundleSuggestions.value = []
+					return
+				}
+				result = evaluateProductBundleMatches(
+					buildBundleCartPayload(),
+					bundles,
+				)
+			} else {
+				await ensureProductBundleCache()
+				const response = await call(
+					"pos_next.api.product_bundle_match.get_product_bundle_matches",
+					{
+						cart_items: buildBundleCartPayload(),
+						pos_profile: posProfile.value,
+					},
+				)
+				result = response?.message || response || {}
+			}
+
+			bundleSuggestions.value = result.suggestions || []
+
+			if (result.auto_apply) {
+				await applyProductBundleMatch(result.auto_apply)
+				lastBundlePromptHash.value = cartHash
+				return
+			}
+
+			if (result.choices?.length > 1) {
+				if (lastBundlePromptHash.value !== cartHash) {
+					bundleMatchChoices.value = result.choices
+					showBundleChoiceDialog.value = true
+					lastBundlePromptHash.value = cartHash
+				}
+				return
+			}
+
+			bundleMatchChoices.value = []
+			showBundleChoiceDialog.value = false
+		} catch (error) {
+			console.error("processBundleMatchInternal:", error)
+		} finally {
+			isProcessingBundleMatch.value = false
+		}
+	}
+
+	let bundleMatchTimeoutId = null
+	function debouncedProcessBundleMatch() {
+		if (bundleMatchTimeoutId) {
+			clearTimeout(bundleMatchTimeoutId)
+		}
+		bundleMatchTimeoutId = setTimeout(() => {
+			bundleMatchTimeoutId = null
+			processBundleMatchInternal()
+		}, 350)
+	}
+	debouncedProcessBundleMatch.cancel = () => {
+		if (bundleMatchTimeoutId) {
+			clearTimeout(bundleMatchTimeoutId)
+			bundleMatchTimeoutId = null
+		}
+	}
+
+	async function confirmBundleChoice(choice) {
+		await applyProductBundleMatch(choice)
+	}
+
+	async function resolveOfflineSuggestionItem(itemCode, missingItem) {
+		const priceList = posProfile.value?.selling_price_list
+
+		const memoryItem = itemSearchStore.findItemByCode(itemCode)
+		if (memoryItem?.item_code) {
+			return { ...memoryItem }
+		}
+
+		try {
+			const cachedWithPrice = await getItemWithPrice(itemCode, priceList)
+			if (cachedWithPrice?.item_code) {
+				return cachedWithPrice
+			}
+		} catch (error) {
+			console.warn("resolveOfflineSuggestionItem cache:", error)
+		}
+
+		try {
+			const searchResults = await offlineWorker.searchCachedItems(itemCode, 20)
+			const exact = searchResults?.find((row) => row.item_code === itemCode)
+			if (exact?.item_code) {
+				return exact
+			}
+		} catch (error) {
+			console.warn("resolveOfflineSuggestionItem worker search:", error)
+		}
+
+		if (missingItem?.item_name || missingItem?.uom) {
+			return {
+				item_code: itemCode,
+				item_name: missingItem.item_name || itemCode,
+				uom: missingItem.uom,
+				stock_uom: missingItem.uom,
+				rate: 0,
+				price_list_rate: 0,
+			}
+		}
+
+		return null
+	}
+
+	async function addBundleSuggestionItem(suggestion, missingItem) {
+		if (!missingItem?.item_code) return
+
+		await bundleSuggestionAddMutex.withLock(async () => {
+			const itemCode = missingItem.item_code
+			const qty = Number.parseFloat(missingItem.qty) || 1
+
+			suppressBundleMatch.value = true
+			try {
+				const existingLine = findCartLineForItem(itemCode)
+				if (existingLine) {
+					updateItemQuantity(
+						existingLine.item_code,
+						(Number.parseFloat(existingLine.quantity) || 0) + qty,
+						existingLine.uom,
+					)
+					return
+				}
+
+				let details = null
+				if (offlineState.isOffline) {
+					details = await resolveOfflineSuggestionItem(itemCode, missingItem)
+				} else {
+					details = await getItemDetailsResource.submit({
+						item_code: itemCode,
+						pos_profile: posProfile.value,
+						customer: customer.value?.name || customer.value,
+						qty,
+						uom: missingItem.uom,
+					})
+				}
+				if (!details?.item_code) {
+					showError(
+						__("Item not available offline: {0}", [
+							missingItem.item_name || itemCode,
+						]),
+					)
+					return
+				}
+
+				const mergeTarget = findCartLineForItem(details.item_code)
+				if (mergeTarget) {
+					details.uom = mergeTarget.uom || details.uom || details.stock_uom
+					details.stock_uom = mergeTarget.stock_uom || details.stock_uom
+					details.price_list_rate =
+						mergeTarget.price_list_rate ||
+						details.price_list_rate ||
+						details.rate
+					details.rate = mergeTarget.rate || details.rate
+				}
+
+				const row = offlineState.isOffline
+					? details
+					: await enrichItemTaxIfNeeded(details, qty)
+				await addItem(row, qty, true, posProfile.value, { merge: true })
+			} catch (error) {
+				showError(parseError(error))
+			} finally {
+				await nextTick()
+				suppressBundleMatch.value = false
+				debouncedProcessBundleMatch()
+			}
+		})
+	}
 
 	// Computed for backward compatibility and UI binding
 	const isProcessingOffers = computed(() => offerProcessingState.value.isProcessing)
@@ -231,6 +662,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	async function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
 		const row = await enrichItemTaxIfNeeded(item, qty)
 
+		if (options.merge !== false) {
+			const rowDisc = Number.parseFloat(row.discount_percentage) || 0
+			const rowRate = roundCurrency(row.price_list_rate || row.rate || 0)
+			const existingLine = invoiceItems.value.find((line) => {
+				if (line.item_code !== row.item_code) return false
+				const lineDisc = Number.parseFloat(line.discount_percentage) || 0
+				const lineRate = roundCurrency(line.price_list_rate || line.rate || 0)
+				return lineDisc === rowDisc && lineRate === rowRate
+			})
+			if (existingLine) {
+				row.uom = existingLine.uom || row.uom || row.stock_uom
+				row.stock_uom = existingLine.stock_uom || row.stock_uom
+				row.price_list_rate =
+					existingLine.price_list_rate || row.price_list_rate || row.rate
+				row.rate = existingLine.rate || row.rate
+			}
+		}
+
 		// Check stock availability before adding to cart
 		// Skip validation for batch/serial items - they have their own validation in the dialog
 		// Check for stock items AND Product Bundles (bundles now have calculated stock)
@@ -290,6 +739,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	function clearCart() {
 		// Cancel any pending offer processing
 		debouncedProcessOffers.cancel()
+		debouncedProcessBundleMatch.cancel()
 		offerQueue.cancel()
 
 		clearInvoiceCart()
@@ -305,6 +755,13 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		offerProcessingState.value.lastCartHash = ''
 		offerProcessingState.value.error = null
 		offerProcessingState.value.retryCount = 0
+
+		bundleMatchChoices.value = []
+		showBundleChoiceDialog.value = false
+		bundleSuggestions.value = []
+		lastBundlePromptHash.value = ""
+
+		lastBundleCacheProfile = null
 
 		// Sync the empty snapshot
 		syncOfferSnapshot()
@@ -1854,6 +2311,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// This batches rapid cart changes and ensures only one offer
 			// processing operation runs at a time
 			debouncedProcessOffers()
+			debouncedProcessBundleMatch()
 		},
 		{ immediate: true, flush: "post" },
 	)
@@ -1893,6 +2351,10 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		suppressOfferReapply,
 		currentDraftId,
 		offerProcessingState, // Offer processing state for UI feedback
+		bundleMatchChoices,
+		showBundleChoiceDialog,
+		bundleSuggestions,
+		isProcessingBundleMatch,
 
 		// Computed
 		displayCartItems,
@@ -1946,8 +2408,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		loadSnapshot,
 		cancelPendingOfferProcessing: () => {
 			debouncedProcessOffers.cancel()
+			debouncedProcessBundleMatch.cancel()
 			offerQueue.cancel()
 		},
+		confirmBundleChoice,
+		addBundleSuggestionItem,
+		applyProductBundleMatch,
 		forceRefreshOffers, // Force reprocess offers from scratch
 	}
 })

@@ -19,6 +19,7 @@
 
 import { logger } from '../utils/logger'
 import { generateOfflineId } from '../utils/offline/uuid'
+import { sanitizeItemsForCache } from '../utils/offline/itemCacheSanitizer'
 
 const log = logger.create('OfflineWorker')
 
@@ -648,18 +649,17 @@ async function cacheItemsFromServer(items) {
 		// Process all batches in single transaction (ACID + 10x performance boost)
 		await db.transaction('rw', 'items', 'item_prices', 'settings', async () => {
 			for (const batch of batches) {
-				// Normalize data using helper (zero-copy where possible)
-				const processedItems = batch.map(item => ({
-					...item,
-					barcodes: extractBarcodes(item),
-				}))
+				const processedItems = sanitizeItemsForCache(batch)
+				if (processedItems.length === 0) {
+					continue
+				}
 
 				// Bulk insert items (single DB round trip per batch)
 				await db.table("items").bulkPut(processedItems)
 
 				// Extract and bulk insert prices
 				// CRITICAL: Compound primary key requires valid price_list AND item_code
-				const prices = batch
+				const prices = processedItems
 					.filter(item => {
 						// Must have item_code (mandatory)
 						if (!item.item_code) return false
@@ -1078,6 +1078,63 @@ async function clearOffersCache(posProfile = null) {
 	} catch (error) {
 		log.error('Error clearing offers cache', error)
 		return { success: false, error: error.message }
+	}
+}
+
+/**
+ * Cache Product Bundle definitions for offline combo detection.
+ */
+async function cacheProductBundles(bundles, posProfile) {
+	try {
+		if (!Array.isArray(bundles) || !posProfile) {
+			return { success: false, count: 0 }
+		}
+
+		const db = await initDB()
+		const rows = bundles.map((bundle) => ({
+			...bundle,
+			pos_profile: posProfile,
+			_cached_at: Date.now(),
+		}))
+
+		await db.transaction("rw", db.table("product_bundles"), async () => {
+			await db.table("product_bundles").where("pos_profile").equals(posProfile).delete()
+			if (rows.length > 0) {
+				await db.table("product_bundles").bulkPut(rows)
+			}
+		})
+
+		await db.table("settings").put({
+			key: `product_bundles_last_sync_${posProfile}`,
+			value: Date.now(),
+		})
+
+		log.success(`Cached ${bundles.length} product bundles for profile ${posProfile}`)
+		return { success: true, count: bundles.length }
+	} catch (error) {
+		log.error("Error caching product bundles", error)
+		return { success: false, count: 0, error: error.message }
+	}
+}
+
+async function getCachedProductBundles(posProfile) {
+	try {
+		if (!posProfile) {
+			return []
+		}
+
+		const db = await initDB()
+		const bundles = await db
+			.table("product_bundles")
+			.where("pos_profile")
+			.equals(posProfile)
+			.toArray()
+
+		log.info(`Retrieved ${bundles.length} cached product bundles for profile ${posProfile}`)
+		return bundles
+	} catch (error) {
+		log.error("Error getting cached product bundles", error)
+		return []
 	}
 }
 
@@ -1533,6 +1590,14 @@ self.onmessage = async (event) => {
 
 			case "CLEAR_OFFERS_CACHE":
 				result = await clearOffersCache(payload.posProfile)
+				break
+
+			case "CACHE_PRODUCT_BUNDLES":
+				result = await cacheProductBundles(payload.bundles, payload.posProfile)
+				break
+
+			case "GET_CACHED_PRODUCT_BUNDLES":
+				result = await getCachedProductBundles(payload.posProfile)
 				break
 
 			default:

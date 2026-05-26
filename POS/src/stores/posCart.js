@@ -210,60 +210,92 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	}
 
 	let lastBundleCacheProfile = null
+	const bundleDefinitions = ref([])
+	let bundleDefinitionsProfile = null
+	let bundleDefinitionsFetchPromise = null
 
-	async function ensureProductBundleCache() {
-		if (offlineState.isOffline || !posProfile.value) {
+	async function cacheMissingBundleParentItems(bundles) {
+		if (offlineState.isOffline || !posProfile.value || !bundles?.length) {
 			return
 		}
-		if (lastBundleCacheProfile === posProfile.value) {
-			return
-		}
-		await refreshProductBundleCache()
-		lastBundleCacheProfile = posProfile.value
-	}
-
-	async function refreshProductBundleCache() {
-		if (offlineState.isOffline || !posProfile.value) {
-			return
-		}
-		try {
-			const response = await call(
-				"pos_next.api.product_bundle_match.get_product_bundle_definitions",
-			)
-			const bundles = response?.message || response || []
-			if (!Array.isArray(bundles) || bundles.length === 0) {
-				return
-			}
-			await offlineWorker.cacheProductBundles(bundles, posProfile.value)
-
-			for (const bundle of bundles) {
-				if (!bundle?.bundle_code) continue
-				const existing = await getCachedItemByCodeOrName(bundle.bundle_code)
-				if (existing?.item_code) continue
-				try {
-					const details = await getItemDetailsResource.submit({
-						item_code: bundle.bundle_code,
-						pos_profile: posProfile.value,
-						customer: customer.value?.name || customer.value,
-						qty: 1,
-					})
-					if (details?.item_code) {
-						await cacheItems(
-							[{ ...details, is_bundle: 1 }],
-							details.price_list || details.selling_price_list,
-						)
-					}
-				} catch (cacheError) {
-					console.warn(
-						"refreshProductBundleCache item:",
-						bundle.bundle_code,
-						cacheError,
+		for (const bundle of bundles) {
+			if (!bundle?.bundle_code) continue
+			const existing = await getCachedItemByCodeOrName(bundle.bundle_code)
+			if (existing?.item_code) continue
+			try {
+				const details = await getItemDetailsResource.submit({
+					item_code: bundle.bundle_code,
+					pos_profile: posProfile.value,
+					customer: customer.value?.name || customer.value,
+					qty: 1,
+				})
+				if (details?.item_code) {
+					await cacheItems(
+						[{ ...details, is_bundle: 1 }],
+						details.price_list || details.selling_price_list,
 					)
 				}
+			} catch (cacheError) {
+				console.warn(
+					"cacheMissingBundleParentItems:",
+					bundle.bundle_code,
+					cacheError,
+				)
 			}
-		} catch (error) {
-			console.warn("refreshProductBundleCache:", error)
 		}
+	}
+
+	async function prefetchProductBundleDefinitions() {
+		if (offlineState.isOffline || !posProfile.value) {
+			return
+		}
+		if (
+			bundleDefinitionsProfile === posProfile.value &&
+			bundleDefinitions.value.length > 0
+		) {
+			return
+		}
+		if (bundleDefinitionsFetchPromise) {
+			return bundleDefinitionsFetchPromise
+		}
+
+		bundleDefinitionsFetchPromise = (async () => {
+			try {
+				const response = await call(
+					"pos_next.api.product_bundle_match.get_product_bundle_definitions",
+				)
+				const bundles = response?.message || response || []
+				if (!Array.isArray(bundles) || bundles.length === 0) {
+					bundleDefinitions.value = []
+					bundleDefinitionsProfile = posProfile.value
+					return
+				}
+
+				bundleDefinitions.value = bundles
+				bundleDefinitionsProfile = posProfile.value
+				lastBundleCacheProfile = posProfile.value
+
+				await offlineWorker.cacheProductBundles(bundles, posProfile.value)
+				void cacheMissingBundleParentItems(bundles)
+
+				if (invoiceItems.value.length > 0 && !suppressBundleMatch.value) {
+					debouncedProcessBundleMatch()
+				}
+			} catch (error) {
+				console.warn("prefetchProductBundleDefinitions:", error)
+			} finally {
+				bundleDefinitionsFetchPromise = null
+			}
+		})()
+
+		return bundleDefinitionsFetchPromise
+	}
+
+	/** @deprecated Use prefetchProductBundleDefinitions — kept for offline refresh */
+	async function refreshProductBundleCache() {
+		bundleDefinitionsProfile = null
+		bundleDefinitions.value = []
+		await prefetchProductBundleDefinitions()
 	}
 
 	async function resolveOfflineBundleItem(match) {
@@ -408,15 +440,25 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					bundles,
 				)
 			} else {
-				await ensureProductBundleCache()
-				const response = await call(
-					"pos_next.api.product_bundle_match.get_product_bundle_matches",
-					{
-						cart_items: buildBundleCartPayload(),
-						pos_profile: posProfile.value,
-					},
-				)
-				result = response?.message || response || {}
+				if (
+					bundleDefinitionsProfile === posProfile.value &&
+					bundleDefinitions.value.length > 0
+				) {
+					result = evaluateProductBundleMatches(
+						buildBundleCartPayload(),
+						bundleDefinitions.value,
+					)
+				} else {
+					const response = await call(
+						"pos_next.api.product_bundle_match.get_product_bundle_matches",
+						{
+							cart_items: buildBundleCartPayload(),
+							pos_profile: posProfile.value,
+						},
+					)
+					result = response?.message || response || {}
+				}
+				void prefetchProductBundleDefinitions()
 			}
 
 			bundleSuggestions.value = result.suggestions || []
@@ -453,7 +495,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		bundleMatchTimeoutId = setTimeout(() => {
 			bundleMatchTimeoutId = null
 			processBundleMatchInternal()
-		}, 350)
+		}, 150)
 	}
 	debouncedProcessBundleMatch.cancel = () => {
 		if (bundleMatchTimeoutId) {
@@ -2314,6 +2356,22 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			debouncedProcessBundleMatch()
 		},
 		{ immediate: true, flush: "post" },
+	)
+
+	// Prefetch bundle definitions when POS profile is ready (online only)
+	watch(
+		() => posProfile.value,
+		(profile, previousProfile) => {
+			if (profile !== previousProfile) {
+				bundleDefinitionsProfile = null
+				bundleDefinitions.value = []
+				lastBundleCacheProfile = null
+			}
+			if (profile) {
+				void prefetchProductBundleDefinitions()
+			}
+		},
+		{ immediate: true },
 	)
 
 	// Additional watcher for applied offers changes (to handle removal edge cases)

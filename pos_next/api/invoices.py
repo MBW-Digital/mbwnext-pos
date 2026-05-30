@@ -3160,6 +3160,16 @@ def apply_offers(invoice_data, selected_offers=None):
                 elif isinstance(raw_rules, (list, tuple, set)):
                     rules = list(raw_rules)
             raw_rule_names.update(rules)
+            for free_item in result.get("free_item_data") or []:
+                rule_name = free_item.get("pricing_rules")
+                if rule_name:
+                    raw_rule_names.add(rule_name)
+
+        # Include explicitly selected offers so product-discount rules are in rule_map
+        # even when ERPNext only returns them via free_item_data.
+        candidate_rule_names = set(raw_rule_names)
+        if selected_offer_names:
+            candidate_rule_names.update(selected_offer_names)
 
         # Build a map of applicable pricing rules from the ERPNext engine results.
         #
@@ -3179,10 +3189,10 @@ def apply_offers(invoice_data, selected_offers=None):
         # (those require explicit coupon entry and are handled separately).
         #
         rule_map = {}
-        if raw_rule_names:
+        if candidate_rule_names:
             rule_records = frappe.get_all(
                 "Pricing Rule",
-                filters={"name": ["in", list(raw_rule_names)]},
+                filters={"name": ["in", list(candidate_rule_names)]},
                 fields=[
                     "name",
                     "promotional_scheme",
@@ -3236,6 +3246,18 @@ def apply_offers(invoice_data, selected_offers=None):
                 applicable_rule_names = [
                     name for name in rule_names or [] if name in rule_map
                 ]
+
+                # Product-discount rules may only return free_item_data (no line discount).
+                for free_item in result.get("free_item_data") or []:
+                    rule_name = free_item.get("pricing_rules")
+                    if not rule_name or rule_name not in rule_map:
+                        continue
+                    applied_rules.add(rule_name)
+                    free_item_doc = frappe._dict(free_item)
+                    free_item_doc.applied_promotional_scheme = rule_map[
+                        rule_name
+                    ].promotional_scheme
+                    free_items.append(free_item_doc)
 
                 if not applicable_rule_names:
                     continue
@@ -3320,16 +3342,6 @@ def apply_offers(invoice_data, selected_offers=None):
                         if rule_map[name].promotional_scheme
                     }
                 )
-
-                for free_item in result.get("free_item_data") or []:
-                    rule_name = free_item.get("pricing_rules")
-                    if not rule_name or rule_name not in rule_map:
-                        continue
-                    free_item_doc = frappe._dict(free_item)
-                    free_item_doc.applied_promotional_scheme = rule_map[
-                        rule_name
-                    ].promotional_scheme
-                    free_items.append(free_item_doc)
 
         # Enrich lines with item master data for group/brand rule matching
         for item in prepared_items:

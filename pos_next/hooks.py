@@ -49,7 +49,8 @@ _asset_version = get_build_version()
 
 # include js in doctype views
 doctype_js = {
-	"Material Request" : "controllers/js/material_request.js"
+	"Material Request": "controllers/js/material_request.js",
+	"Loyalty Program": "public/js/loyalty_program.js",
 }
 doctype_list_js = {
 	"Sales Invoice": "public/js/sales_invoice_list.js",

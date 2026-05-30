@@ -1155,15 +1155,99 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		return appliedOffers.value.map((entry) => entry.code)
 	}
 
-	function filterActiveOffers(appliedRuleNames = []) {
-		if (!Array.isArray(appliedRuleNames) || appliedRuleNames.length === 0) {
+	function isOfferAppliedInResponse(offerCode, appliedRules, freeItems) {
+		if (Array.isArray(appliedRules) && appliedRules.includes(offerCode)) {
+			return true
+		}
+		return Array.isArray(freeItems)
+			&& freeItems.some((row) => row?.pricing_rules === offerCode)
+	}
+
+	function collectAppliedRuleCodes(appliedRuleNames = [], freeItems = []) {
+		const ruleNames = new Set()
+
+		for (const rule of appliedRuleNames || []) {
+			if (rule) {
+				ruleNames.add(rule)
+			}
+		}
+
+		for (const row of freeItems || []) {
+			if (row?.pricing_rules) {
+				ruleNames.add(row.pricing_rules)
+			}
+		}
+
+		return [...ruleNames]
+	}
+
+	/**
+	 * Sync appliedOffers with backend response — adds missing rules and removes stale ones.
+	 * Required when multiple promotions stack (e.g. item discount + free item).
+	 */
+	function syncAppliedOffersFromResponse(appliedRuleNames = [], freeItems = [], source = "auto") {
+		const ruleNames = collectAppliedRuleCodes(appliedRuleNames, freeItems)
+
+		if (ruleNames.length === 0) {
 			appliedOffers.value = []
 			return
 		}
 
-		appliedOffers.value = appliedOffers.value.filter((entry) =>
-			appliedRuleNames.includes(entry.code),
-		)
+		const next = []
+
+		for (const code of ruleNames) {
+			const existing = appliedOffers.value.find((entry) => entry.code === code)
+			if (existing) {
+				next.push(existing)
+				continue
+			}
+
+			const offer = offersStore.availableOffers.find((o) => o.name === code)
+			next.push({
+				name: offer?.title || offer?.name || code,
+				code,
+				offer: offer || null,
+				source,
+				applied: true,
+				rules: [code],
+				min_qty: offer?.min_qty,
+				max_qty: offer?.max_qty,
+				min_amt: offer?.min_amt,
+				max_amt: offer?.max_amt,
+			})
+		}
+
+		appliedOffers.value = next
+	}
+
+	function filterActiveOffers(appliedRuleNames = [], freeItems = []) {
+		syncAppliedOffersFromResponse(appliedRuleNames, freeItems)
+	}
+
+	async function submitAppliedOfferCodes(currentProfile, offerCodes, signal = null) {
+		if (!offerCodes?.length) {
+			return null
+		}
+
+		const invoiceData = buildOfferEvaluationPayload(currentProfile)
+		const response = await applyOffersResource.submit({
+			invoice_data: invoiceData,
+			selected_offers: offerCodes,
+		})
+
+		if (signal?.aborted) {
+			return null
+		}
+
+		const parsed = parseOfferResponse(response)
+		applyDiscountsFromServer(parsed.items)
+		processFreeItems(parsed.freeItems)
+		syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
+		applyTransactionDiscountFromResponse({
+			additionalDiscountPct: parsed.additionalDiscountPct,
+			additionalDiscountAmt: parsed.additionalDiscountAmt,
+		})
+		return parsed
 	}
 
 	async function applyOffer(offer, currentProfile, offersDialogRef = null) {
@@ -1202,7 +1286,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				offerProcessingState.value.error = null
 
 				const invoiceData = buildOfferEvaluationPayload(currentProfile)
-				const offerNames = [...new Set([...existingCodes, offerCode])]
+				offersStore.updateCartSnapshot(buildCartSnapshot())
+				const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+				const offerNames = [...new Set([...eligibleCodes, ...existingCodes, offerCode])]
 
 				const response = await applyOffersResource.submit({
 					invoice_data: invoiceData,
@@ -1218,10 +1304,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			suppressOfferReapply.value = true
 			applyDiscountsFromServer(responseItems)
 			processFreeItems(freeItems)
-			filterActiveOffers(appliedRules)
 			applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
 
-			const offerApplied = appliedRules.includes(offerCode)
+			const offerApplied = isOfferAppliedInResponse(offerCode, appliedRules, freeItems)
 
 			if (!offerApplied) {
 				// No new offer applied - restore previous state without new offer
@@ -1242,7 +1327,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 						applyDiscountsFromServer(rollbackItems)
 						processFreeItems(rollbackFreeItems)
-						filterActiveOffers(rollbackRules)
+						syncAppliedOffersFromResponse(rollbackRules, rollbackFreeItems, "auto")
 						applyTransactionDiscountFromResponse({
 							additionalDiscountPct: rollbackPct,
 							additionalDiscountAmt: rollbackAmt,
@@ -1258,27 +1343,11 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					return
 				}
 
-				const offerRuleCodes = appliedRules.includes(offerCode)
-					? appliedRules.filter((ruleName) => ruleName === offerCode)
-					: [offerCode]
-
-				const updatedEntries = appliedOffers.value.filter(
-					(entry) => entry.code !== offerCode,
-				)
-				updatedEntries.push({
-					name: offer.title || offer.name,
-					code: offerCode,
-					offer, // Store full offer object for validation
-					source: "manual",
-					applied: true,
-					rules: offerRuleCodes,
-					// Store constraints for quick validation
-					min_qty: offer.min_qty,
-					max_qty: offer.max_qty,
-					min_amt: offer.min_amt,
-					max_amt: offer.max_amt,
-				})
-				appliedOffers.value = updatedEntries
+				syncAppliedOffersFromResponse(appliedRules, freeItems, "manual")
+				const manualEntry = appliedOffers.value.find((entry) => entry.code === offerCode)
+				if (manualEntry) {
+					manualEntry.source = "manual"
+				}
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -1368,12 +1437,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			suppressOfferReapply.value = true
 			applyDiscountsFromServer(responseItems)
 			processFreeItems(freeItems)
-			filterActiveOffers(appliedRules)
+			syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
 			applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
-
-			appliedOffers.value = appliedOffers.value.filter((entry) =>
-				remainingCodes.includes(entry.code),
-			)
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -1474,35 +1539,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					})
 					rebuildIncrementalCache()
 				} else {
-					// Reapply only valid offers
-					const invoiceData = buildOfferEvaluationPayload(currentProfile)
-					const response = await applyOffersResource.submit({
-						invoice_data: invoiceData,
-						selected_offers: validOfferCodes,
-					})
-
-					if (signal?.aborted) return false
-
-				const { items: responseItems, freeItems, appliedRules, additionalDiscountPct, additionalDiscountAmt } =
-					parseOfferResponse(response)
-
-				applyDiscountsFromServer(responseItems)
-				processFreeItems(freeItems)
-				filterActiveOffers(appliedRules)
-				applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
-
-				// Update appliedOffers to only include valid ones
-				appliedOffers.value = appliedOffers.value.filter(entry =>
-					appliedRules.includes(entry.code)
-				)
+					offersStore.updateCartSnapshot(buildCartSnapshot())
+					const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+					const codesToApply = [...new Set([...validOfferCodes, ...eligibleCodes])]
+					const parsed = await submitAppliedOfferCodes(currentProfile, codesToApply, signal)
+					if (parsed) {
+						syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
+					}
 				}
 
-				// Wait for Vue to update before showing toast
 				await nextTick()
-
-				// Show warning about removed offers
 				const offerNames = invalidOffers.map(o => o.name).join(', ')
 				showWarning(__('Offer removed: {0}. Cart no longer meets requirements.', [offerNames]))
+				return true
+			}
+
+			// All applied offers still valid — re-apply with ALL eligible codes so
+			// newly eligible promotions (e.g. buy-5-get-1) stack with existing ones.
+			offersStore.updateCartSnapshot(buildCartSnapshot())
+			const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+			const activeCodes = appliedOffers.value.map((o) => o.code)
+			const codesToApply = [...new Set([...activeCodes, ...eligibleCodes])]
+			const parsed = await submitAppliedOfferCodes(currentProfile, codesToApply, signal)
+			if (parsed) {
+				syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
 				return true
 			}
 			return false
@@ -1539,34 +1599,25 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			const allEligibleOffers = offersStore.allEligibleOffers
 
 			if (allEligibleOffers.length === 0) {
+				if (appliedOffers.value.length > 0) {
+					appliedOffers.value = []
+					processFreeItems([])
+				}
 				applyTransactionDiscountFromResponse()
 				return
 			}
 
-			// Find offers that are not yet applied
-			const appliedOfferCodes = new Set(appliedOffers.value.map(o => o.code))
-			const newOffers = allEligibleOffers.filter(offer =>
-				!appliedOfferCodes.has(offer.name)
-			)
-
-			const existingCodes = appliedOffers.value.map(entry => entry.code)
-
-			// Nothing new to apply and nothing applied yet
-			if (newOffers.length === 0 && existingCodes.length === 0) {
-				return
-			}
+			const eligibleCodes = allEligibleOffers.map((offer) => offer.name)
+			const previouslyApplied = new Set(appliedOffers.value.map((entry) => entry.code))
 
 			// Check for cancellation before API call
 			if (signal?.aborted) return
-
-			const newOfferCodes = newOffers.map(offer => offer.name)
-			const allCodes = [...new Set([...existingCodes, ...newOfferCodes])]
 
 			const invoiceData = buildOfferEvaluationPayload(currentProfile)
 
 			const response = await applyOffersResource.submit({
 				invoice_data: invoiceData,
-				selected_offers: allCodes,
+				selected_offers: eligibleCodes,
 			})
 
 			// Check for cancellation after API call
@@ -1577,36 +1628,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		applyDiscountsFromServer(responseItems)
 		processFreeItems(freeItems)
-		filterActiveOffers(appliedRules)
+		syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
 		applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
 
-		// Collect newly applied offers for notification
-			const newlyAppliedOffers = []
-
-			// Add newly applied offers to the list
-			for (const offer of newOffers) {
-				const offerCode = offer.name
-				// Check if the offer was actually applied by ERPNext
-				if (!appliedRules.includes(offerCode)) {
-					continue
-				}
-
-				const offerRuleCodes = appliedRules.filter(ruleName => ruleName === offerCode)
-				appliedOffers.value.push({
-					name: offer.title || offer.name,
-					code: offerCode,
-					offer, // Store full offer object for validation
-					source: "auto",
-					applied: true,
-					rules: offerRuleCodes,
-					min_qty: offer.min_qty,
-					max_qty: offer.max_qty,
-					min_amt: offer.min_amt,
-					max_amt: offer.max_amt,
-				})
-
-				newlyAppliedOffers.push(offer.title || offer.name)
-			}
+		const newlyAppliedOffers = appliedOffers.value
+				.filter((entry) => !previouslyApplied.has(entry.code))
+				.map((entry) => entry.name)
 
 			offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -1836,7 +1863,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					}
 				}
 
-				if (freeItemsToGive > 0 && (!item.free_qty || item.free_qty === 0)) {
+				if (freeItemsToGive > 0) {
 					item.free_qty = freeItemsToGive
 					item.pricing_rules = item.pricing_rules || []
 					if (!item.pricing_rules.includes(offer.name)) {
@@ -1847,37 +1874,61 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		} else if (freeItemCode) {
 			// Free item is a specific different item
-			// Find if the free item is already in the cart
+			const totalEligibleQty = eligibleItems.reduce(
+				(sum, item) => sum + (item.quantity || 0), 0
+			)
+
+			let freeItemsToGive = 0
+
+			if (isRecursive && recurseFor > 0) {
+				const effectiveQty = Math.max(0, totalEligibleQty - applyRecursionOver)
+				const multiplier = Math.floor(effectiveQty / recurseFor)
+				freeItemsToGive = multiplier * freeQty
+			} else if (offer.min_qty > 0) {
+				if (totalEligibleQty >= offer.min_qty) {
+					freeItemsToGive = freeQty
+				}
+			} else if (totalEligibleQty > 0) {
+				freeItemsToGive = freeQty
+			}
+
+			if (freeItemsToGive <= 0) {
+				return false
+			}
+
 			const freeItemInCart = invoiceItems.value.find(
 				item => item.item_code === freeItemCode
 			)
 
 			if (freeItemInCart) {
-				// Calculate free qty (same recursive logic applies)
-				let freeItemsToGive = freeQty
-
-				if (isRecursive && recurseFor > 0) {
-					// Calculate based on total eligible quantity
-					const totalEligibleQty = eligibleItems.reduce(
-						(sum, item) => sum + (item.quantity || 0), 0
-					)
-					const effectiveQty = Math.max(0, totalEligibleQty - applyRecursionOver)
-					const multiplier = Math.floor(effectiveQty / recurseFor)
-					freeItemsToGive = multiplier * freeQty
+				freeItemInCart.free_qty = freeItemsToGive
+				freeItemInCart.pricing_rules = freeItemInCart.pricing_rules || []
+				if (!freeItemInCart.pricing_rules.includes(offer.name)) {
+					freeItemInCart.pricing_rules.push(offer.name)
 				}
-
-				// Mark existing cart item as having free quantity
-				if (freeItemsToGive > 0 && (!freeItemInCart.free_qty || freeItemInCart.free_qty === 0)) {
-					freeItemInCart.free_qty = freeItemsToGive
-					freeItemInCart.pricing_rules = freeItemInCart.pricing_rules || []
-					if (!freeItemInCart.pricing_rules.includes(offer.name)) {
-						freeItemInCart.pricing_rules.push(offer.name)
-					}
-					applied = true
+				applied = true
+			} else {
+				const existingGift = freeGiftItems.value.find(
+					(item) => item.item_code === freeItemCode,
+				)
+				if (existingGift) {
+					existingGift.quantity = freeItemsToGive
+					existingGift.pricing_rules = offer.name
+				} else {
+					freeGiftItems.value.push({
+						item_code: freeItemCode,
+						item_name: offer.free_item_name || freeItemCode,
+						quantity: freeItemsToGive,
+						uom: offer.free_item_uom || "",
+						stock_uom: offer.free_item_uom || "",
+						rate: 0,
+						amount: 0,
+						is_free_item: true,
+						pricing_rules: offer.name,
+					})
 				}
+				applied = true
 			}
-			// Note: We don't add new items to cart offline - that would require
-			// fetching item details. The free item will be added when back online.
 		}
 
 		return applied
@@ -2237,21 +2288,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			currency: posProfile.value.currency,
 		}
 
-		// Validate and auto-remove invalid offers (if any are applied)
+		// Re-apply existing offers (includes newly eligible ones) or auto-apply fresh
 		if (appliedOffers.value.length > 0) {
 			await reapplyOffer(currentProfile, signal)
+		} else {
+			await autoApplyEligibleOffers(currentProfile, signal)
 		}
-
-		// Check cancellation before auto-apply
-		if (signal?.aborted) return
-
-		// Check again if stale after reapply
-		if (generation > 0 && generation < cartGeneration) {
-			return
-		}
-
-		// Auto-apply eligible offers (always check for new eligible offers)
-		await autoApplyEligibleOffers(currentProfile, signal)
 
 		// Update last processed hash on success
 		offerProcessingState.value.lastCartHash = generateCartHash()

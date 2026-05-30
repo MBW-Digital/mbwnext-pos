@@ -2935,6 +2935,46 @@ def _preview_cart_totals(pricing_args, prepared_items, profile, invoice, transac
     }
 
 
+def _deduplicate_free_item_rows(free_items):
+    """One free line per (free_item_code, pricing_rule), matching ERPNext Sales Invoice.
+
+    ERPNext's apply_pricing_rule_for_free_items builds
+    {(item_code, pricing_rules): row} before appending to the document. POS evaluates
+    pricing per cart line, so the same product rule can appear on every matching item
+    (e.g. rule lists Test 1 + Test 2 → one Test 3 gift, not one per trigger line).
+    """
+    if not free_items:
+        return []
+
+    merged = {}
+    order = []
+
+    for row in free_items:
+        if not row:
+            continue
+
+        item_code = row.get("item_code")
+        if not item_code:
+            continue
+
+        rule_name = row.get("pricing_rules") or ""
+        key = (item_code, rule_name)
+
+        if key not in merged:
+            order.append(key)
+            merged[key] = row
+            continue
+
+        # Same free gift from multiple trigger lines — keep the first row (qty already
+        # computed by ERPNext for that rule; do not sum duplicates).
+        existing_qty = flt(merged[key].get("qty"))
+        new_qty = flt(row.get("qty"))
+        if new_qty > existing_qty:
+            merged[key] = row
+
+    return [merged[key] for key in order]
+
+
 def _build_apply_offers_response(
     prepared_items,
     free_items,
@@ -3380,6 +3420,8 @@ def apply_offers(invoice_data, selected_offers=None):
             invoice,
             transaction_result,
         )
+
+        free_items = _deduplicate_free_item_rows(free_items)
 
         return _build_apply_offers_response(
             prepared_items,

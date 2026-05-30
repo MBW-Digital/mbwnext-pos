@@ -1079,6 +1079,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			const freeQty = Number.parseFloat(freeItem.qty) || 0
 			if (freeQty <= 0) continue
 
+			const ruleCode = freeItem.pricing_rules || ""
+
 			// Find matching cart item by item_code and uom
 			const cartItem = invoiceItems.value.find(
 				item => item.item_code === freeItem.item_code &&
@@ -1088,17 +1090,29 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			if (cartItem) {
 				cartItem.free_qty = (Number.parseFloat(cartItem.free_qty) || 0) + freeQty
 			} else {
-				freeGiftItems.value.push({
-					item_code: freeItem.item_code,
-					item_name: freeItem.item_name || freeItem.description || freeItem.item_code,
-					quantity: freeQty,
-					uom: freeItem.uom || freeItem.stock_uom || "",
-					stock_uom: freeItem.stock_uom || freeItem.uom || "",
-					rate: 0,
-					amount: 0,
-					is_free_item: true,
-					pricing_rules: freeItem.pricing_rules,
-				})
+				const existingGift = freeGiftItems.value.find(
+					(item) =>
+						item.item_code === freeItem.item_code
+						&& (item.pricing_rules || "") === ruleCode,
+				)
+				if (existingGift) {
+					existingGift.quantity = Math.max(
+						Number.parseFloat(existingGift.quantity) || 0,
+						freeQty,
+					)
+				} else {
+					freeGiftItems.value.push({
+						item_code: freeItem.item_code,
+						item_name: freeItem.item_name || freeItem.description || freeItem.item_code,
+						quantity: freeQty,
+						uom: freeItem.uom || freeItem.stock_uom || "",
+						stock_uom: freeItem.stock_uom || freeItem.uom || "",
+						rate: 0,
+						amount: 0,
+						is_free_item: true,
+						pricing_rules: ruleCode,
+					})
+				}
 			}
 		}
 	}

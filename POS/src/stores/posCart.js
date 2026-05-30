@@ -112,6 +112,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		setDefaultCustomer,
 		applyDiscount,
 		removeDiscount,
+		applyTransactionDiscountFromResponse,
 		applyOffersResource,
 		getItemDetailsResource,
 		recalculateItem,
@@ -960,6 +961,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				price_list_rate: item.price_list_rate || item.rate,
 				discount_percentage: item.discount_percentage || 0,
 				discount_amount: item.discount_amount || 0,
+				item_tax_template: item.item_tax_template || null,
+				item_tax_rate: item.item_tax_rate || null,
 			})),
 		}
 	}
@@ -1138,31 +1141,23 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Invoice-level discount from Transaction pricing rules
 			additionalDiscountPct: Number(payload.additional_discount_percentage) || 0,
 			additionalDiscountAmt: Number(payload.additional_discount_amount) || 0,
+			applyDiscountOn: payload.apply_discount_on || null,
+			previewTotals: payload.preview_totals || null,
 		}
 	}
 
-	/**
-	 * Apply invoice-level discount from apply_offers response.
-	 * Prefer fixed amount over percentage to avoid double-counting when the
-	 * backend sends both (e.g. 15,000 VND as amount + equivalent 15%).
-	 */
-	function applyTransactionDiscountFromResponse({
+	function applyTransactionDiscountFromParsed({
 		additionalDiscountPct = 0,
 		additionalDiscountAmt = 0,
+		applyDiscountOn = null,
+		previewTotals = null,
 	} = {}) {
-		const pct = Number(additionalDiscountPct) || 0
-		const amt = Number(additionalDiscountAmt) || 0
-
-		if (amt > 0) {
-			additionalDiscount.value = amt
-			additionalDiscountPercentage.value = 0
-		} else if (pct > 0) {
-			additionalDiscount.value = 0
-			additionalDiscountPercentage.value = pct
-		} else {
-			additionalDiscount.value = 0
-			additionalDiscountPercentage.value = 0
-		}
+		applyTransactionDiscountFromResponse({
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+		})
 	}
 
 	function getAppliedOfferCodes() {
@@ -1257,9 +1252,11 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		applyDiscountsFromServer(parsed.items)
 		processFreeItems(parsed.freeItems)
 		syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
-		applyTransactionDiscountFromResponse({
+		applyTransactionDiscountFromParsed({
 			additionalDiscountPct: parsed.additionalDiscountPct,
 			additionalDiscountAmt: parsed.additionalDiscountAmt,
+			applyDiscountOn: parsed.applyDiscountOn,
+			previewTotals: parsed.previewTotals,
 		})
 		return parsed
 	}
@@ -1312,13 +1309,25 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				// Check if cancelled during API call
 				if (signal?.aborted) return
 
-			const { items: responseItems, freeItems, appliedRules, additionalDiscountPct, additionalDiscountAmt } =
-				parseOfferResponse(response)
+			const {
+				items: responseItems,
+				freeItems,
+				appliedRules,
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			} = parseOfferResponse(response)
 
 			suppressOfferReapply.value = true
 			applyDiscountsFromServer(responseItems)
 			processFreeItems(freeItems)
-			applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
+			applyTransactionDiscountFromParsed({
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			})
 
 			const offerApplied = isOfferAppliedInResponse(offerCode, appliedRules, freeItems)
 
@@ -1337,14 +1346,18 @@ export const usePOSCartStore = defineStore("posCart", () => {
 							appliedRules: rollbackRules,
 							additionalDiscountPct: rollbackPct,
 							additionalDiscountAmt: rollbackAmt,
+							applyDiscountOn: rollbackApplyOn,
+							previewTotals: rollbackPreview,
 						} = parseOfferResponse(rollbackResponse)
 
 						applyDiscountsFromServer(rollbackItems)
 						processFreeItems(rollbackFreeItems)
 						syncAppliedOffersFromResponse(rollbackRules, rollbackFreeItems, "auto")
-						applyTransactionDiscountFromResponse({
+						applyTransactionDiscountFromParsed({
 							additionalDiscountPct: rollbackPct,
 							additionalDiscountAmt: rollbackAmt,
+							applyDiscountOn: rollbackApplyOn,
+							previewTotals: rollbackPreview,
 						})
 						} catch (rollbackError) {
 							console.error("Error rolling back offers:", rollbackError)
@@ -1445,14 +1458,26 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 				if (signal?.aborted) return
 
-			const { items: responseItems, freeItems, appliedRules, additionalDiscountPct, additionalDiscountAmt } =
-				parseOfferResponse(response)
+			const {
+				items: responseItems,
+				freeItems,
+				appliedRules,
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			} = parseOfferResponse(response)
 
 			suppressOfferReapply.value = true
 			applyDiscountsFromServer(responseItems)
 			processFreeItems(freeItems)
 			syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
-			applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
+			applyTransactionDiscountFromParsed({
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			})
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -1637,13 +1662,25 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Check for cancellation after API call
 			if (signal?.aborted) return
 
-		const { items: responseItems, freeItems, appliedRules, additionalDiscountPct, additionalDiscountAmt } =
-			parseOfferResponse(response)
+		const {
+			items: responseItems,
+			freeItems,
+			appliedRules,
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+		} = parseOfferResponse(response)
 
 		applyDiscountsFromServer(responseItems)
 		processFreeItems(freeItems)
 		syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
-		applyTransactionDiscountFromResponse({ additionalDiscountPct, additionalDiscountAmt })
+		applyTransactionDiscountFromParsed({
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+		})
 
 		const newlyAppliedOffers = appliedOffers.value
 				.filter((entry) => !previouslyApplied.has(entry.code))

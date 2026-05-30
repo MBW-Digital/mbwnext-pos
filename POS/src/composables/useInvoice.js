@@ -28,8 +28,10 @@ export function useInvoice() {
 	const posOpeningShift = ref(null) // POS Opening Shift name
 	const additionalDiscount = ref(0)
 	// Discount từ Pricing Rule ở cấp invoice (additional_discount_percentage, %)
-	// Áp dụng sau khi tính subtotal + tax - item_discounts - manualDiscount
 	const additionalDiscountPercentage = ref(0)
+	// ERPNext preview totals after transaction-level pricing rule (tax + discount recalc)
+	const transactionPreviewTotals = ref(null)
+	const transactionApplyDiscountOn = ref(null)
 	const couponCode = ref(null)
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
@@ -141,12 +143,90 @@ export function useInvoice() {
 	// This ensures tax is not double-counted in inclusive mode!
 	// ========================================================================
 	// Use roundCurrency for monetary totals to match ERPNext's currency precision (from System Settings)
+	function getTransactionDiscountAmount() {
+		const preview = transactionPreviewTotals.value
+		const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+		const pct = additionalDiscountPercentage.value || 0
+
+		if (preview?.discount_amount != null && preview.discount_amount > 0) {
+			if (
+				transactionApplyDiscountOn.value === "Grand Total"
+				&& preview.total_tax === 0
+				&& _cachedTotalTax.value > 0
+				&& pct > 0
+			) {
+				const beforeDisc = itemNet + _cachedTotalTax.value
+				return roundCurrency(beforeDisc * pct / 100)
+			}
+			return roundCurrency(preview.discount_amount)
+		}
+
+		if (additionalDiscount.value > 0) {
+			return roundCurrency(additionalDiscount.value)
+		}
+
+		if (pct > 0) {
+			const base =
+				transactionApplyDiscountOn.value === "Grand Total"
+					? itemNet + _cachedTotalTax.value
+					: itemNet
+			return roundCurrency(base * pct / 100)
+		}
+
+		return 0
+	}
+
 	const subtotal = computed(() => roundCurrency(_cachedSubtotal.value))
-	const totalTax = computed(() => roundCurrency(_cachedTotalTax.value))
-	const totalDiscount = computed(() =>
-		roundCurrency(_cachedTotalDiscount.value + (additionalDiscount.value || 0)),
-	)
+	const totalTax = computed(() => {
+		if (transactionPreviewTotals.value?.total_tax > 0) {
+			return roundCurrency(transactionPreviewTotals.value.total_tax)
+		}
+
+		const txnDisc = getTransactionDiscountAmount()
+		const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+
+		if (
+			txnDisc > 0
+			&& transactionApplyDiscountOn.value === "Net Total"
+			&& itemNet > 0
+			&& _cachedTotalTax.value > 0
+		) {
+			const netAfterDisc = itemNet - txnDisc
+			return roundCurrency((_cachedTotalTax.value / itemNet) * netAfterDisc)
+		}
+
+		return roundCurrency(_cachedTotalTax.value)
+	})
+	const totalDiscount = computed(() => {
+		const itemDiscount = _cachedTotalDiscount.value
+		const txnDisc = getTransactionDiscountAmount()
+		if (txnDisc > 0) {
+			return roundCurrency(itemDiscount + txnDisc)
+		}
+		return roundCurrency(itemDiscount + (additionalDiscount.value || 0))
+	})
 	const grandTotal = computed(() => {
+		if (transactionPreviewTotals.value?.grand_total != null) {
+			if (transactionPreviewTotals.value.total_tax > 0) {
+				return roundCurrency(transactionPreviewTotals.value.grand_total)
+			}
+		}
+
+		const txnDisc = getTransactionDiscountAmount()
+		if (txnDisc > 0 && transactionApplyDiscountOn.value) {
+			const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+			if (transactionApplyDiscountOn.value === "Grand Total") {
+				const beforeDisc = itemNet + _cachedTotalTax.value
+				return roundCurrency(beforeDisc - txnDisc)
+			}
+			// Net Total — tax recalculated in totalTax computed
+			return roundCurrency(itemNet - txnDisc + totalTax.value)
+		}
+
+		if (transactionPreviewTotals.value?.grand_total != null) {
+			return roundCurrency(transactionPreviewTotals.value.grand_total)
+		}
+
 		const discount =
 			_cachedTotalDiscount.value + (additionalDiscount.value || 0)
 
@@ -157,9 +237,6 @@ export function useInvoice() {
 			gt = _cachedSubtotal.value + _cachedTotalTax.value - discount
 		}
 
-		// Áp dụng additional_discount_percentage từ Pricing Rule (cấp invoice).
-		// Khi discount trên "Net Total", thuế cũng giảm tỷ lệ → kết quả bằng
-		// gt * (1 - pct/100). Xem bình luận chi tiết trong posCart.js.
 		const pct = additionalDiscountPercentage.value || 0
 		if (pct > 0) {
 			gt = gt * (1 - pct / 100)
@@ -540,8 +617,50 @@ export function useInvoice() {
 		 */
 		additionalDiscount.value = 0
 		additionalDiscountPercentage.value = 0
+		transactionPreviewTotals.value = null
+		transactionApplyDiscountOn.value = null
 		couponCode.value = null
 		rebuildIncrementalCache()
+	}
+
+	/**
+	 * Apply invoice-level discount from apply_offers response.
+	 * Uses ERPNext preview_totals when available so Net Total / Grand Total
+	 * discounts recalculate tax correctly (not client-side approximation).
+	 */
+	function applyTransactionDiscountFromResponse({
+		additionalDiscountPct = 0,
+		additionalDiscountAmt = 0,
+		applyDiscountOn = null,
+		previewTotals = null,
+	} = {}) {
+		const pct = Number(additionalDiscountPct) || 0
+		const amt = Number(additionalDiscountAmt) || 0
+
+		if (!pct && !amt) {
+			additionalDiscount.value = 0
+			additionalDiscountPercentage.value = 0
+			transactionPreviewTotals.value = null
+			transactionApplyDiscountOn.value = null
+			return
+		}
+
+		transactionApplyDiscountOn.value = applyDiscountOn || null
+
+		if (previewTotals && previewTotals.grand_total != null) {
+			transactionPreviewTotals.value = previewTotals
+		} else {
+			transactionPreviewTotals.value = null
+		}
+
+		// Prefer percentage for submit — ERPNext recalculates discount_amount + tax
+		if (pct > 0) {
+			additionalDiscountPercentage.value = pct
+			additionalDiscount.value = 0
+		} else {
+			additionalDiscount.value = amt
+			additionalDiscountPercentage.value = 0
+		}
 	}
 
 	// Performance: Cache tax calculation to avoid repeated loops
@@ -847,6 +966,7 @@ export function useInvoice() {
 			})),
 		discount_amount: additionalDiscount.value || 0,
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
+		apply_discount_on: transactionApplyDiscountOn.value || undefined,
 		coupon_code: couponCode.value,
 		is_pos: 1,
 		update_stock: 1,
@@ -1060,6 +1180,7 @@ export function useInvoice() {
 		payments: paymentsForInvoice,
 		discount_amount: additionalDiscount.value || 0,
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
+		apply_discount_on: transactionApplyDiscountOn.value || undefined,
 		coupon_code: couponCode.value,
 		is_pos: 1,
 		update_stock: 1,
@@ -1245,6 +1366,7 @@ export function useInvoice() {
 		posOpeningShift,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		transactionApplyDiscountOn,
 		couponCode,
 		taxRules,
 		taxInclusive,
@@ -1268,6 +1390,7 @@ export function useInvoice() {
 		calculateDiscountAmount,
 		applyDiscount,
 		removeDiscount,
+		applyTransactionDiscountFromResponse,
 		addPayment,
 		removePayment,
 		updatePayment,

@@ -2512,6 +2512,30 @@ def _resolve_transaction_pricing_rule(doc, company, selected_offer_names, discou
     return None
 
 
+def _build_invoice_preview_item_row(item, profile):
+    """Build Sales Invoice Item row for ERPNext tax/discount preview."""
+    qty = flt(item.get("qty") or item.get("quantity") or 0)
+    row = {
+        "doctype": "Sales Invoice Item",
+        "item_code": item.get("item_code"),
+        "item_name": item.get("item_name"),
+        "qty": qty,
+        "rate": flt(item.get("rate") or item.get("price_list_rate")),
+        "price_list_rate": flt(item.get("price_list_rate") or item.get("rate")),
+        "discount_percentage": flt(item.get("discount_percentage")),
+        "discount_amount": flt(item.get("discount_amount")),
+        "pricing_rules": item.get("pricing_rules") or "",
+        "uom": item.get("uom"),
+        "conversion_factor": flt(item.get("conversion_factor") or 1) or 1,
+        "warehouse": item.get("warehouse") or profile.warehouse,
+    }
+    if item.get("item_tax_template"):
+        row["item_tax_template"] = item.get("item_tax_template")
+    if item.get("item_tax_rate"):
+        row["item_tax_rate"] = item.get("item_tax_rate")
+    return row
+
+
 def _apply_transaction_pricing_rules(
     pricing_args, prepared_items, profile, invoice, selected_offer_names
 ):
@@ -2524,23 +2548,7 @@ def _apply_transaction_pricing_rules(
         qty = flt(item.get("qty") or item.get("quantity") or 0)
         if not item.get("item_code") or qty <= 0:
             continue
-
-        doc_items.append(
-            {
-                "doctype": "Sales Invoice Item",
-                "item_code": item.get("item_code"),
-                "item_name": item.get("item_name"),
-                "qty": qty,
-                "rate": flt(item.get("rate") or item.get("price_list_rate")),
-                "price_list_rate": flt(item.get("price_list_rate") or item.get("rate")),
-                "discount_percentage": flt(item.get("discount_percentage")),
-                "discount_amount": flt(item.get("discount_amount")),
-                "pricing_rules": item.get("pricing_rules") or "",
-                "uom": item.get("uom"),
-                "conversion_factor": flt(item.get("conversion_factor") or 1) or 1,
-                "warehouse": item.get("warehouse") or profile.warehouse,
-            }
-        )
+        doc_items.append(_build_invoice_preview_item_row(item, profile))
 
     if not doc_items:
         return frappe._dict()
@@ -2695,10 +2703,6 @@ def _apply_transaction_pricing_rules(
             is_coupon = False
         if is_coupon:
             return frappe._dict()
-
-    # Use line net × % so POS matches ERPNext (not Frappe doc.discount_amount alone)
-    if discount_pct and line_net:
-        discount_amt = flt(line_net * discount_pct / 100)
 
     return frappe._dict(
         additional_discount_percentage=discount_pct,
@@ -2868,22 +2872,7 @@ def _preview_cart_totals(pricing_args, prepared_items, profile, invoice, transac
         qty = flt(item.get("qty") or item.get("quantity") or 0)
         if not item.get("item_code") or qty <= 0:
             continue
-        doc_items.append(
-            {
-                "doctype": "Sales Invoice Item",
-                "item_code": item.get("item_code"),
-                "item_name": item.get("item_name"),
-                "qty": qty,
-                "rate": flt(item.get("rate") or item.get("price_list_rate")),
-                "price_list_rate": flt(item.get("price_list_rate") or item.get("rate")),
-                "discount_percentage": flt(item.get("discount_percentage")),
-                "discount_amount": flt(item.get("discount_amount")),
-                "pricing_rules": item.get("pricing_rules") or "",
-                "uom": item.get("uom"),
-                "conversion_factor": flt(item.get("conversion_factor") or 1) or 1,
-                "warehouse": item.get("warehouse") or profile.warehouse,
-            }
-        )
+        doc_items.append(_build_invoice_preview_item_row(item, profile))
 
     if not doc_items:
         return {}
@@ -2907,16 +2896,18 @@ def _preview_cart_totals(pricing_args, prepared_items, profile, invoice, transac
     doc.flags.ignore_permissions = True
 
     if transaction_result:
-        pct = flt(transaction_result.get("additional_discount_percentage"))
         apply_on = transaction_result.get("apply_discount_on")
-        line_net = _compute_line_net_from_prepared_items(prepared_items)
+        pct = flt(transaction_result.get("additional_discount_percentage"))
+        amt = flt(transaction_result.get("additional_discount_amount"))
         if apply_on:
             doc.apply_discount_on = apply_on
-        if pct and line_net:
+        doc.additional_discount_percentage = 0
+        doc.discount_amount = 0
+        # Let ERPNext derive discount_amount from apply_discount_on + percentage
+        if pct:
             doc.additional_discount_percentage = pct
-            doc.discount_amount = flt(line_net * pct / 100)
-        elif flt(transaction_result.get("additional_discount_amount")):
-            doc.discount_amount = flt(transaction_result.get("additional_discount_amount"))
+        elif amt:
+            doc.discount_amount = amt
 
     try:
         doc.set_missing_values()

@@ -183,6 +183,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			quantity: item.quantity,
 			uom: item.uom,
 			is_free_item: item.is_free_item ? 1 : 0,
+			is_bundle: item.is_bundle ? 1 : 0,
 		}))
 	}
 
@@ -191,9 +192,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			let remaining = Number.parseFloat(entry.qty) || 0
 			if (remaining <= 1e-9) continue
 
-			// Match by item_code only — UOM on cart lines may differ from bundle definition
+			const matchCodes = new Set(entry.match_codes || [entry.item_code])
 			const lines = invoiceItems.value.filter(
-				(line) => line.item_code === entry.item_code && !line.is_free_item,
+				(line) =>
+					line.item_code &&
+					matchCodes.has(line.item_code) &&
+					!line.is_free_item,
 			)
 
 			for (const line of lines) {
@@ -214,6 +218,17 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const bundleDefinitions = ref([])
 	let bundleDefinitionsProfile = null
 	let bundleDefinitionsFetchPromise = null
+	/** Bump when bundle definition shape changes (e.g. custom_bundle_item support). */
+	const BUNDLE_DEFINITIONS_SCHEMA_VERSION = 2
+	let bundleDefinitionsSchemaVersion = 0
+
+	function bundleDefinitionsAreCurrent(profile) {
+		return (
+			bundleDefinitionsProfile === profile &&
+			bundleDefinitions.value.length > 0 &&
+			bundleDefinitionsSchemaVersion === BUNDLE_DEFINITIONS_SCHEMA_VERSION
+		)
+	}
 
 	async function cacheMissingBundleParentItems(bundles) {
 		if (offlineState.isOffline || !posProfile.value || !bundles?.length) {
@@ -250,10 +265,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		if (offlineState.isOffline || !posProfile.value) {
 			return
 		}
-		if (
-			bundleDefinitionsProfile === posProfile.value &&
-			bundleDefinitions.value.length > 0
-		) {
+		if (bundleDefinitionsAreCurrent(posProfile.value)) {
 			return
 		}
 		if (bundleDefinitionsFetchPromise) {
@@ -274,6 +286,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 				bundleDefinitions.value = bundles
 				bundleDefinitionsProfile = posProfile.value
+				bundleDefinitionsSchemaVersion = BUNDLE_DEFINITIONS_SCHEMA_VERSION
 				lastBundleCacheProfile = posProfile.value
 
 				await offlineWorker.cacheProductBundles(bundles, posProfile.value)
@@ -295,6 +308,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	/** @deprecated Use prefetchProductBundleDefinitions — kept for offline refresh */
 	async function refreshProductBundleCache() {
 		bundleDefinitionsProfile = null
+		bundleDefinitionsSchemaVersion = 0
 		bundleDefinitions.value = []
 		await prefetchProductBundleDefinitions()
 	}
@@ -360,14 +374,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 
 			const row = offlineState.isOffline
-				? { ...bundleItem, is_bundle: 1 }
+				? { ...bundleItem, applied_bundle: 1 }
 				: await enrichItemTaxIfNeeded(
 						{
 							...bundleItem,
 							item_code: bundleItem.item_code || match.bundle_code,
 							item_name:
 								bundleItem.item_name || match.bundle_name || match.bundle_code,
-							is_bundle: 1,
+							applied_bundle: 1,
 						},
 						match.complete_sets,
 					)
@@ -380,6 +394,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			)
 
 			if (existingParent) {
+				existingParent.is_bundle = 1
 				const newQty =
 					(Number.parseFloat(existingParent.quantity) || 0) +
 					match.complete_sets
@@ -441,24 +456,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					bundles,
 				)
 			} else {
-				if (
-					bundleDefinitionsProfile === posProfile.value &&
-					bundleDefinitions.value.length > 0
-				) {
-					result = evaluateProductBundleMatches(
-						buildBundleCartPayload(),
-						bundleDefinitions.value,
-					)
-				} else {
-					const response = await call(
-						"pos_next.api.product_bundle_match.get_product_bundle_matches",
-						{
-							cart_items: buildBundleCartPayload(),
-							pos_profile: posProfile.value,
-						},
-					)
-					result = response?.message || response || {}
-				}
+				// Always match on server when online — ensures custom_bundle_item and latest rules apply
+				const response = await call(
+					"pos_next.api.product_bundle_match.get_product_bundle_matches",
+					{
+						cart_items: buildBundleCartPayload(),
+						pos_profile: posProfile.value,
+					},
+				)
+				result = response?.message || response || {}
 				void prefetchProductBundleDefinitions()
 			}
 
@@ -2489,6 +2495,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		(profile, previousProfile) => {
 			if (profile !== previousProfile) {
 				bundleDefinitionsProfile = null
+				bundleDefinitionsSchemaVersion = 0
 				bundleDefinitions.value = []
 				lastBundleCacheProfile = null
 			}

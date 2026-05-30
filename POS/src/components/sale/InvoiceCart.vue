@@ -501,10 +501,21 @@
 					<p class="text-[11px] font-semibold text-gray-900">
 						{{ suggestion.bundle_name }}
 					</p>
-					<p class="text-[10px] text-gray-600 mt-1">
+					<p v-if="suggestion.is_ready_to_apply" class="text-[10px] text-gray-600 mt-1">
+						{{ __("Cart has enough items to apply this bundle:") }}
+					</p>
+					<p v-else class="text-[10px] text-gray-600 mt-1">
 						{{ __("Add missing items to complete this bundle:") }}
 					</p>
 					<div class="flex flex-wrap gap-1 mt-1.5">
+						<button
+							v-if="suggestion.is_ready_to_apply"
+							type="button"
+							class="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-[10px] font-semibold text-green-900 hover:bg-green-200"
+							@click="cartStore.applyProductBundleMatch(suggestion)"
+						>
+							{{ __("Apply bundle") }}
+						</button>
 						<button
 							v-for="missing in suggestion.missing_items"
 							:key="`${suggestion.bundle_code}-${missing.item_code}`"

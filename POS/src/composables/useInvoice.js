@@ -362,6 +362,8 @@ export function useInvoice() {
 				is_resolved_barcode: item.is_resolved_barcode || false,
 				item_tax_template: item.item_tax_template || null,
 				item_tax_rate: item.item_tax_rate || null,
+				// Cart-line flag: applied bundle parent only (not ERPNext Product Bundle master flag)
+				is_bundle: item.applied_bundle ? 1 : 0,
 			}
 			invoiceItems.value.push(newItem)
 			// Recalculate the newly added item to apply taxes

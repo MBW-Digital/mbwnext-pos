@@ -2665,7 +2665,7 @@ usePosKeyboardShortcuts({
 	onFocusCustomerSearch: () => {
 		document.getElementById("cart-customer-search")?.focus();
 	},
-	onToggleQuantityMode: () => itemsSelectorRef.value?.toggleAutoAdd?.(),
+	onToggleQuantityMode: () => itemsSelectorRef.value?.toggleBarcodeScanMode?.(),
 	onOpenCashDrawer: openManualCashDrawer,
 	onCustomerPayment: () => {
 		uiStore.showCustomerDialog = true;

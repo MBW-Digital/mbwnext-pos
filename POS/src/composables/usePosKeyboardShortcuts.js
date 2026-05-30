@@ -14,6 +14,15 @@ function shouldIgnoreShortcut(event) {
 	return isBlockedTarget(event.target)
 }
 
+/** F-keys work globally in POS; only skip in multi-line / rich-text fields. */
+function shouldIgnoreFunctionKey(event) {
+	if (event.defaultPrevented) return true
+	const target = event.target
+	if (!(target instanceof HTMLElement)) return false
+	if (target.tagName === "TEXTAREA") return true
+	return target.isContentEditable
+}
+
 export function usePosKeyboardShortcuts(handlers = {}) {
 	function handleKeyDown(event) {
 		if (handlers.isDisabled?.()) return
@@ -42,7 +51,7 @@ export function usePosKeyboardShortcuts(handlers = {}) {
 		}
 
 		if (functionKeys[key]) {
-			if (shouldIgnoreShortcut(event)) return
+			if (shouldIgnoreFunctionKey(event)) return
 			event.preventDefault()
 			functionKeys[key]()
 			return

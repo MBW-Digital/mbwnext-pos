@@ -83,7 +83,7 @@
 						:aria-label="__('Search items')"
 					/>
 					<!-- Barcode Scanner + Auto-Add Toggle (inside search input) -->
-					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
+					<div class="absolute inset-y-0 end-0 z-10 pe-1 sm:pe-2 flex items-center gap-0.5">
 						<button
 							@click="toggleBarcodeScanner"
 							:class="[
@@ -1264,6 +1264,24 @@ function toggleBarcodeScanner() {
 	}
 }
 
+function toggleBarcodeScanMode() {
+	const active = scannerEnabled.value || autoAddEnabled.value
+	if (active) {
+		scannerEnabled.value = false
+		autoAddEnabled.value = false
+		if (autoSearchTimer.value) {
+			clearTimeout(autoSearchTimer.value)
+			autoSearchTimer.value = null
+		}
+		return
+	}
+
+	scannerEnabled.value = true
+	autoAddEnabled.value = true
+	const input = searchInputRef.value || document.getElementById("item-search")
+	input?.focus()
+}
+
 function toggleAutoAdd() {
 	// Auto-add works independently - no need for scanner mode
 	autoAddEnabled.value = !autoAddEnabled.value
@@ -1315,6 +1333,7 @@ defineExpose({
 	},
 	toggleAutoAdd,
 	toggleBarcodeScanner,
+	toggleBarcodeScanMode,
 })
 
 // Watch for view mode changes and rebind scroll listeners

@@ -2,6 +2,7 @@ import { call } from "@/utils/apiWrapper"
 import { logger } from "@/utils/logger"
 import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter"
 import { logCashDrawerPrintBill } from "@/utils/tillExceptionLog"
+import { getReceiptPaymentSummary } from "@/utils/receiptPayments"
 
 const log = logger.create('PrintInvoice')
 
@@ -97,6 +98,25 @@ function printHtmlViaIframe(htmlContent) {
 }
 
 /**
+ * Fetch enriched receipt fields (payments from Payment Entry, loyalty, etc.)
+ */
+async function enrichReceiptData(invoiceData) {
+	if (!invoiceData?.name) {
+		return invoiceData
+	}
+	try {
+		const enriched = await call("pos_next.api.invoices.get_print_receipt_data", {
+			invoice_name: invoiceData.name,
+			include_vnpost_qr: 0,
+		})
+		return enriched ? { ...invoiceData, ...enriched } : invoiceData
+	} catch (error) {
+		log.warn("Could not enrich receipt data:", error)
+		return invoiceData
+	}
+}
+
+/**
  * Print invoice using Frappe's print format system
  * @param {Object} invoiceData - The invoice document data
  * @param {string} printFormat - The print format name (optional)
@@ -113,6 +133,8 @@ export async function printInvoice(
 			throw new Error("Invalid invoice data")
 		}
 
+		const doc = await enrichReceiptData(invoiceData)
+
 		// WebUSB paired device — await reconnect before check (cold start races with async reconnect)
 		const usb = useWebUSBPrinter()
 		if ("usb" in navigator) {
@@ -120,19 +142,19 @@ export async function printInvoice(
 		}
 		if (usb.isReady.value) {
 			log.info("Printing via WebUSB ESC/POS")
-			await usb.printInvoice(invoiceData, { paperWidthMm: usb.paperWidth.value })
-			if (usb.cashDrawerKickEnabled.value && invoiceData.pos_profile) {
-				await logCashDrawerPrintBill(invoiceData.pos_profile, invoiceData.name)
+			await usb.printInvoice(doc, { paperWidthMm: usb.paperWidth.value })
+			if (usb.cashDrawerKickEnabled.value && doc.pos_profile) {
+				await logCashDrawerPrintBill(doc.pos_profile, doc.name)
 			}
 			return true
 		}
 
-		const doctype = invoiceData.doctype || "Sales Invoice"
+		const doctype = doc.doctype || "Sales Invoice"
 		const format = printFormat || "POS Next Receipt"
 
 		const params = new URLSearchParams({
 			doctype: doctype,
-			name: invoiceData.name,
+			name: doc.name,
 			format: format,
 			no_letterhead: letterhead ? 0 : 1,
 			_lang: "en",
@@ -162,7 +184,8 @@ export async function printInvoice(
 		return true
 	} catch (error) {
 		log.error("Error printing with Frappe print format:", error)
-		return printInvoiceCustom(invoiceData, { paperWidth: 58 })
+		const doc = await enrichReceiptData(invoiceData)
+		return printInvoiceCustom(doc, { paperWidth: 58 })
 	}
 }
 
@@ -170,13 +193,15 @@ export async function printInvoice(
  * Generates and prints a custom POS receipt using a thermal printer layout.
  *
  * This fallback printer is used when Frappe's standard print format is unavailable.
- * Supports 58mm (P103) and 80mm thermal printers. Can include VNPost Pay VietQR for bank transfer.
+ * Supports 58mm (P103) and 80mm thermal printers.
  *
  * @param {Object} invoiceData - The invoice document data from ERPNext
- * @param {Object} options - Optional: { vnpostQr: {...}, paperWidth: 58|80 }
+ * @param {Object} options - Optional: { einvoiceSelfServiceQr, paperWidth: 58|80 }
  */
 export async function printInvoiceCustom(invoiceData, options = {}) {
-	const { vnpostQr, einvoiceSelfServiceQr, paperWidth = 80 } = options
+	const { einvoiceSelfServiceQr, paperWidth = 80 } = options
+	const { payments: receiptPayments, totalPaid: receiptTotalPaid } =
+		getReceiptPaymentSummary(invoiceData)
 	const widthPx = paperWidth === 58 ? 220 : 302 // 58mm≈220px, 80mm≈302px at 96 DPI
 
 	const printContent = `
@@ -486,10 +511,10 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 							return `
 						<tr><td colspan="4" style="font-weight:bold;padding-top:4px;">${nm}</td></tr>
 						<tr>
-							<td>${formatVN(rate, 2)}</td>
-							<td style="text-align:right">${Number(qty).toLocaleString("vi-VN", { maximumFractionDigits: 0 })}</td>
-							<td style="text-align:right">${formatVN(disc, 2)}</td>
-							<td style="text-align:right">${formatVN(amt, 0)}</td>
+							<td style="padding:1px 4px 1px 0;white-space:nowrap;">${formatVN(rate, 0)}</td>
+							<td style="text-align:right;padding:1px 6px;white-space:nowrap;">${Number(qty).toLocaleString("vi-VN", { maximumFractionDigits: 0 })}</td>
+							<td style="text-align:right;padding:1px 6px;white-space:nowrap;">${formatVN(disc, 0)}</td>
+							<td style="text-align:right;padding:1px 0 1px 6px;white-space:nowrap;">${formatVN(amt, 0)}</td>
 						</tr>
 						${serialHtml ? `<tr><td colspan="4">${serialHtml}</td></tr>` : ""}`
 						})
@@ -522,13 +547,13 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					<div><b>Số điện thoại:</b> ${custPhone || "—"}</div>
 				</div>
 				${partial ? `<div style="color:#b30000;font-weight:bold;font-size:10px;margin-bottom:6px;">Trạng thái: THANH TOÁN MỘT PHẦN</div>` : ""}
-				<table style="width:100%;border-collapse:collapse;font-size:10px;margin-bottom:6px;">
+				<table style="width:100%;border-collapse:collapse;font-size:9px;margin-bottom:6px;table-layout:fixed;">
 					<thead>
 						<tr style="border-bottom:1px solid #000;font-weight:bold;">
-							<th style="text-align:left;padding:2px 0;">Mặt hàng/giá</th>
-							<th style="text-align:right;width:10%;">SL</th>
-							<th style="text-align:right;width:22%;">KM</th>
-							<th style="text-align:right;width:22%;">T.tiền</th>
+							<th style="text-align:left;padding:2px 4px 2px 0;width:36%;">Mặt hàng/giá</th>
+							<th style="text-align:right;width:12%;padding:2px 6px;white-space:nowrap;">SL</th>
+							<th style="text-align:right;width:26%;padding:2px 6px;white-space:nowrap;">KM</th>
+							<th style="text-align:right;width:26%;padding:2px 0 2px 6px;white-space:nowrap;">T.tiền</th>
 						</tr>
 					</thead>
 					<tbody>${itemsRows}</tbody>
@@ -545,25 +570,15 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 				`
 				})()}
 
-				<!-- Payments: include existing + bank transfer (VNPost) when applicable -->
+				<!-- Payments -->
 				${
-					(() => {
-						const existing = invoiceData.payments || []
-						const isBankTransfer = (p) => {
-							const name = (p.mode_of_payment || '').toLowerCase()
-							return name.includes('chuyển khoản') || name.includes('bank draft') || name === 'bank'
-						}
-						const filtered = vnpostQr && vnpostQr.amount > 0
-							? existing.filter((p) => !(isBankTransfer(p) && p.amount <= 0))
-							: existing
-						const withBankTransfer = vnpostQr && vnpostQr.amount > 0
-							? [...filtered, { mode_of_payment: __('Bank Transfer'), amount: vnpostQr.amount }]
-							: filtered
-						if (withBankTransfer.length === 0 && !(invoiceData.paid_amount > 0) && !(invoiceData.outstanding_amount > 0)) return ""
-						return `
+					receiptPayments.length > 0 ||
+					receiptTotalPaid > 0 ||
+					(invoiceData.outstanding_amount && invoiceData.outstanding_amount > 0)
+						? `
 				<div class="payments">
 					<div style="font-weight: bold; margin-bottom: 5px; font-size: 12px;">${__('Payments:')}</div>
-					${withBankTransfer
+					${receiptPayments
 						.map(
 							(payment) => `
 						<div class="payment-row">
@@ -575,7 +590,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 						.join("")}
 					<div class="payment-row total-paid">
 						<span>${__('Total Paid:')}</span>
-						<span>${formatVN(invoiceData.paid_amount || 0, 0)}</span>
+						<span>${formatVN(receiptTotalPaid, 0)}</span>
 					</div>
 					${
 						invoiceData.change_amount && invoiceData.change_amount > 0
@@ -599,32 +614,12 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					}
 				</div>
 				`
-					})()
+						: ""
 				}
 
 				<div style="font-size:9px;margin:12px 0;line-height:1.45;border-top:1px dashed #000;padding-top:8px;">
 					Điểm tích lũy: Hóa đơn hiện tại được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; Tổng điểm sau hóa đơn là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
 				</div>
-
-				${
-					vnpostQr
-						? `
-				<div class="vnp-qr-section">
-					<div class="vnp-qr-title">${__('BANK TRANSFER - VNPost Pay')}</div>
-					${
-						vnpostQr.qr_url
-							? `<img src="${vnpostQr.qr_url}" alt="VietQR" class="vnp-qr-img" />`
-							: `<p class="vnp-qr-detail">${__('Open payment page on the POS for QR / SDK (VNPost).')}</p>`
-					}
-					<div class="vnp-qr-detail"><strong>${__('Bank')}:</strong> ${vnpostQr.bank_code || ""}</div>
-					<div class="vnp-qr-detail"><strong>${__('Account')}:</strong> ${vnpostQr.account_number || ""}</div>
-					<div class="vnp-qr-detail"><strong>${__('Holder')}:</strong> ${vnpostQr.account_holder || ""}</div>
-					<div class="vnp-qr-detail"><strong>${__('Amount')}:</strong> ${formatVN(vnpostQr.amount, 0)}</div>
-					<div class="vnp-qr-detail"><strong>${__('Content')}:</strong> ${vnpostQr.content || ""}</div>
-				</div>
-				`
-						: ""
-				}
 
 				${
 					einvoiceSelfServiceQr?.url
@@ -695,15 +690,14 @@ export async function printInvoiceByName(
 	try {
 		const invoiceDoc = await call("pos_next.api.invoices.get_print_receipt_data", {
 			invoice_name: invoiceName,
-			include_vnpost_qr: 1,
+			include_vnpost_qr: 0,
 		})
 
 		if (!invoiceDoc) {
 			throw new Error("Invoice not found")
 		}
 
-		const needsThermalCustom =
-			invoiceDoc.vnpost_qr || invoiceDoc.einvoice_self_service_qr
+		const needsThermalCustom = Boolean(invoiceDoc.einvoice_self_service_qr)
 
 		if (needsThermalCustom) {
 			const usb = useWebUSBPrinter()
@@ -714,16 +708,13 @@ export async function printInvoiceByName(
 				await usb.printInvoice(invoiceDoc, {
 					paperWidthMm:  usb.paperWidth.value,
 					einvoiceQr:    invoiceDoc.einvoice_self_service_qr || null,
-					vnpostQr:      invoiceDoc.vnpost_qr || null,
 				})
 				if (usb.cashDrawerKickEnabled.value && invoiceDoc.pos_profile) {
 					await logCashDrawerPrintBill(invoiceDoc.pos_profile, invoiceDoc.name)
 				}
 				return true
 			}
-			// No WebUSB → fall back to custom HTML receipt (window.open)
 			return printInvoiceCustom(invoiceDoc, {
-				vnpostQr: invoiceDoc.vnpost_qr,
 				einvoiceSelfServiceQr: invoiceDoc.einvoice_self_service_qr,
 				paperWidth: paperWidth || 58,
 			})

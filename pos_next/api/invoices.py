@@ -1422,9 +1422,12 @@ def get_print_receipt_data(invoice_name, include_vnpost_qr=True, include_sepay_q
 	if not cint(include_vnpost_qr) or not data.get("pos_profile"):
 		return data
 
-	amount = flt(data.get("outstanding_amount")) or flt(data.get("grand_total"))
-	if amount <= 0:
+	# VietQR on receipt only when invoice still has balance due (not fully paid).
+	outstanding = flt(data.get("outstanding_amount"))
+	if outstanding <= 0:
 		return data
+
+	amount = outstanding
 
 	try:
 		from pos_next.api.vnpost_pay import get_vietqr_url

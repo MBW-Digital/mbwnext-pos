@@ -536,15 +536,11 @@ export function useInvoice() {
 
 	function removeDiscount() {
 		/**
-		 * Remove additional discount (coupon discount)
+		 * Remove additional discount (coupon or transaction pricing rule)
 		 */
-		// Clear additional discount
 		additionalDiscount.value = 0
-
-		// Clear coupon code
+		additionalDiscountPercentage.value = 0
 		couponCode.value = null
-
-		// Rebuild cache after removing discount
 		rebuildIncrementalCache()
 	}
 

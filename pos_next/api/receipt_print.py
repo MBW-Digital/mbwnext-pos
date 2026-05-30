@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 import frappe
-from frappe.utils import flt, format_datetime, now_datetime
+from frappe.utils import flt, format_datetime, getdate, now_datetime, today
 
 
 def format_vn_amount(value, decimals: int = 0) -> str:
@@ -74,6 +74,105 @@ def receipt_totals_aux_for_print(doc):
 	return frappe._dict(vat_amt=vat_amt, disc=disc, vat_lbl=vat_lbl)
 
 
+def receipt_payments_for_invoice(inv) -> list[dict[str, Any]]:
+	"""All payment lines for receipt: POS rows + Payment Entry allocations (e.g. VNPost bank transfer)."""
+	rows: list[dict[str, Any]] = []
+	seen_pe: set[str] = set()
+
+	for row in getattr(inv, "payments", None) or inv.get("payments") or []:
+		amount = flt(getattr(row, "amount", None) if not isinstance(row, dict) else row.get("amount"))
+		if amount <= 0:
+			continue
+		mop = getattr(row, "mode_of_payment", None) if not isinstance(row, dict) else row.get("mode_of_payment")
+		rows.append({"mode_of_payment": mop or "", "amount": amount})
+
+	inv_name = getattr(inv, "name", None) or inv.get("name")
+	if not inv_name or not frappe.db.table_exists("Payment Entry Reference"):
+		return rows
+
+	pe_rows = frappe.db.sql(
+		"""
+		SELECT pe.mode_of_payment, per.allocated_amount AS amount
+		FROM `tabPayment Entry Reference` per
+		INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1
+		WHERE per.reference_doctype = 'Sales Invoice'
+		  AND per.reference_name = %(inv)s
+		ORDER BY pe.creation ASC
+		""",
+		{"inv": inv_name},
+		as_dict=True,
+	)
+	for pe in pe_rows or []:
+		amount = flt(pe.get("amount"))
+		if amount <= 0:
+			continue
+		key = f"{pe.get('mode_of_payment')}|{amount}"
+		if key in seen_pe:
+			continue
+		seen_pe.add(key)
+		rows.append({"mode_of_payment": pe.get("mode_of_payment") or "", "amount": amount})
+
+	return rows
+
+
+def receipt_total_paid_for_invoice(inv) -> float:
+	"""Total collected on receipt — includes Payment Entry bank transfers not on SI Payment child table."""
+	grand = flt(getattr(inv, "grand_total", None) if not isinstance(inv, dict) else inv.get("grand_total"))
+	outstanding = flt(
+		getattr(inv, "outstanding_amount", None) if not isinstance(inv, dict) else inv.get("outstanding_amount")
+	)
+	if grand > 0 and outstanding >= 0:
+		paid = flt(grand - outstanding)
+		if paid > 0:
+			return paid
+
+	payments = receipt_payments_for_invoice(inv)
+	total_from_rows = flt(sum(flt(p.get("amount")) for p in payments))
+	paid_field = flt(getattr(inv, "paid_amount", None) if not isinstance(inv, dict) else inv.get("paid_amount"))
+	return max(paid_field, total_from_rows)
+
+
+def receipt_payments_for_jinja(doc):
+	"""Print Format (Jinja): payment block with Payment Entry rows included."""
+	return frappe._dict(
+		payments=receipt_payments_for_invoice(doc),
+		total_paid=receipt_total_paid_for_invoice(doc),
+	)
+
+
+def receipt_loyalty_earned_for_invoice(inv) -> float:
+	"""Points earned on this invoice (positive entries only)."""
+	inv_name = getattr(inv, "name", None) or inv.get("name")
+	if not inv_name or not frappe.db.table_exists("Loyalty Point Entry"):
+		return 0.0
+	res = frappe.db.sql(
+		"""
+		select coalesce(sum(loyalty_points), 0)
+		from `tabLoyalty Point Entry`
+		where invoice = %(inv)s and invoice_type = %(dt)s and loyalty_points > 0
+		""",
+		{"inv": inv_name, "dt": "Sales Invoice"},
+	)
+	return flt(res[0][0]) if res else 0.0
+
+
+def receipt_loyalty_balance_for_invoice(inv) -> float:
+	"""Customer loyalty balance after invoice — same logic as Customer Dashboard (by company)."""
+	cust = getattr(inv, "customer", None) if not isinstance(inv, dict) else inv.get("customer")
+	company = getattr(inv, "company", None) if not isinstance(inv, dict) else inv.get("company")
+	if not cust or not company or not frappe.db.table_exists("Loyalty Point Entry"):
+		return 0.0
+	res = frappe.db.sql(
+		"""
+		select coalesce(sum(loyalty_points), 0)
+		from `tabLoyalty Point Entry`
+		where customer = %(c)s and company = %(company)s and expiry_date >= %(today)s
+		""",
+		{"c": cust, "company": company, "today": getdate(today())},
+	)
+	return flt(res[0][0]) if res else 0.0
+
+
 def enrich_invoice_dict_for_print(inv: dict[str, Any]) -> dict[str, Any]:
 	"""Các key bổ sung cho phiếu in (HTML fallback POS + có thể dùng API)."""
 	out: dict[str, Any] = {}
@@ -108,35 +207,10 @@ def enrich_invoice_dict_for_print(inv: dict[str, Any]) -> dict[str, Any]:
 	)
 	out["receipt_msch"] = ""
 
-	inv_name = inv.get("name")
-	cust = inv.get("customer")
-	earned = 0.0
-	if inv_name and frappe.db.table_exists("Loyalty Point Entry"):
-		res = frappe.db.sql(
-			"""
-			select coalesce(sum(loyalty_points), 0)
-			from `tabLoyalty Point Entry`
-			where invoice = %(inv)s and invoice_type = %(dt)s and loyalty_points > 0
-			""",
-			{"inv": inv_name, "dt": "Sales Invoice"},
-		)
-		if res:
-			earned = flt(res[0][0])
-	balance = 0.0
-	if cust and frappe.db.table_exists("Loyalty Program Member"):
-		res2 = frappe.db.sql(
-			"""
-			select coalesce(loyalty_points, 0) from `tabLoyalty Program Member`
-			where customer = %(c)s
-			order by modified desc
-			limit 1
-			""",
-			{"c": cust},
-		)
-		if res2:
-			balance = flt(res2[0][0])
-	out["receipt_loyalty_earned"] = earned
-	out["receipt_loyalty_balance"] = balance
+	out["receipt_loyalty_earned"] = receipt_loyalty_earned_for_invoice(inv)
+	out["receipt_loyalty_balance"] = receipt_loyalty_balance_for_invoice(inv)
+	out["receipt_payments"] = receipt_payments_for_invoice(inv)
+	out["receipt_total_paid"] = receipt_total_paid_for_invoice(inv)
 	return out
 
 

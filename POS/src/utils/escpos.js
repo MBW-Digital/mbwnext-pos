@@ -5,6 +5,8 @@
  * Full Vietnamese uses `buildReceiptBitmap` (canvas → raster, see below).
  */
 
+import { getReceiptPaymentSummary } from '@/utils/receiptPayments'
+
 // ─────────────────────────────────────────────────────────────────
 // Vietnamese → ASCII mapping (removes diacritics)
 // ─────────────────────────────────────────────────────────────────
@@ -209,7 +211,48 @@ class ESCPOSBuilder {
 // Receipt builder
 // ─────────────────────────────────────────────────────────────────
 function fmtAmt(amount) {
-	return Number.parseFloat(amount || 0).toLocaleString('vi-VN')
+	return Number.parseFloat(amount || 0).toLocaleString('vi-VN', {
+		minimumFractionDigits: 0,
+		maximumFractionDigits: 0,
+	})
+}
+
+function fmtQty(amount) {
+	return String(Math.round(Number.parseFloat(amount || 0) || 0))
+}
+
+/** Fixed-width item columns for thermal text receipts (price | SL | KM | T.tiền). */
+function receiptItemColWidths(charsPerLine) {
+	if (charsPerLine <= 32) {
+		return { price: 10, qty: 3, disc: 8, total: 10 }
+	}
+	return { price: 13, qty: 4, disc: 11, total: 13 }
+}
+
+function padReceiptCol(text, width, align = 'right') {
+	const s = String(text ?? '')
+	if (s.length >= width) {
+		return align === 'right' ? s.slice(-width) : s.slice(0, width)
+	}
+	return align === 'right' ? s.padStart(width) : s.padEnd(width)
+}
+
+function formatReceiptItemHeader(widths) {
+	return [
+		padReceiptCol('Giá', widths.price, 'left'),
+		padReceiptCol('SL', widths.qty, 'right'),
+		padReceiptCol('KM', widths.disc, 'right'),
+		padReceiptCol('T.tiền', widths.total, 'right'),
+	].join(' ')
+}
+
+function formatReceiptItemLine(rate, qty, discAmt, lineAmt, widths) {
+	return [
+		padReceiptCol(fmtAmt(rate), widths.price, 'right'),
+		padReceiptCol(fmtQty(qty), widths.qty, 'right'),
+		padReceiptCol(fmtAmt(discAmt), widths.disc, 'right'),
+		padReceiptCol(fmtAmt(lineAmt), widths.total, 'right'),
+	].join(' ')
 }
 
 function fmtDate(dateStr) {
@@ -246,7 +289,6 @@ function receiptVatLabel(inv, vatAmt) {
  * @param {Object}  options
  * @param {number}  options.paperWidth        - 58 or 80 (mm)
  * @param {Object}  [options.einvoiceQr]      - einvoice_self_service_qr object
- * @param {Object}  [options.vnpostQr]        - vnpost_qr object
  * @param {boolean} [options.openCashDrawer]  - send ESC/POS drawer kick after receipt (default true)
  * @param {number}  [options.cashDrawerPin]   - 0 = pin 2, 1 = pin 5 (ESC/POS m param)
  */
@@ -254,7 +296,6 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	const {
 		paperWidth = 80,
 		einvoiceQr,
-		vnpostQr,
 		openCashDrawer = true,
 		cashDrawerPin = 0,
 	} = options
@@ -307,11 +348,12 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.divider('-')
 
 	// ── Items ────────────────────────────────────────────────────
+	const itemWidths = receiptItemColWidths(b.charsPerLine)
 	b.boldOn()
 	if (b.charsPerLine >= 48) {
-		b.line('Mặt hàng/giá    SL   KM     T.tiền')
+		b.line(formatReceiptItemHeader(itemWidths))
 	} else {
-		b.line('MH/giá · SL · KM · TT')
+		b.line('Giá      SL  KM    TT')
 	}
 	b.boldOff().divider('-')
 
@@ -325,9 +367,10 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 
 		b.line(name + (isFree ? ' (MIỄN PHÍ)' : ''))
 		if (b.charsPerLine >= 48) {
-			b.line(` ${fmtAmt(rate)} | ${qty} | ${fmtAmt(discAmt)} | ${fmtAmt(lineAmt)}`)
+			b.line(formatReceiptItemLine(rate, qty, discAmt, lineAmt, itemWidths))
 		} else {
-			b.twoCol(` ${qty}×${fmtAmt(rate)} KM:${fmtAmt(discAmt)}`, fmtAmt(lineAmt))
+			b.twoCol(` ${fmtQty(qty)}×${fmtAmt(rate)}`, fmtAmt(lineAmt))
+			if (discAmt > 0) b.twoCol('  KM:', fmtAmt(discAmt))
 		}
 
 		if (item.serial_no) {
@@ -350,42 +393,27 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.dblOff().boldOff()
 
 	// ── Payments ─────────────────────────────────────────────────
-	const payments = invoiceData.payments || []
-	if (payments.length > 0) {
+	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
+	const { payments: receiptPayments, totalPaid: receiptTotalPaid } =
+		getReceiptPaymentSummary(invoiceData)
+	if (receiptPayments.length > 0 || receiptTotalPaid > 0 || outstanding > 0) {
 		b.divider('-')
 		b.boldOn().line('Thanh toán:').boldOff()
-		for (const p of payments) {
+		for (const p of receiptPayments) {
 			b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
 		}
+		if (receiptTotalPaid > 0) b.twoCol('Đã thanh toán:', fmtAmt(receiptTotalPaid))
 	}
-	if (vnpostQr && vnpostQr.amount > 0) {
-		b.twoCol('  Chuyển khoản:', fmtAmt(vnpostQr.amount))
-	}
-	const paid = Number.parseFloat(invoiceData.paid_amount || 0)
-	if (paid > 0) b.twoCol('Đã thanh toán:', fmtAmt(paid))
 
 	const change = Number.parseFloat(invoiceData.change_amount || 0)
 	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
 
-	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
 	if (outstanding > 0) b.boldOn().twoCol('Còn nợ:', fmtAmt(outstanding)).boldOff()
 
 	const lyE = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
 	const lyB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
 	b.divider('-')
 	b.line(`Điểm TL: +${lyE.toFixed(0)}; Tổng ${lyB.toFixed(0)}`)
-
-	// ── VNPost QR ─────────────────────────────────────────────────
-	if (vnpostQr && vnpostQr.qr_data) {
-		b.divider('-')
-		b.alignCenter()
-			.boldOn().line('VNPOST PAY - CHUYỂN KHOẢN').boldOff()
-			.twoCol('STK:', vnpostQr.account_no || '')
-			.twoCol('Ngân hàng:', vnpostQr.bank_short_name || '')
-			.twoCol('Số tiền:', fmtAmt(vnpostQr.amount))
-		b.alignCenter().qrCode(vnpostQr.qr_data, 4)._lf()
-		b.alignLeft()
-	}
 
 	// ── E-invoice QR ──────────────────────────────────────────────
 	if (einvoiceQr && einvoiceQr.url) {
@@ -519,6 +547,15 @@ class BitmapReceiptBuilder {
 		return this
 	}
 
+	itemCols(price, qty, disc, total) {
+		this._rows.push({
+			type: '4',
+			cols: [String(price || ''), String(qty || ''), String(disc || ''), String(total || '')],
+			lh: this._lh,
+		})
+		return this
+	}
+
 	image(img) {
 		if (!img?.width || !img?.height) return this
 		const maxW = this._iW
@@ -574,6 +611,17 @@ class BitmapReceiptBuilder {
 				ctx.font = this._font(false, false)
 				ctx.textAlign = 'left';  ctx.fillText(row.l, this._mg, y)
 				ctx.textAlign = 'right'; ctx.fillText(row.r, W - this._mg, y)
+			} else if (row.type === '4') {
+				ctx.font = this._font(false, false)
+				const right = W - this._mg
+				const slX = this._mg + Math.floor(this._iW * 0.52)
+				const kmX = this._mg + Math.floor(this._iW * 0.72)
+				ctx.textAlign = 'left'
+				ctx.fillText(row.cols[0], this._mg, y)
+				ctx.textAlign = 'right'
+				ctx.fillText(row.cols[1], slX, y)
+				ctx.fillText(row.cols[2], kmX, y)
+				ctx.fillText(row.cols[3], right, y)
 			} else if (row.type === 'img') {
 				const x = this._mg + Math.floor((this._iW - row.w) / 2)
 				ctx.drawImage(row.img, x, y, row.w, row.h)
@@ -645,7 +693,6 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	const {
 		paperWidth = 80,
 		einvoiceQr,
-		vnpostQr,
 		openCashDrawer = true,
 		cashDrawerPin  = 0,
 	} = options
@@ -687,18 +734,16 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	if (isPartial) b.text('** THANH TOÁN MỘT PHẦN **', { align: 'center' })
 	b.divider()
 
-	b.text('Sản phẩm  ·  SL  ·  Thành tiền')
+	b.text('Sản phẩm  ·  SL  ·  KM  ·  Thành tiền', { bold: true })
 	b.divider()
 	for (const item of (invoiceData.items || [])) {
 		const qty  = item.quantity || item.qty || 1
 		const rate = item.price_list_rate || item.rate || 0
-		const sub  = qty * rate
+		const disc = Number.parseFloat(item.discount_amount || 0)
+		const sub  = Number.parseFloat(item.amount || 0)
 		const name = item.item_name || item.item_code || ''
 		b.text(name + (item.is_free_item ? ' (MIỄN PHÍ)' : ''))
-		b.twoCol(`  ${qty} × ${fmtAmt(rate)}`, fmtAmt(sub))
-		const dPct = Number.parseFloat(item.discount_percentage || 0)
-		const dAmt = Number.parseFloat(item.discount_amount    || 0)
-		if (dPct > 0 || dAmt > 0) b.twoCol(`  Giảm (${dPct.toFixed(0)}%):`, `-${fmtAmt(dAmt)}`)
+		b.itemCols(fmtAmt(rate), fmtQty(qty), fmtAmt(disc), fmtAmt(sub))
 		if (item.serial_no) b.text(`  S/N: ${item.serial_no.replace(/\n/g, ', ')}`)
 	}
 	b.divider()
@@ -711,32 +756,25 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	b.divider(true)
 	b.twoCol('Tổng cần thanh toán:', fmtAmt(invoiceData.grand_total))
 
-	const payments = invoiceData.payments || []
-	if (payments.length > 0) {
+	const outstandingBmp = Number.parseFloat(invoiceData.outstanding_amount || 0)
+	const { payments: receiptPaymentsBmp, totalPaid: receiptTotalPaidBmp } =
+		getReceiptPaymentSummary(invoiceData)
+	if (receiptPaymentsBmp.length > 0 || receiptTotalPaidBmp > 0 || outstandingBmp > 0) {
 		b.divider()
 		b.text('Thanh toán:')
-		for (const p of payments) b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
+		for (const p of receiptPaymentsBmp) {
+			b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
+		}
+		if (receiptTotalPaidBmp > 0) b.twoCol('Đã thanh toán:', fmtAmt(receiptTotalPaidBmp))
 	}
-	if (vnpostQr && vnpostQr.amount > 0) b.twoCol('  Chuyển khoản:', fmtAmt(vnpostQr.amount))
-	const paid = Number.parseFloat(invoiceData.paid_amount || 0)
-	if (paid > 0) b.twoCol('Đã thanh toán:', fmtAmt(paid))
 	const change = Number.parseFloat(invoiceData.change_amount || 0)
 	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
-	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
-	if (outstanding > 0) b.text(`Còn nợ: ${fmtAmt(outstanding)}`)
+	if (outstandingBmp > 0) b.text(`Còn nợ: ${fmtAmt(outstandingBmp)}`)
 
 	const lyEB = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
 	const lyBB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
 	b.divider()
 	b.text(`Điểm TL: +${lyEB.toFixed(0)}; Tổng ${lyBB.toFixed(0)}`)
-
-	if (vnpostQr && vnpostQr.qr_data) {
-		b.divider()
-		b.text('VNPOST PAY — CHUYỂN KHOẢN', { align: 'center' })
-		b.twoCol('STK:', vnpostQr.account_no || '')
-		b.twoCol('Ngân hàng:', vnpostQr.bank_short_name || '')
-		b.qr(vnpostQr.qr_data, 4)
-	}
 
 	if (einvoiceQr && einvoiceQr.url) {
 		b.divider()

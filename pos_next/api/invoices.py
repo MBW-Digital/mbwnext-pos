@@ -2776,6 +2776,8 @@ def _supplement_additional_discount_for_unapplied(
     if not selected_offer_names:
         return existing_result or frappe._dict()
 
+    from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+
     if existing_result and existing_result.get("transaction_pricing_rule"):
         return existing_result
 
@@ -2789,6 +2791,9 @@ def _supplement_additional_discount_for_unapplied(
         try:
             rule_doc = frappe.get_cached_doc("Pricing Rule", rule_name)
         except Exception:
+            continue
+
+        if not is_pricing_rule_in_time_window(rule_doc, pricing_args):
             continue
 
         if rule_doc.coupon_code_based:
@@ -3161,6 +3166,15 @@ def apply_offers(invoice_data, selected_offers=None):
             }
         )
 
+        from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+
+        if selected_offer_names:
+            selected_offer_names = {
+                name
+                for name in selected_offer_names
+                if is_pricing_rule_in_time_window(name, pricing_args)
+            }
+
         # Call ERPNext pricing engine - it handles all conflicts based on priority
         #
         # Why we pass pricing_args twice:
@@ -3322,6 +3336,11 @@ def apply_offers(invoice_data, selected_offers=None):
 
                         # Fetch full pricing rule to get discount values
                         full_rule = frappe.get_cached_doc("Pricing Rule", rule_name)
+
+                        if not is_pricing_rule_in_time_window(
+                            full_rule, pricing_args
+                        ):
+                            continue
 
                         if (
                             full_rule.rate_or_discount == "Discount Percentage"

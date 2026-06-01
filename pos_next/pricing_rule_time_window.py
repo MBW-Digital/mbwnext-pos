@@ -69,27 +69,68 @@ def filter_pricing_rules_by_pos_time_window(pricing_rules, args=None, doc=None):
 	filtered = []
 
 	for rule in pricing_rules:
-		if isinstance(rule, dict):
-			apply_tw = rule.get(APPLY_TIME_WINDOW)
-			tf = rule.get(VALID_TIME_FROM)
-			tt = rule.get(VALID_TIME_TO)
-		else:
-			apply_tw = getattr(rule, APPLY_TIME_WINDOW, None)
-			tf = getattr(rule, VALID_TIME_FROM, None)
-			tt = getattr(rule, VALID_TIME_TO, None)
-
-		if not cint(apply_tw):
-			filtered.append(rule)
-			continue
-
-		fs, ts = _time_to_seconds(tf), _time_to_seconds(tt)
-		if fs is None or ts is None or current_sec is None:
-			continue
-
-		if _is_current_time_in_window(current_sec, fs, ts):
+		if _rule_is_active_for_time(rule, current_sec):
 			filtered.append(rule)
 
 	return filtered
+
+
+def _rule_is_active_for_time(rule, current_sec=None):
+	"""Return True when rule passes Apply Time Window (or window disabled)."""
+	if isinstance(rule, dict):
+		apply_tw = rule.get(APPLY_TIME_WINDOW)
+		tf = rule.get(VALID_TIME_FROM)
+		tt = rule.get(VALID_TIME_TO)
+	else:
+		apply_tw = getattr(rule, APPLY_TIME_WINDOW, None)
+		tf = getattr(rule, VALID_TIME_FROM, None)
+		tt = getattr(rule, VALID_TIME_TO, None)
+
+	if not cint(apply_tw):
+		return True
+
+	if current_sec is None:
+		current_sec = _time_to_seconds(nowtime())
+	if current_sec is None:
+		return False
+
+	fs, ts = _time_to_seconds(tf), _time_to_seconds(tt)
+	if fs is None or ts is None:
+		return False
+
+	return _is_current_time_in_window(current_sec, fs, ts)
+
+
+def is_pricing_rule_in_time_window(rule, args=None, doc=None):
+	"""Public helper — True if rule may apply at transaction/posting time."""
+	if isinstance(rule, str):
+		try:
+			rule = frappe.get_cached_doc("Pricing Rule", rule)
+		except Exception:
+			return False
+
+	current_sec = _time_to_seconds(get_transaction_eval_time(args, doc))
+	return _rule_is_active_for_time(rule, current_sec)
+
+
+def filter_offer_dicts_by_time_window(offers):
+	"""Remove POS offer payloads outside their daily time window."""
+	if not offers:
+		return []
+	return [offer for offer in offers if _offer_dict_in_time_window(offer)]
+
+
+def _offer_dict_in_time_window(offer):
+	if not cint(offer.get("apply_time_window") if isinstance(offer, dict) else 0):
+		return True
+
+	current_sec = _time_to_seconds(nowtime())
+	rule_like = {
+		APPLY_TIME_WINDOW: offer.get("apply_time_window"),
+		VALID_TIME_FROM: offer.get("valid_time_from"),
+		VALID_TIME_TO: offer.get("valid_time_to"),
+	}
+	return _rule_is_active_for_time(rule_like, current_sec)
 
 
 def apply_pricing_rule_utils_patches():

@@ -479,7 +479,9 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		standalone_offers = _get_standalone_pricing_rule_offers(profile.company, date)
 		offers.extend(standalone_offers)
 
-		return [offer.to_dict() for offer in offers]
+		from pos_next.pricing_rule_time_window import filter_offer_dicts_by_time_window
+
+		return filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
 
 	except Exception as e:
 		frappe.log_error(f"Error fetching offers: {str(e)}", "Offers API")

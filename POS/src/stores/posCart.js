@@ -1018,15 +1018,19 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			const serverItem = serverItems[index] || {}
 			const discountPct = Number.parseFloat(serverItem.discount_percentage) || 0
 			const discountAmt = Number.parseFloat(serverItem.discount_amount) || 0
+			const serverHasPricingRules = hasPricingRules(serverItem.pricing_rules)
 
-			// Only update if server applied a pricing rule or discount
-			if (hasPricingRules(serverItem.pricing_rules) || discountPct > 0 || discountAmt > 0) {
+			if (serverHasPricingRules || discountPct > 0 || discountAmt > 0) {
 				item.discount_percentage = discountPct
 				item.discount_amount = discountAmt
 				item.pricing_rules = serverItem.pricing_rules
 				hasDiscounts = discountPct > 0 || discountAmt > 0
+			} else if (hasPricingRules(item.pricing_rules)) {
+				// Server cleared promotional discount (e.g. outside time window)
+				item.discount_percentage = 0
+				item.discount_amount = 0
+				item.pricing_rules = []
 			}
-			// Otherwise preserve existing manual discount
 
 			recalculateItem(item)
 		})
@@ -2097,6 +2101,11 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 			const newlyAppliedOffers = []
 			for (const offer of newOffers) {
+				const { eligible } = offersStore.checkOfferEligibility(offer)
+				if (!eligible) {
+					continue
+				}
+
 				if (!applySingleOfflineOffer(offer)) {
 					continue
 				}

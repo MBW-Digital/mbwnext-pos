@@ -670,14 +670,33 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	/**
 	 * Fetch `get_item_details` when online so Item Tax Template + item_tax_rate apply on cart lines and totals.
+	 * When offline, merge tax fields from IndexedDB item cache.
 	 */
 	async function enrichItemTaxIfNeeded(item, qty = 1) {
-		if (offlineState.isOffline || !item?.item_code || !posProfile.value) {
+		if (!item?.item_code || !posProfile.value) {
 			return item
 		}
 		if (itemTaxRateMapLooksComplete(item)) {
 			return item
 		}
+
+		if (offlineState.isOffline) {
+			try {
+				const cached = await getCachedItemByCodeOrName(item.item_code)
+				if (cached?.item_tax_rate || cached?.item_tax_template) {
+					return {
+						...item,
+						item_tax_template:
+							cached.item_tax_template ?? item.item_tax_template,
+						item_tax_rate: cached.item_tax_rate ?? item.item_tax_rate,
+					}
+				}
+			} catch (e) {
+				console.warn("enrichItemTaxIfNeeded offline cache:", e)
+			}
+			return item
+		}
+
 		try {
 			const details = await getItemDetailsResource.submit({
 				item_code: item.item_code,
@@ -689,11 +708,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			if (!details || typeof details !== "object") {
 				return item
 			}
-			return {
+			const enriched = {
 				...item,
 				item_tax_template: details.item_tax_template ?? item.item_tax_template,
 				item_tax_rate: details.item_tax_rate ?? item.item_tax_rate,
 			}
+			if (enriched.item_tax_rate || enriched.item_tax_template) {
+				cacheItems([enriched]).catch(() => {})
+			}
+			return enriched
 		} catch (e) {
 			console.warn("enrichItemTaxIfNeeded:", e)
 			return item
@@ -1302,6 +1325,38 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				offerProcessingState.value.isProcessing = true
 				offerProcessingState.value.error = null
 
+				if (offlineState.isOffline) {
+					offersStore.updateCartSnapshot(buildCartSnapshot())
+					const { eligible, reason } = offersStore.checkOfferEligibility(offer)
+					if (!eligible) {
+						showWarning(
+							reason || __("Your cart doesn't meet the requirements for this offer."),
+						)
+						offersDialogRef?.resetApplyingState()
+						result = false
+						return
+					}
+
+					if (!applySingleOfflineOffer(offer)) {
+						showWarning(__("Your cart doesn't meet the requirements for this offer."))
+						offersDialogRef?.resetApplyingState()
+						result = false
+						return
+					}
+
+					appliedOffers.value.push(buildAppliedOfferEntry(offer, "manual"))
+					syncOfflineTransactionDiscounts()
+					if (!isTransactionPriceOffer(offer)) {
+						rebuildIncrementalCache()
+					}
+
+					offerProcessingState.value.lastProcessedAt = Date.now()
+					await nextTick()
+					showSuccess(__('{0} applied successfully', [(offer.title || offer.name)]))
+					result = true
+					return
+				}
+
 				const invoiceData = buildOfferEvaluationPayload(currentProfile)
 				offersStore.updateCartSnapshot(buildCartSnapshot())
 				const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
@@ -1444,6 +1499,49 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			showSuccess(__("Offer has been removed from cart"))
 			offersDialogRef?.resetApplyingState()
 			return true
+		}
+
+		if (offlineState.isOffline) {
+			let result = false
+			await offerQueue.enqueue(async (signal) => {
+				if (signal?.aborted) {
+					return
+				}
+
+				try {
+					offerProcessingState.value.isProcessing = true
+					offerProcessingState.value.error = null
+
+					const removedOffer = appliedOffers.value.find(
+						(entry) => entry.code === offerCode,
+					)
+					if (removedOffer) {
+						removeOfflineOfferEffects(removedOffer)
+					}
+
+					appliedOffers.value = remainingOffers
+					syncOfflineTransactionDiscounts()
+					rebuildIncrementalCache()
+
+					offerProcessingState.value.lastProcessedAt = Date.now()
+					await nextTick()
+					showSuccess(__("Offer has been removed from cart"))
+					offersDialogRef?.resetApplyingState()
+					result = true
+				} catch (error) {
+					if (signal?.aborted) {
+						return
+					}
+					console.error("Error removing offer offline:", error)
+					offerProcessingState.value.error = error.message
+					showError(__("Failed to update cart after removing offer."))
+					offersDialogRef?.resetApplyingState()
+					result = false
+				} finally {
+					offerProcessingState.value.isProcessing = false
+				}
+			})
+			return result
 		}
 
 		let result = false
@@ -1713,120 +1811,314 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 	}
 
+	function isTransactionPriceOffer(offer) {
+		return offer?.apply_on === "Transaction" && offer?.offer !== "Give Product"
+	}
+
+	function getEligibleItemsForOffer(offer) {
+		if (offer.apply_on === "Item Code") {
+			const eligibleCodes = offer.eligible_items || []
+			return invoiceItems.value.filter((item) =>
+				eligibleCodes.includes(item.item_code),
+			)
+		}
+		if (offer.apply_on === "Item Group") {
+			const eligibleGroups = offer.eligible_item_groups || []
+			return invoiceItems.value.filter((item) =>
+				eligibleGroups.includes(item.item_group),
+			)
+		}
+		if (offer.apply_on === "Brand") {
+			const eligibleBrands = offer.eligible_brands || []
+			return invoiceItems.value.filter((item) =>
+				eligibleBrands.includes(item.brand),
+			)
+		}
+		if (offer.apply_on === "Transaction") {
+			return invoiceItems.value
+		}
+		return []
+	}
+
+	function buildAppliedOfferEntry(offer, source = "offline") {
+		return {
+			name: offer.title || offer.name,
+			code: offer.name,
+			offer,
+			source,
+			applied: true,
+			rules: [offer.name],
+			min_qty: offer.min_qty,
+			max_qty: offer.max_qty,
+			min_amt: offer.min_amt,
+			max_amt: offer.max_amt,
+		}
+	}
+
+	/**
+	 * Apply invoice-level discount for Transaction pricing rules offline.
+	 * Mirrors online applyTransactionDiscountFromResponse behaviour.
+	 */
+	function applyOfflineTransactionDiscount(offer) {
+		if (!offer) {
+			return false
+		}
+
+		const discountType = offer.discount_type || offer.rate_or_discount
+		const discountPercentage = Number.parseFloat(offer.discount_percentage) || 0
+		const discountAmount = Number.parseFloat(offer.discount_amount) || 0
+		const applyDiscountOn = offer.apply_discount_on || "Net Total"
+
+		if (discountType === "Discount Percentage" && discountPercentage > 0) {
+			applyTransactionDiscountFromResponse({
+				additionalDiscountPct: discountPercentage,
+				additionalDiscountAmt: 0,
+				applyDiscountOn,
+			})
+			return true
+		}
+
+		if (discountType === "Discount Amount" && discountAmount > 0) {
+			applyTransactionDiscountFromResponse({
+				additionalDiscountPct: 0,
+				additionalDiscountAmt: discountAmount,
+				applyDiscountOn,
+			})
+			return true
+		}
+
+		return false
+	}
+
+	function syncOfflineTransactionDiscounts() {
+		const transactionOffer = appliedOffers.value
+			.map((entry) => entry.offer)
+			.find((offer) => offer && isTransactionPriceOffer(offer))
+
+		if (!transactionOffer) {
+			applyTransactionDiscountFromResponse()
+			return
+		}
+
+		applyOfflineTransactionDiscount(transactionOffer)
+	}
+
+	function itemHasPricingRule(item, offerCode) {
+		const rules = item?.pricing_rules
+		if (!rules) {
+			return false
+		}
+		if (Array.isArray(rules)) {
+			return rules.includes(offerCode)
+		}
+		return rules === offerCode
+	}
+
+	function clearOfflineItemPricingRule(offerCode) {
+		let changed = false
+
+		for (const item of invoiceItems.value) {
+			if (!itemHasPricingRule(item, offerCode)) {
+				continue
+			}
+
+			if (Array.isArray(item.pricing_rules)) {
+				item.pricing_rules = item.pricing_rules.filter((rule) => rule !== offerCode)
+			} else {
+				item.pricing_rules = []
+			}
+
+			if (!item.pricing_rules?.length) {
+				item.discount_percentage = 0
+				item.discount_amount = 0
+			}
+
+			recalculateItem(item)
+			changed = true
+		}
+
+		return changed
+	}
+
+	function clearOfflineFreeItemEffects(offerCode) {
+		let changed = false
+
+		for (const item of invoiceItems.value) {
+			if (!itemHasPricingRule(item, offerCode)) {
+				continue
+			}
+
+			item.free_qty = 0
+			if (Array.isArray(item.pricing_rules)) {
+				item.pricing_rules = item.pricing_rules.filter((rule) => rule !== offerCode)
+			} else {
+				item.pricing_rules = []
+			}
+			changed = true
+		}
+
+		const giftIndex = freeGiftItems.value.findIndex(
+			(item) => item.pricing_rules === offerCode,
+		)
+		if (giftIndex > -1) {
+			freeGiftItems.value.splice(giftIndex, 1)
+			changed = true
+		}
+
+		return changed
+	}
+
+	function removeOfflineOfferEffects(appliedOffer) {
+		const offer = appliedOffer?.offer
+		if (!offer) {
+			return false
+		}
+
+		if (isTransactionPriceOffer(offer)) {
+			applyTransactionDiscountFromResponse()
+			return true
+		}
+
+		if (offer.offer === "Give Product") {
+			return clearOfflineFreeItemEffects(appliedOffer.code)
+		}
+
+		return clearOfflineItemPricingRule(appliedOffer.code)
+	}
+
+	function applySingleOfflineOffer(offer) {
+		if (offer.offer === "Give Product") {
+			const eligibleItems = getEligibleItemsForOffer(offer)
+			return eligibleItems.length > 0 && applyOfflineFreeItem(offer, eligibleItems)
+		}
+
+		if (isTransactionPriceOffer(offer)) {
+			return applyOfflineTransactionDiscount(offer)
+		}
+
+		const eligibleItems = getEligibleItemsForOffer(offer)
+		return eligibleItems.length > 0 && applyOfflinePriceDiscount(offer, eligibleItems)
+	}
+
+	async function refreshCartItemTaxFromCache() {
+		if (!offlineState.isOffline || invoiceItems.value.length === 0) {
+			return false
+		}
+
+		let changed = false
+		for (const item of invoiceItems.value) {
+			if (itemTaxRateMapLooksComplete(item)) {
+				continue
+			}
+
+			try {
+				const cached = await getCachedItemByCodeOrName(item.item_code)
+				if (!cached?.item_tax_rate && !cached?.item_tax_template) {
+					continue
+				}
+
+				item.item_tax_template =
+					cached.item_tax_template ?? item.item_tax_template
+				item.item_tax_rate = cached.item_tax_rate ?? item.item_tax_rate
+				recalculateItem(item)
+				changed = true
+			} catch (e) {
+				console.warn("refreshCartItemTaxFromCache:", e)
+			}
+		}
+
+		if (changed) {
+			rebuildIncrementalCache()
+		}
+		return changed
+	}
+
 	/**
 	 * Apply offers when offline using cached offer data.
 	 * Calculates discounts client-side based on offer rules.
 	 *
-	 * In offline mode, we:
-	 * 1. Check eligibility using posOffers.checkOfferEligibility
-	 * 2. Apply discount percentage/amount directly to cart items
-	 * 3. Handle free items (product discounts) by setting free_qty
-	 * 4. Mark offers as applied (with source: "offline")
-	 *
-	 * Supports:
-	 * - Discount Percentage (e.g., 10% off)
-	 * - Discount Amount (e.g., $5 off)
-	 * - Free Items (e.g., Buy 2 Get 1 Free)
+	 * Transaction-level offers use additional_discount_percentage (invoice-level),
+	 * matching online ERPNext behaviour. Item/group/brand offers stay item-level.
 	 */
 	function applyOffersOffline() {
-		// Skip if cart is empty or no offers available
 		if (invoiceItems.value.length === 0 || !offersStore.hasFetched) {
 			return
 		}
 
-		// Verify we're actually offline
 		if (!offlineState.isOffline) {
-			return // Use online mode instead
+			return
 		}
 
-		try {
-			// Build current cart snapshot
-			const cartSnapshot = buildCartSnapshot()
+		void (async () => {
+			try {
+				await refreshCartItemTaxFromCache()
+
+				const cartSnapshot = buildCartSnapshot()
 			offersStore.updateCartSnapshot(cartSnapshot)
 
-			// Get eligible auto offers
+			const invalidOffers = []
+			for (const appliedOffer of appliedOffers.value) {
+				const offer = appliedOffer.offer
+				if (!offer) {
+					continue
+				}
+
+				const { eligible } = offersStore.checkOfferEligibility(offer)
+				if (!eligible) {
+					invalidOffers.push(appliedOffer)
+				}
+			}
+
+			let itemPricingChanged = false
+			for (const invalidOffer of invalidOffers) {
+				if (removeOfflineOfferEffects(invalidOffer)) {
+					itemPricingChanged = true
+				}
+			}
+
+			if (invalidOffers.length > 0) {
+				const invalidCodes = new Set(invalidOffers.map((entry) => entry.code))
+				appliedOffers.value = appliedOffers.value.filter(
+					(entry) => !invalidCodes.has(entry.code),
+				)
+				const offerNames = invalidOffers.map((entry) => entry.name).join(", ")
+				showWarning(
+					__("Offer removed: {0}. Cart no longer meets requirements.", [offerNames]),
+				)
+			}
+
+			syncOfflineTransactionDiscounts()
+
 			const eligibleOffers = offersStore.autoEligibleOffers
-
-			if (eligibleOffers.length === 0) {
-				return
-			}
-
-			// Find new offers to apply (both price and product discounts)
-			const appliedOfferCodes = new Set(appliedOffers.value.map(o => o.code))
-			const newOffers = eligibleOffers.filter(offer => !appliedOfferCodes.has(offer.name))
-
-			if (newOffers.length === 0) {
-				return
-			}
+			const appliedOfferCodes = new Set(appliedOffers.value.map((entry) => entry.code))
+			const newOffers = eligibleOffers.filter(
+				(offer) => !appliedOfferCodes.has(offer.name),
+			)
 
 			const newlyAppliedOffers = []
-
 			for (const offer of newOffers) {
-				// Determine offer type: "Item Price" (discount) or "Give Product" (free item)
-				const isProductDiscount = offer.offer === 'Give Product'
-
-				// Find eligible items based on offer.apply_on
-				let eligibleItems = []
-
-				if (offer.apply_on === 'Item Code') {
-					const eligibleCodes = offer.eligible_items || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleCodes.includes(item.item_code)
-					)
-				} else if (offer.apply_on === 'Item Group') {
-					const eligibleGroups = offer.eligible_item_groups || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleGroups.includes(item.item_group)
-					)
-				} else if (offer.apply_on === 'Brand') {
-					const eligibleBrands = offer.eligible_brands || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleBrands.includes(item.brand)
-					)
-				} else if (offer.apply_on === 'Transaction') {
-					// Transaction-level discount applies to all items
-					eligibleItems = invoiceItems.value
+				if (!applySingleOfflineOffer(offer)) {
+					continue
 				}
 
-				if (eligibleItems.length === 0) continue
-
-				let offerApplied = false
-
-				if (isProductDiscount) {
-					// === PRODUCT DISCOUNT (FREE ITEMS) ===
-					offerApplied = applyOfflineFreeItem(offer, eligibleItems)
-				} else {
-					// === PRICE DISCOUNT ===
-					offerApplied = applyOfflinePriceDiscount(offer, eligibleItems)
-				}
-
-				if (offerApplied) {
-					// Mark offer as applied
-					appliedOffers.value.push({
-						name: offer.title || offer.name,
-						code: offer.name,
-						offer,
-						source: "offline",
-						applied: true,
-						rules: [offer.name],
-						min_qty: offer.min_qty,
-						max_qty: offer.max_qty,
-						min_amt: offer.min_amt,
-						max_amt: offer.max_amt,
-					})
-
-					newlyAppliedOffers.push(offer.title || offer.name)
+				appliedOffers.value.push(buildAppliedOfferEntry(offer))
+				newlyAppliedOffers.push(offer.title || offer.name)
+				if (!isTransactionPriceOffer(offer)) {
+					itemPricingChanged = true
 				}
 			}
 
-			// Rebuild cache after bulk changes
-			if (newlyAppliedOffers.length > 0) {
+			if (itemPricingChanged) {
 				rebuildIncrementalCache()
-				showSuccess(__('Offline: {0} applied', [newlyAppliedOffers.join(', ')]))
 			}
-		} catch (error) {
-			console.error("Error applying offers offline:", error)
-		}
+
+			if (newlyAppliedOffers.length > 0) {
+				showSuccess(__("Offline: {0} applied", [newlyAppliedOffers.join(", ")]))
+			}
+			} catch (error) {
+				console.error("Error applying offers offline:", error)
+			}
+		})()
 	}
 
 	/**
@@ -2515,6 +2807,20 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				syncOfferSnapshot()
 			}
 		}
+	)
+
+	// Refresh item tax from cache when switching to offline (same session)
+	watch(
+		() => offlineState.isOffline,
+		async (offline) => {
+			if (!offline || invoiceItems.value.length === 0) {
+				return
+			}
+			await refreshCartItemTaxFromCache()
+			if (posProfile.value) {
+				await loadTaxRules(posProfile.value)
+			}
+		},
 	)
 
 	return {

@@ -1,6 +1,7 @@
 import { createResource } from "frappe-ui"
 import { computed, ref, toRaw } from "vue"
 import { isOffline } from "@/utils/offline"
+import { getSetting, setSetting } from "@/utils/offline/db"
 import { useSerialNumberStore } from "@/stores/serialNumber"
 import { CoalescingMutex } from "@/utils/mutex"
 import { logger } from "@/utils/logger"
@@ -1323,8 +1324,20 @@ export function useInvoice() {
 		 * Load tax rules from POS Profile and tax inclusive setting from POS Settings
 		 */
 		try {
-			const result = await getTaxesResource.submit({ pos_profile: profileName })
-			taxRules.value = result?.data || result || []
+			if (isOffline()) {
+				const cached = await getSetting(`tax_rules_${profileName}`, null)
+				if (Array.isArray(cached) && cached.length > 0) {
+					taxRules.value = cached
+				}
+			} else {
+				const result = await getTaxesResource.submit({ pos_profile: profileName })
+				taxRules.value = result?.data || result || []
+				if (profileName) {
+					await setSetting(`tax_rules_${profileName}`, taxRules.value).catch(
+						() => {},
+					)
+				}
+			}
 
 			// Load tax inclusive setting from POS Settings if provided
 			if (posSettings && posSettings.tax_inclusive !== undefined) {
@@ -1340,8 +1353,10 @@ export function useInvoice() {
 			return taxRules.value
 		} catch (error) {
 			console.error("Error loading tax rules:", error)
-			taxRules.value = []
-			return []
+			if (!isOffline()) {
+				taxRules.value = []
+			}
+			return taxRules.value
 		}
 	}
 

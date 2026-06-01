@@ -87,6 +87,8 @@ class Offer:
 	is_recursive: int = 0  # 1 if offer applies recursively (e.g., buy 2 get 1 free for every 2)
 	recurse_for: float = 0  # Give free item for every N quantity (used when is_recursive=1)
 	apply_recursion_over: float = 0  # Qty for which recursion isn't applicable
+	# Transaction-level discount base (Net Total / Grand Total)
+	apply_discount_on: Optional[str] = None
 	# POS Next: daily time window on Pricing Rule (custom fields)
 	apply_time_window: int = 0
 	valid_time_from: Optional[str] = None
@@ -379,6 +381,7 @@ class OfferBuilder:
 			is_recursive=1 if slab.get("is_recursive") and not is_price_discount else 0,
 			recurse_for=flt(slab.get("recurse_for", 0)) if not is_price_discount else 0,
 			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
 			apply_time_window=aw,
 			valid_time_from=tf,
 			valid_time_to=tt,
@@ -440,6 +443,7 @@ class OfferBuilder:
 			is_recursive=1 if rule.get("is_recursive") and not is_price_discount else 0,
 			recurse_for=flt(rule.get("recurse_for", 0)) if not is_price_discount else 0,
 			apply_recursion_over=flt(rule.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
 			apply_time_window=aw,
 			valid_time_from=tf,
 			valid_time_to=tt,
@@ -492,7 +496,8 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 		SELECT
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
-			price_or_product_discount, priority, valid_from, valid_upto
+			price_or_product_discount, apply_discount_on, priority,
+			valid_from, valid_upto
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
@@ -547,7 +552,7 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling,
-			coupon_code_based, price_or_product_discount,
+			coupon_code_based, price_or_product_discount, apply_discount_on,
 			rate_or_discount, rate, discount_amount, discount_percentage,
 			min_qty, max_qty, min_amt, max_amt,
 			free_item, free_qty, free_item_uom, same_item, is_recursive,

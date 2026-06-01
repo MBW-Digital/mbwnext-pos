@@ -1379,6 +1379,23 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 			# UOM-specific prices map for frontend selector
 			item["uom_prices"] = uom_prices_map.get(item["item_code"], {})
 
+			# Item tax template + rate for offline cart / tax totals
+			try:
+				from pos_next.controllers.python.sales_invoice import (
+					ensure_selling_item_tax_for_item_line,
+				)
+
+				tpl, tr = ensure_selling_item_tax_for_item_line(
+					item["item_code"],
+					pos_profile_doc.company,
+				)
+				if tpl:
+					item["item_tax_template"] = tpl
+				if tr:
+					item["item_tax_rate"] = tr
+			except Exception:
+				pass
+
 		# Apply resolved barcode data (weighted/priced) to the first matching item
 		if resolved_barcode_data and items:
 			from pos_next.services.barcode import compute_resolved_item_data

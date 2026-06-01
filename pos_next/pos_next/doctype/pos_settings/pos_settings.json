@@ -32,7 +32,6 @@
   "display_item_code",
   "show_customer_balance",
   "column_break_display",
-  "hide_expected_amount",
   "display_discount_percentage",
   "display_discount_amount",
   "section_break_operations",
@@ -264,13 +263,6 @@
   {
    "fieldname": "column_break_display",
    "fieldtype": "Column Break"
-  },
-  {
-   "default": "0",
-   "description": "Hide expected cash amount in closing",
-   "fieldname": "hide_expected_amount",
-   "fieldtype": "Check",
-   "label": "Hide Expected Amount"
   },
   {
    "default": "0",

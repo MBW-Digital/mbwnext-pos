@@ -191,18 +191,18 @@
           <div class="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
             <div :class="[
               'px-3 py-3 md:px-6 md:py-4 border-b border-gray-200',
-              hideExpectedAmount && showSuccessReport ? 'bg-green-50 border-green-200' : 'bg-gray-50'
+              showSuccessReport ? 'bg-green-50 border-green-200' : 'bg-gray-50'
             ]">
               <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                 <div>
                   <div class="text-start flex items-center gap-2">
                     <h3 class="text-sm md:text-lg font-semibold text-gray-900">{{ __('Payment Reconciliation') }}</h3>
-                    <span v-if="hideExpectedAmount && showSuccessReport" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                    <span v-if="showSuccessReport" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                       {{ __('✓ Shift Closed') }}
                     </span>
                   </div>
                   <p class="text-xs md:text-sm text-gray-600">
-                    {{ reconciliationMessage }}
+                    {{ __('Count your cash and enter actual amounts below') }}
                   </p>
                 </div>
                 <div v-if="shouldShowClosingSummary && getTotalDifference !== 0" class="text-start sm:text-end">
@@ -218,60 +218,7 @@
             </div>
 
             <div class="p-3 md:p-6">
-              <!-- ENTRY MODE: Simple blind input list (when hideExpectedAmount is enabled and not showing report) -->
-              <div v-if="isInEntryMode" class="flex flex-col gap-3 md:gap-4">
-                <div
-                  v-for="(payment, idx) in visiblePaymentReconciliation"
-                  :key="idx"
-                  class="border border-gray-200 rounded-lg p-3 md:p-4 bg-white hover:border-gray-300 transition-colors"
-                >
-                  <div class="flex items-center justify-between gap-3">
-                    <!-- Payment Method Name with Icon -->
-                    <div class="flex items-center gap-2 md:gap-3 flex-1">
-                      <div :class="['rounded-lg p-1.5 md:p-2 flex-shrink-0', getPaymentIcon(payment.mode_of_payment).color]">
-                        <span class="text-base md:text-xl">{{ getPaymentIcon(payment.mode_of_payment).icon }}</span>
-                      </div>
-                      <label :for="`payment-${idx}`" class="text-start text-sm md:text-base font-semibold text-gray-900 cursor-pointer">
-                        {{ payment.mode_of_payment }}
-                      </label>
-                    </div>
-
-                    <!-- Simple Input with Native Arrows -->
-                    <div v-if="!isCashMethod(payment.mode_of_payment)" class="w-40 md:w-48">
-                      <Input
-                        :id="`payment-${idx}`"
-                        :modelValue="payment.closing_amount"
-                        @update:modelValue="(value) => updateClosingAmount(payment, value)"
-                        type="number"
-                        step="10"
-                        min="0"
-                        placeholder="0.00"
-                        :disabled="submitResource.loading"
-                        :aria-label="__('Enter actual amount for {0}', [payment.mode_of_payment])"
-                        class="text-base md:text-lg text-center font-semibold"
-                      />
-                    </div>
-                    <div v-else class="text-end">
-                      <div class="text-xs uppercase text-gray-500">{{ __('Total') }}</div>
-                      <div class="text-base md:text-lg font-bold text-gray-900">
-                        {{ formatCurrency(payment.closing_amount || 0) }}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div v-if="isCashMethod(payment.mode_of_payment)" class="mt-3">
-                    <CashDenominationCounter
-                      :input-id-prefix="`closing-entry-${idx}`"
-                      :modelValue="payment.closing_amount"
-                      @update:modelValue="(value) => updateClosingAmount(payment, value)"
-                      :disabled="submitResource.loading"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <!-- REVIEW MODE: Full payment method cards (when not in entry mode) -->
-              <div v-else class="flex flex-col gap-4 md:gap-5">
+              <div class="flex flex-col gap-4 md:gap-5">
                 <div
                   v-for="(payment, idx) in visiblePaymentReconciliation"
                   :key="idx"
@@ -539,10 +486,8 @@
 <script setup>
 import { Button, Dialog, Input } from "frappe-ui"
 import { computed, reactive, ref, watch } from "vue"
-import { storeToRefs } from "pinia"
 import { useShift } from "../composables/useShift"
 import { useFormatters } from "../composables/useFormatters"
-import { usePOSSettingsStore } from "../stores/posSettings"
 import CashDenominationCounter from "./common/CashDenominationCounter.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
 import { isCashPaymentMethod, isBankTransferPaymentMethod } from "../composables/useCashDenominations"
@@ -568,8 +513,6 @@ const open = computed({
 
 const { getClosingShiftData, submitClosingShift } = useShift()
 const { formatCurrency, formatQuantity, formatDateTime, formatTime } = useFormatters()
-const posSettingsStore = usePOSSettingsStore()
-const { hideExpectedAmount } = storeToRefs(posSettingsStore)
 
 const closingData = ref(null)
 const closingDataResource = getClosingShiftData
@@ -579,10 +522,8 @@ const showSuccessReport = ref(false) // Track if shift is closed and showing rep
 const errorMessage = ref('') // User-friendly error message
 
 // Watch dialog open state
-watch(open, async (isOpen) => {
+watch(open, (isOpen) => {
 	if (isOpen && props.openingShift) {
-		// Refresh POS settings to get latest hideExpectedAmount value
-		await posSettingsStore.reloadSettings()
 		loadClosingData()
 	}
 })
@@ -597,10 +538,11 @@ async function loadClosingData() {
 
 		// Make payment_reconciliation reactive
 		if (data.payment_reconciliation) {
+			const hideClosingInfo = Boolean(data.hide_shift_closing_information)
 			data.payment_reconciliation = data.payment_reconciliation.map((payment) =>
 				reactive({
 					...payment,
-					closing_amount: hideExpectedAmount.value
+					closing_amount: hideClosingInfo
 						? payment.closing_amount ?? null
 						: payment.closing_amount ?? payment.expected_amount ?? 0,
 					difference: 0,
@@ -671,8 +613,7 @@ const canSubmit = computed(() => {
 	if (!closingData.value || !closingData.value.payment_reconciliation)
 		return false
 
-	// Check if all closing amounts are filled
-	return closingData.value.payment_reconciliation.every(
+	return visiblePaymentReconciliation.value.every(
 		(payment) =>
 			payment.closing_amount !== null &&
 			payment.closing_amount !== undefined &&
@@ -723,23 +664,12 @@ const hideShiftClosingInformation = computed(() =>
 )
 
 const shouldShowClosingSummary = computed(
-	() => !hideExpectedAmount.value && !hideShiftClosingInformation.value,
+	() => !hideShiftClosingInformation.value,
 )
 
 const shouldShowActualOnlySummary = computed(
-	() => hideShiftClosingInformation.value && !hideExpectedAmount.value,
+	() => hideShiftClosingInformation.value,
 )
-
-const isInEntryMode = computed(() =>
-	hideExpectedAmount.value && !showSuccessReport.value
-)
-
-const reconciliationMessage = computed(() => {
-	if (isInEntryMode.value) {
-		return __('Count cash by denomination and enter actual amounts for each payment method')
-	}
-	return __('Count your cash and enter actual amounts below')
-})
 
 // Computed properties for real-time recalculation
 const invoiceCount = computed(() => {

@@ -36,8 +36,7 @@ POS_SETTINGS_FIELDS = [
 	"allow_sales_order",
 	"allow_select_sales_order",
 	"create_only_sales_order",
-	"allow_manual_cash_drawer",
-	"hide_expected_amount",
+  "allow_manual_cash_drawer",
 ]
 
 # Default POS Settings values
@@ -65,5 +64,4 @@ DEFAULT_POS_SETTINGS = {
 	"allow_select_sales_order": 0,
 	"create_only_sales_order": 0,
 	"allow_manual_cash_drawer": 0,
-	"hide_expected_amount": 0,
 }

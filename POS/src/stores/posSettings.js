@@ -30,7 +30,6 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		default_card_view: 0,
 		display_item_code: 0,
 		show_customer_balance: 0,
-		hide_expected_amount: 0,
 		display_discount_percentage: 0,
 		display_discount_amount: 0,
 		// Operations
@@ -131,9 +130,6 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	)
 	const showCustomerBalance = computed(() =>
 		Boolean(settings.value.show_customer_balance),
-	)
-	const hideExpectedAmount = computed(() =>
-		Boolean(settings.value.hide_expected_amount),
 	)
 	const displayDiscountPercentage = computed(() =>
 		Boolean(settings.value.display_discount_percentage),
@@ -304,7 +300,6 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			default_card_view: 0,
 			display_item_code: 0,
 			show_customer_balance: 0,
-			hide_expected_amount: 0,
 			display_discount_percentage: 0,
 			display_discount_amount: 0,
 			allow_sales_order: 0,
@@ -428,7 +423,6 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		defaultCardView,
 		displayItemCode,
 		showCustomerBalance,
-		hideExpectedAmount,
 		displayDiscountPercentage,
 		displayDiscountAmount,
 

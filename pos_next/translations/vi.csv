@@ -1587,3 +1587,4 @@
 "Close shift early?","Đóng ca sớm?"
 "You are closing the POS shift before your scheduled HR shift ({0}) ends ({1}). Do you want to continue?","Bạn đang đóng ca POS trước khi ca làm việc HR đã lên lịch ({0}) kết thúc ({1}). Bạn có muốn tiếp tục không?"
 "You are closing the POS shift before your scheduled HR shift ends. Do you want to continue?","Bạn đang đóng ca POS trước khi ca làm việc HR đã lên lịch kết thúc. Bạn có muốn tiếp tục không?"
+"Hide Shift Closing Information","Ẩn thông tin đóng ca"

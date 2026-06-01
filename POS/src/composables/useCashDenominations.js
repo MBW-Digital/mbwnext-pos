@@ -36,3 +36,17 @@ export function isCashPaymentMethod(methodName = "") {
 		normalized.includes("tien mat")
 	)
 }
+
+export function isBankTransferPaymentMethod(methodName = "") {
+	const normalized = String(methodName).toLowerCase().trim()
+	return (
+		normalized === "bank draft" ||
+		normalized === "chuyển khoản" ||
+		normalized === "chuyen khoan" ||
+		normalized === "bank transfer" ||
+		normalized === "wire transfer" ||
+		normalized.includes("transfer") ||
+		normalized.includes("chuyển") ||
+		normalized.includes("chuyen")
+	)
+}

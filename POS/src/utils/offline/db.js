@@ -215,9 +215,17 @@ export const getSetting = async (key, defaultValue = null) => {
  * @param {*} value - Value to store (must be IndexedDB-serializable)
  * @returns {Promise<void>}
  */
+function toStorableValue(value) {
+	if (value === undefined) {
+		return null
+	}
+	// Strip Vue proxies / non-cloneable values before IndexedDB put
+	return JSON.parse(JSON.stringify(value))
+}
+
 export const setSetting = async (key, value) => {
 	try {
-		await db.settings.put({ key, value })
+		await db.settings.put({ key, value: toStorableValue(value) })
 	} catch (error) {
 		log.error(`Error setting ${key}:`, error)
 	}

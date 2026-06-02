@@ -261,6 +261,32 @@ export function useInvoice() {
 	})
 
 	// Actions
+	function itemHasExplicitDiscount(item) {
+		const pct = Number.parseFloat(item.discount_percentage) || 0
+		const amt = Number.parseFloat(item.discount_amount) || 0
+		if (pct > 0 || amt > 0) {
+			return true
+		}
+		const rules = item?.pricing_rules
+		if (!rules) {
+			return false
+		}
+		if (Array.isArray(rules)) {
+			return rules.length > 0
+		}
+		return String(rules).trim().length > 0
+	}
+
+	function discountsCompatibleForMerge(line, item) {
+		const lineDisc = Number.parseFloat(line.discount_percentage) || 0
+		const itemDisc = Number.parseFloat(item.discount_percentage) || 0
+		if (lineDisc === itemDisc) {
+			return true
+		}
+		// Item grid adds have no discount yet; merge into lines with auto-applied promos.
+		return !itemHasExplicitDiscount(item)
+	}
+
 	/**
 	 * Find an existing cart line that can receive merged quantity.
 	 * Lines merge when item, UOM, batch, price list rate, and discount tier match.
@@ -283,9 +309,10 @@ export function useInvoice() {
 				}
 				const lineRate = roundCurrency(line.price_list_rate || line.rate || 0)
 				const itemRate = roundCurrency(item.price_list_rate || item.rate || 0)
-				const lineDisc = Number.parseFloat(line.discount_percentage) || 0
-				const itemDisc = Number.parseFloat(item.discount_percentage) || 0
-				return lineRate === itemRate && lineDisc === itemDisc
+				return (
+					lineRate === itemRate
+					&& discountsCompatibleForMerge(line, item)
+				)
 			}) || null
 		)
 	}
@@ -1414,9 +1441,10 @@ export function useInvoice() {
 				const result = await getTaxesResource.submit({ pos_profile: profileName })
 				taxRules.value = result?.data || result || []
 				if (profileName) {
-					await setSetting(`tax_rules_${profileName}`, taxRules.value).catch(
-						() => {},
-					)
+					await setSetting(
+						`tax_rules_${profileName}`,
+						toRaw(taxRules.value),
+					).catch(() => {})
 				}
 			}
 
@@ -1504,6 +1532,7 @@ export function useInvoice() {
 		setTaxInclusive,
 		recalculateItem,
 		rebuildIncrementalCache,
+		findMergeableLine,
 		formatItemsForSubmission,
 		buildItemsForSubmission,
 

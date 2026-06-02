@@ -27,6 +27,8 @@ const CACHEABLE_FIELDS = [
 	"selling_price_list",
 	"price_list",
 	"barcode",
+	"pos_stop_selling",
+	"discontinued_companies",
 ]
 
 function toPlainObject(value) {

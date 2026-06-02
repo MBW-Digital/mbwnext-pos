@@ -1,8 +1,14 @@
 import { useInvoice } from "@/composables/useInvoice"
 import { usePOSOffersStore } from "@/stores/posOffers"
-import { usePOSShiftStore } from "@/stores/posShift"
 import { usePOSSettingsStore } from "@/stores/posSettings"
+import { usePOSShiftStore } from "@/stores/posShift"
 import { parseError } from "@/utils/errorHandler"
+import {
+	assertCanSellInPos,
+	getPosStopSellingMessage,
+	isPosStopSelling,
+	parseStopSellingApiResult,
+} from "@/utils/posStopSelling"
 import {
 	checkStockAvailability,
 	formatStockError,
@@ -119,6 +125,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		getItemDetailsResource,
 		recalculateItem,
 		rebuildIncrementalCache,
+		findMergeableLine,
 		formatItemsForSubmission,
 		buildItemsForSubmission,
 	} = useInvoice()
@@ -746,18 +753,51 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {Object|null} currentProfile - POS profile
 	 * @param {{ merge?: boolean }} options - merge: false = add as new line each time (for per-line service items)
 	 */
+	async function ensureStopSellingChecked(item, currentProfile) {
+		const company =
+			currentProfile?.company ||
+			shiftStore.profileCompany ||
+			shiftStore.currentCompany?.name ||
+			shiftStore.currentCompany ||
+			null
+		const profileName = currentProfile?.name || currentProfile
+		const itemCode = item.item_code || item.name
+
+		assertCanSellInPos(item, company)
+
+		if (!profileName || !itemCode) {
+			return
+		}
+
+		// Online: always confirm with server (catalog cache may be stale)
+		if (!offlineState.isOffline) {
+			try {
+				const result = await call(
+					"mbwnext_vnpost.controllers.python.discontinued_product.check_item_stop_selling",
+					{ item_code: itemCode, pos_profile: profileName },
+				)
+				item.pos_stop_selling = parseStopSellingApiResult(result) ? 1 : 0
+				assertCanSellInPos(item, company)
+			} catch (error) {
+				const errMsg = String(
+					error?.message || error?.messages?.[0] || "",
+				)
+				if (errMsg.includes("khóa kinh doanh")) {
+					throw new Error(getPosStopSellingMessage())
+				}
+				throw error
+			}
+		}
+	}
+
 	async function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
+		await ensureStopSellingChecked(item, currentProfile)
+
 		const row = await enrichItemTaxIfNeeded(item, qty)
+		await ensureStopSellingChecked(row, currentProfile)
 
 		if (options.merge !== false) {
-			const rowDisc = Number.parseFloat(row.discount_percentage) || 0
-			const rowRate = roundCurrency(row.price_list_rate || row.rate || 0)
-			const existingLine = invoiceItems.value.find((line) => {
-				if (line.item_code !== row.item_code) return false
-				const lineDisc = Number.parseFloat(line.discount_percentage) || 0
-				const lineRate = roundCurrency(line.price_list_rate || line.rate || 0)
-				return lineDisc === rowDisc && lineRate === rowRate
-			})
+			const existingLine = findMergeableLine(row)
 			if (existingLine) {
 				row.uom = existingLine.uom || row.uom || row.stock_uom
 				row.stock_uom = existingLine.stock_uom || row.stock_uom

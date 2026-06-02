@@ -735,6 +735,8 @@ import { useItemSearchStore } from "@/stores/itemSearch"
 import { usePOSSettingsStore } from "@/stores/posSettings"
 import { useStock } from "@/composables/useStock"
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
+import { getPosStopSellingMessage, isPosStopSelling } from "@/utils/posStopSelling"
+import { usePOSShiftStore } from "@/stores/posShift"
 import { useToast } from "@/composables/useToast"
 import { storeToRefs } from "pinia"
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
@@ -762,6 +764,7 @@ const emit = defineEmits(["item-selected"])
 // Use composables
 const { getStockStatus } = useStock()
 const settingsStore = usePOSSettingsStore()
+const shiftStore = usePOSShiftStore()
 const { showError, showWarning } = useToast()
 
 // Use Pinia store
@@ -1157,6 +1160,12 @@ function clearLongPress() {
 function selectItem(item, autoAdd = false) {
 	if (!item) return false
 
+	const company = shiftStore.profileCompany
+	if (isPosStopSelling(item, company)) {
+		showError(getPosStopSellingMessage())
+		return false
+	}
+
 	// Skip stock validation for: variants (template), serial items, batch items (they have own validation)
 	const skipManualBatchPick =
 		settingsStore.isEnabled &&
@@ -1215,6 +1224,14 @@ async function handleBarcodeSearch(forceAutoAdd = false) {
 			return
 		}
 	} catch (error) {
+		const errMsg = String(error?.message || error?.messages?.[0] || "")
+		if (errMsg.includes("khóa kinh doanh")) {
+			showError(getPosStopSellingMessage())
+			if (shouldAutoAdd) {
+				itemStore.clearSearch()
+			}
+			return
+		}
 		console.error("Barcode API error:", error)
 	}
 

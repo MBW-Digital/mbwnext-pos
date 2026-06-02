@@ -18,7 +18,7 @@ from pos_next.api.bank_transfer_payment import (
 	ORDER_PREFIX,
 	extract_order_id_from_content,
 	gateway_dedup_seen,
-	get_bank_transfer_mode_of_payment,
+	get_invoice_payable_outstanding,
 	process_incoming_transfer_for_invoice,
 	resolve_invoice_name,
 )
@@ -602,27 +602,34 @@ def manual_confirm_vnpost_payment(invoice_name):
 	if not frappe.db.exists("Sales Invoice", invoice_name):
 		return {"success": False, "message": _("Invoice not found")}
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
-	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
-		return {"success": True, "paid": True, "message": _("Invoice already submitted")}
+	if doc.docstatus == 2:
+		return {"success": False, "message": _("Cannot add payment to cancelled invoice")}
 	try:
-		if doc.docstatus == 0:
-			doc.flags.ignore_permissions = True
-			frappe.flags.ignore_account_permission = True
-			doc.submit()
-			frappe.db.commit()
-			doc.reload()
-		amount = flt(doc.outstanding_amount, 2)
-		if amount <= 0:
-			return {"success": True, "paid": True, "message": _("Invoice already paid")}
-		mode_of_payment = get_bank_transfer_mode_of_payment()
-		from pos_next.api.partial_payments import create_payment_entry
-		create_payment_entry(
-			invoice_name=invoice_name,
-			amount=amount,
-			mode_of_payment=mode_of_payment,
-			remarks="VNPost Pay manual confirm",
-		)
-		return {"success": True, "paid": True, "invoice_name": invoice_name}
+		old_user = frappe.session.user
+		frappe.set_user("Administrator")
+		frappe.flags.ignore_permissions = True
+		try:
+			doc = frappe.get_doc("Sales Invoice", invoice_name)
+			payable = get_invoice_payable_outstanding(doc)
+			process_incoming_transfer_for_invoice(
+				invoice_name=invoice_name,
+				amount=payable,
+				gateway_transaction_id=f"manual-{invoice_name}",
+				reference_code=invoice_name,
+				_remarks="VNPost Pay manual confirm",
+				raw_data={"manual": True},
+			)
+		finally:
+			frappe.set_user(old_user)
+		doc.reload()
+		paid = doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0
+		return {
+			"success": True,
+			"paid": paid,
+			"invoice_name": invoice_name,
+			"outstanding_amount": flt(doc.outstanding_amount, 2),
+			"message": _("Invoice already paid") if paid else _("Payment recorded"),
+		}
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "VNPost Manual Confirm")
 		return {"success": False, "message": str(e)}

@@ -873,6 +873,13 @@ export function useInvoice() {
 				discount_amount: roundCurrency(item.discount_amount || 0),
 				pricing_rules: stringifyPricingRules(item.pricing_rules),
 			}
+			if (item.is_free_item) {
+				row.is_free_item = 1
+				row.rate = 0
+				row.price_list_rate = 0
+				row.discount_percentage = 0
+				row.discount_amount = 0
+			}
 			if (item.item_tax_template) {
 				row.item_tax_template = item.item_tax_template
 			}
@@ -884,6 +891,57 @@ export function useInvoice() {
 			}
 			return row
 		})
+	}
+
+	/**
+	 * Paid cart lines + free-qty / free-gift promo lines for invoice submit.
+	 * POS cart display includes gifts but they live outside invoiceItems.
+	 */
+	function buildItemsForSubmission(
+		paidItems,
+		{ freeGiftItems = [], warehouse = null } = {},
+	) {
+		const rows = []
+
+		for (const item of paidItems || []) {
+			rows.push(...formatItemsForSubmission([item]))
+
+			const freeQty = Number.parseFloat(item.free_qty) || 0
+			if (freeQty > 0) {
+				rows.push(
+					...formatItemsForSubmission([
+						{
+							...item,
+							quantity: freeQty,
+							rate: 0,
+							price_list_rate: 0,
+							discount_percentage: 0,
+							discount_amount: 0,
+							is_free_item: true,
+						},
+					]),
+				)
+			}
+		}
+
+		for (const gift of freeGiftItems || []) {
+			const qty = Number.parseFloat(gift.quantity || gift.qty) || 0
+			if (qty <= 0) continue
+			rows.push(
+				...formatItemsForSubmission([
+					{
+						...gift,
+						quantity: qty,
+						warehouse: gift.warehouse || warehouse,
+						rate: 0,
+						price_list_rate: 0,
+						is_free_item: true,
+					},
+				]),
+			)
+		}
+
+		return rows
 	}
 
 	function addPayment(payment) {
@@ -947,7 +1005,7 @@ export function useInvoice() {
 		}
 	}
 
-	async function saveDraft(targetDoctype = "Sales Invoice") {
+	async function saveDraft(targetDoctype = "Sales Invoice", submissionExtras = null) {
 		/**
 		 * Save invoice as draft (Step 1)
 		 * This creates the invoice with docstatus=0
@@ -955,13 +1013,17 @@ export function useInvoice() {
 		// Use toRaw() to ensure we get current, non-reactive values (prevents stale cached quantities)
 		const rawItems = toRaw(invoiceItems.value)
 		const rawPayments = toRaw(payments.value)
+		const extras = submissionExtras || {}
 
 		const invoiceData = {
 			doctype: targetDoctype,
 			pos_profile: posProfile.value,
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
-			items: formatItemsForSubmission(rawItems),
+			items: buildItemsForSubmission(rawItems, {
+				freeGiftItems: extras.freeGiftItems || [],
+				warehouse: extras.warehouse || null,
+			}),
 			payments: rawPayments.map((p) => ({
 				mode_of_payment: p.mode_of_payment,
 				amount: p.amount,
@@ -989,6 +1051,7 @@ export function useInvoice() {
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		writeOffAmount = 0,
+		submissionExtras = null,
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -1021,13 +1084,17 @@ export function useInvoice() {
 				const rawItems = toRaw(invoiceItems.value)
 				const rawPayments = toRaw(payments.value)
 				const rawSalesTeam = toRaw(salesTeam.value)
+				const extras = submissionExtras || {}
 
 				const invoiceData = {
 					doctype: targetDoctype,
 					pos_profile: posProfile.value,
 					posa_pos_opening_shift: posOpeningShift.value,
 					customer: customer.value?.name || customer.value,
-					items: formatItemsForSubmission(rawItems),
+					items: buildItemsForSubmission(rawItems, {
+						freeGiftItems: extras.freeGiftItems || [],
+						warehouse: extras.warehouse || null,
+					}),
 					payments: rawPayments.map((p) => ({
 						mode_of_payment: p.mode_of_payment,
 						amount: p.amount,
@@ -1153,7 +1220,8 @@ export function useInvoice() {
 	}
 
 	/**
-	 * Create draft for VNPost Pay bank transfer (not submitted). Callback confirms payment.
+	 * Create invoice for VNPost Pay: submit with cash/other payments (Partly Paid if partial),
+	 * then VNPost callback/confirm records the bank transfer.
 	 *
 	 * @param {string} targetDoctype - Sales Invoice or Sales Order
 	 * @param {string|null} deliveryDate - For Sales Order
@@ -1164,9 +1232,11 @@ export function useInvoice() {
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		existingPayments = [],
+		submissionExtras = null,
 	) {
 		const rawItems = toRaw(invoiceItems.value)
 		const rawSalesTeam = toRaw(salesTeam.value)
+		const extras = submissionExtras || {}
 
 		const paymentsForInvoice = (existingPayments || []).map((p) => ({
 			mode_of_payment: p.mode_of_payment,
@@ -1179,7 +1249,10 @@ export function useInvoice() {
 			pos_profile: posProfile.value,
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
-			items: formatItemsForSubmission(rawItems),
+			items: buildItemsForSubmission(rawItems, {
+				freeGiftItems: extras.freeGiftItems || [],
+				warehouse: extras.warehouse || null,
+			}),
 		payments: paymentsForInvoice,
 		discount_amount: additionalDiscount.value || 0,
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
@@ -1187,6 +1260,7 @@ export function useInvoice() {
 		coupon_code: couponCode.value,
 		is_pos: 1,
 		update_stock: 1,
+		submit_for_vnpost: targetDoctype === "Sales Invoice" ? 1 : 0,
 	}
 
 	if (targetDoctype === "Sales Order" && deliveryDate) {
@@ -1213,7 +1287,10 @@ export function useInvoice() {
 		// Dùng grand_total từ backend (đã tính đúng với thuế + discount/pricing rule).
 		const invoiceGrandTotal = invoiceDoc.grand_total
 		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
-		const vnpostAmount = invoiceGrandTotal - paidAmount
+		const vnpostAmount =
+			invoiceDoc.outstanding_amount != null
+				? invoiceDoc.outstanding_amount
+				: invoiceGrandTotal - paidAmount
 
 		return {
 			name: invoiceDoc.name,
@@ -1423,6 +1500,7 @@ export function useInvoice() {
 		recalculateItem,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
+		buildItemsForSubmission,
 
 		// Resources
 		updateInvoiceResource,

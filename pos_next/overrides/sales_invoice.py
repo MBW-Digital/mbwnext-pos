@@ -199,3 +199,14 @@ class CustomSalesInvoice(SalesInvoice):
 			doc.flags.ignore_permissions = 1
 			doc.save()
 			self.set_loyalty_program_tier()
+
+	def get_item_list(self):
+		"""Skip stock deduction for promo free-gift lines without batch stock."""
+		item_list = super().get_item_list()
+		if not cint(getattr(self, "is_pos", 0)):
+			return item_list
+		return [
+			row
+			for row in item_list
+			if not cint(getattr(row.item_row, "pos_skip_stock_deduction", 0))
+		]

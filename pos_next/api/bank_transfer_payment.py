@@ -16,6 +16,14 @@ from frappe.utils import flt
 ORDER_PREFIX = "DH"
 
 
+def get_invoice_payable_outstanding(doc):
+	"""Amount still due via bank transfer (handles draft with partial cash payments)."""
+	if doc.docstatus == 1:
+		return flt(doc.outstanding_amount, 2)
+	paid = sum(flt(p.amount) for p in (doc.get("payments") or []))
+	return max(flt(doc.grand_total, 2) - paid, 0)
+
+
 def get_bank_transfer_mode_of_payment():
 	return (
 		frappe.db.get_value("Mode of Payment", "Bank Draft", "name")
@@ -140,18 +148,34 @@ def process_incoming_transfer_for_invoice(
 ):
 	"""Submit draft invoice if needed, add bank payment, log."""
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
-	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
-		return
+	if doc.docstatus == 2:
+		frappe.throw(_("Cannot add payment to cancelled invoice"))
 	if doc.docstatus == 0:
+		from pos_next.api.invoices import submit_pos_invoice_for_bank_transfer
+
 		doc.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
-		doc.submit()
+		submit_pos_invoice_for_bank_transfer(invoice_name)
 		frappe.db.commit()
 		doc = frappe.get_doc("Sales Invoice", invoice_name)
+	elif doc.docstatus == 1:
+		against_voucher = doc.name
+		if doc.is_return and doc.return_against and not doc.update_outstanding_for_self:
+			against_voucher = doc.return_against
+		update_voucher_outstanding(
+			voucher_type=doc.doctype,
+			voucher_no=against_voucher,
+			account=doc.debit_to,
+			party_type="Customer",
+			party=doc.customer,
+		)
+		doc.reload()
+	if flt(doc.outstanding_amount, 2) <= 0:
+		return
 	outstanding = flt(doc.outstanding_amount, 2)
 	if outstanding <= 0:
 		return
-	pay_amount = min(flt(amount, 2), outstanding)
+	pay_amount = min(flt(amount, 2) or outstanding, outstanding)
 	if abs(flt(amount, 2) - outstanding) > 0.01:
 		frappe.log_error(
 			f"VNPost amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}; paying {pay_amount}",

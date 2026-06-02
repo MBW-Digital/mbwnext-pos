@@ -2322,7 +2322,7 @@ async function handlePaymentCompleted(paymentData) {
 			// Use the same item transformation as online flow for consistency
 			// This ensures rate, discount_percentage, discount_amount, and pricing_rules
 			// are all correctly formatted for ERPNext
-			const preparedItems = cartStore.formatItemsForSubmission(cartStore.invoiceItems);
+			const preparedItems = cartStore.getItemsForInvoiceSubmission();
 
 			const invoiceData = {
 				pos_profile: cartStore.posProfile,

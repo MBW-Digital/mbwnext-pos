@@ -246,7 +246,13 @@ def _validate_stock_on_invoice(invoice_doc):
         return
 
     # Collect all stock items to check
-    items_to_check = [d.as_dict() for d in invoice_doc.items if d.get("is_stock_item")]
+    items_to_check = [
+        d.as_dict()
+        for d in invoice_doc.items
+        if d.get("is_stock_item")
+        and not cint(getattr(d, "is_free_item", 0))
+        and not cint(getattr(d, "pos_skip_stock_deduction", 0))
+    ]
 
     # Include packed items if present
     if hasattr(invoice_doc, "packed_items"):
@@ -292,9 +298,45 @@ def _auto_set_return_batches(invoice_doc):
                 )
 
 
-def _fifo_allocate_batches_for_stock_qty(item_code, warehouse, stock_qty_needed):
+def _pos_allow_negative_stock(pos_profile):
+    if not pos_profile:
+        return False
+    return cint(
+        frappe.db.get_value("POS Settings", {"pos_profile": pos_profile}, "allow_negative_stock") or 0
+    )
+
+
+def _fallback_batch_from_bin_stock(item_code, warehouse, stock_qty_needed, allow_negative=False):
+    """When batch ledger is empty but Bin has qty, pick oldest active batch for the item."""
+    bin_qty = flt(
+        frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
+    )
+    if bin_qty + 1e-9 < flt(stock_qty_needed) and not allow_negative:
+        return None
+
+    batch_row = frappe.db.sql(
+        """
+        SELECT b.name
+        FROM `tabBatch` b
+        WHERE b.item = %s AND IFNULL(b.disabled, 0) = 0
+        ORDER BY IFNULL(b.expiry_date, '9999-12-31') ASC, b.creation ASC
+        LIMIT 1
+        """,
+        item_code,
+    )
+    if not batch_row:
+        return None
+    return [{"batch_no": batch_row[0][0], "stock_qty": flt(stock_qty_needed)}]
+
+
+def _fifo_allocate_batches_for_stock_qty(
+    item_code, warehouse, stock_qty_needed, posting_date=None, allow_negative=False
+):
     """
-    Split stock_qty_needed across batches in ERPNext FIFO order until covered.
+    Split stock_qty_needed across batches in ERPNext pick order until covered.
+
+    Uses ``get_auto_batch_nos`` (respects POS reservations) with legacy
+    ``get_batch_qty`` as fallback.
 
     Returns:
         List of dicts [{"batch_no", "stock_qty"}, ...] if fully covered,
@@ -302,6 +344,41 @@ def _fifo_allocate_batches_for_stock_qty(item_code, warehouse, stock_qty_needed)
     """
     if stock_qty_needed <= 1e-9:
         return []
+
+    posting_date = posting_date or nowdate()
+    pick_based_on = (
+        frappe.db.get_single_value("Stock Settings", "pick_serial_and_batch_based_on") or "FIFO"
+    )
+
+    try:
+        from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+            get_auto_batch_nos,
+        )
+
+        auto_batches = get_auto_batch_nos(
+            frappe._dict(
+                {
+                    "item_code": item_code,
+                    "warehouse": warehouse,
+                    "qty": flt(stock_qty_needed),
+                    "based_on": pick_based_on,
+                    "posting_date": posting_date,
+                    "posting_time": nowtime(),
+                    "ignore_reserved_stock": True,
+                }
+            )
+        )
+        if auto_batches:
+            out = [
+                {"batch_no": b.batch_no, "stock_qty": flt(b.qty)}
+                for b in auto_batches
+                if b.batch_no and flt(b.qty) > 0
+            ]
+            allocated = sum(flt(x["stock_qty"]) for x in out)
+            if allocated + 1e-6 >= flt(stock_qty_needed):
+                return out
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS FIFO batch (get_auto_batch_nos)")
 
     batches = get_batch_qty(item_code=item_code, warehouse=warehouse) or []
     batches = [b for b in batches if flt(b.get("qty")) > 1e-9]
@@ -320,7 +397,33 @@ def _fifo_allocate_batches_for_stock_qty(item_code, warehouse, stock_qty_needed)
         if remaining <= 1e-9:
             return out
 
-    return None
+    return _fallback_batch_from_bin_stock(
+        item_code, warehouse, stock_qty_needed, allow_negative=allow_negative
+    )
+
+
+def _ensure_pos_item_warehouses(invoice_doc, pos_profile=None):
+    """Fill missing warehouse on invoice lines (common for free-gift promo rows)."""
+    wh = None
+    profile = pos_profile or invoice_doc.get("pos_profile")
+    if profile:
+        wh = frappe.db.get_value("POS Profile", profile, "warehouse")
+    if not wh:
+        return
+    for d in invoice_doc.get("items") or []:
+        if d.item_code and not d.get("warehouse"):
+            d.warehouse = wh
+
+
+def _pos_uses_erpnext_auto_batch_bundle(invoice_doc):
+    """When enabled, ERPNext auto-picks batch on Stock Ledger Entry — no pre-assign on invoice rows."""
+    if not cint(getattr(invoice_doc, "is_pos", 0)):
+        return False
+    return cint(
+        frappe.db.get_single_value(
+            "Stock Settings", "auto_create_serial_and_batch_bundle_for_outward"
+        )
+    )
 
 
 def _si_item_row_clone_dict(template_row):
@@ -348,10 +451,13 @@ def _si_item_row_clone_dict(template_row):
 
 def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
     """
-    When POS Settings ``allow_skip_manual_batch_selection`` is enabled:
-    Assign FIFO batches for batch-only Items missing ``batch_no`` (split rows if needed).
+    POS batch-only items usually have no batch on the cart line.
 
-    Serial-controlled Items always require picking serial numbers in the POS UI.
+    - When Stock Settings auto-creates outward bundles: skip (ERPNext picks on SLE).
+    - Otherwise assign FIFO batches for batch-only items missing ``batch_no``.
+    - POS invoices always auto-assign; non-POS only when ``allow_skip_manual_batch_selection``.
+
+    Serial-controlled items still require serial numbers in the POS UI.
     """
     if getattr(invoice_doc, "doctype", None) != "Sales Invoice":
         return
@@ -366,6 +472,8 @@ def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
     if not pos_profile:
         return
 
+    is_pos = cint(getattr(invoice_doc, "is_pos", 0))
+
     ps_flags = frappe.db.get_value(
         "POS Settings",
         {"pos_profile": pos_profile},
@@ -376,10 +484,16 @@ def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
     if not cint(ps_flags.get("enabled")):
         return
 
-    if not cint(ps_flags.get("allow_skip_manual_batch_selection")):
+    # POS: lines usually have no batch — auto-assign for all batch-only items.
+    # Non-POS: only when skip-batch-picker is enabled.
+    if not is_pos and not cint(ps_flags.get("allow_skip_manual_batch_selection")):
         return
 
+    _ensure_pos_item_warehouses(invoice_doc, pos_profile)
+
     inv_qty_prec = frappe.get_precision("Sales Invoice Item", "qty")
+    posting_date = invoice_doc.get("posting_date") or nowdate()
+    allow_negative = _pos_allow_negative_stock(pos_profile)
 
     indexes_to_extend = []
 
@@ -418,14 +532,31 @@ def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
         )
 
         allocations = _fifo_allocate_batches_for_stock_qty(
-            d.item_code, d.warehouse, stock_need
+            d.item_code,
+            d.warehouse,
+            stock_need,
+            posting_date=posting_date,
+            allow_negative=allow_negative,
         )
         if allocations is None:
+            if cint(getattr(d, "is_free_item", 0)):
+                # Promo gift with no batch stock: keep on invoice, skip stock deduction
+                d.pos_skip_stock_deduction = 1
+                continue
+            bin_qty = frappe.db.get_value(
+                "Bin", {"item_code": d.item_code, "warehouse": d.warehouse}, "actual_qty"
+            )
+            hint = ""
+            if flt(bin_qty) >= stock_need:
+                hint = _(
+                    " Bin shows {0} on hand but batch quantities are not enough — "
+                    "check batch stock or enable 'Auto Create Serial and Batch Bundle' in Stock Settings."
+                ).format(frappe.bold(flt(bin_qty)))
             frappe.throw(
                 _(
                     "Cannot assign batches automatically for {0}: insufficient quantity "
-                    "in FIFO batches at warehouse {1}."
-                ).format(frappe.bold(d.item_code), frappe.bold(d.warehouse)),
+                    "in batches at warehouse {1}.{2}"
+                ).format(frappe.bold(d.item_code), frappe.bold(d.warehouse), hint),
                 title=_("Batch Allocation"),
             )
 
@@ -657,19 +788,25 @@ def update_invoice(data):
 
         if company and invoice_doc.get("payments") and doctype == "Sales Invoice":
             for payment in invoice_doc.payments:
-                mode_of_payment = payment.get("mode_of_payment")
-                if mode_of_payment and not payment.get("account"):
-                    try:
-                        account_info = get_payment_account(
-                            mode_of_payment, company
-                        )
-                        if account_info:
-                            payment["account"] = account_info.get("account")
-                    except Exception as e:
-                        frappe.log_error(
-                            f"Failed to get payment account for {mode_of_payment}: {e}",
-                            "Payment Account Lookup"
-                        )
+                mode_of_payment = payment.get("mode_of_payment") if isinstance(payment, dict) else payment.mode_of_payment
+                if not mode_of_payment:
+                    continue
+                existing_account = payment.get("account") if isinstance(payment, dict) else payment.account
+                if existing_account:
+                    continue
+                try:
+                    account_info = get_payment_account(mode_of_payment, company)
+                    if account_info:
+                        account = account_info.get("account")
+                        if isinstance(payment, dict):
+                            payment["account"] = account
+                        else:
+                            payment.account = account
+                except Exception as e:
+                    frappe.log_error(
+                        f"Failed to get payment account for {mode_of_payment}: {e}",
+                        "Payment Account Lookup",
+                    )
 
         # Validate return items if this is a return invoice
         if (data.get("is_return") or invoice_doc.get("is_return")) and invoice_doc.get(
@@ -807,19 +944,31 @@ def update_invoice(data):
 
         # Set accounts for payment methods before saving
         for payment in invoice_doc.payments:
-            mode_of_payment = payment.get("mode_of_payment")
-            if mode_of_payment and not payment.get("account"):
-                try:
-                    account_info = get_payment_account(
-                        mode_of_payment, invoice_doc.company
-                    )
-                    if account_info:
-                        payment.account = account_info.get("account")
-                except Exception as e:
-                    frappe.log_error(
-                        f"Failed to get payment account for {mode_of_payment}: {e}",
-                        "Payment Account Lookup"
-                    )
+            mode_of_payment = (
+                payment.get("mode_of_payment")
+                if isinstance(payment, dict)
+                else payment.mode_of_payment
+            )
+            if not mode_of_payment:
+                continue
+            existing_account = (
+                payment.get("account") if isinstance(payment, dict) else payment.account
+            )
+            if existing_account:
+                continue
+            try:
+                account_info = get_payment_account(mode_of_payment, invoice_doc.company)
+                if account_info:
+                    account = account_info.get("account")
+                    if isinstance(payment, dict):
+                        payment["account"] = account
+                    else:
+                        payment.account = account
+            except Exception as e:
+                frappe.log_error(
+                    f"Failed to get payment account for {mode_of_payment}: {e}",
+                    "Payment Account Lookup",
+                )
 
         # For return invoices, ensure payments are negative
         if invoice_doc.get("is_return"):
@@ -855,11 +1004,21 @@ def update_invoice(data):
                 # Store coupon code on invoice for tracking
                 invoice_doc.coupon_code = coupon_code
 
+        # Assign FIFO batches before save (includes free-gift lines without batch)
+        if doctype == "Sales Invoice":
+            _ensure_pos_item_warehouses(invoice_doc, pos_profile)
+            _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
+
         # Save as draft
         invoice_doc.flags.ignore_permissions = True
         frappe.flags.ignore_account_permission = True
         invoice_doc.docstatus = 0
         invoice_doc.save()
+
+        # VNPost: submit with cash/other payments now → Partly Paid; bank transfer added on callback/confirm
+        if cint(data.get("submit_for_vnpost")) and doctype == "Sales Invoice":
+            submit_pos_invoice_for_bank_transfer(invoice_doc.name)
+            invoice_doc = frappe.get_doc("Sales Invoice", invoice_doc.name)
 
         return invoice_doc.as_dict()
     except Exception as e:
@@ -1084,6 +1243,63 @@ def check_offline_invoice_synced(offline_id):
     return result
 
 
+def submit_pos_invoice_for_bank_transfer(invoice_name):
+    """
+    Submit a draft POS Sales Invoice before recording a bank transfer.
+    Uses the same preparation as submit_invoice (payment accounts, FIFO batches, stock check).
+    """
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice_name)
+    if invoice_doc.docstatus != 0:
+        return invoice_doc
+
+    invoice_doc.update_stock = 1
+    pos_profile = invoice_doc.get("pos_profile")
+
+    if invoice_doc.get("payments"):
+        for payment in invoice_doc.payments:
+            if payment.mode_of_payment and not payment.account:
+                account_info = get_payment_account(payment.mode_of_payment, invoice_doc.company)
+                if account_info:
+                    payment.account = account_info.get("account")
+
+    if pos_profile and not invoice_doc.get("branch"):
+        try:
+            pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+            if hasattr(pos_profile_doc, "branch") and pos_profile_doc.branch:
+                invoice_doc.branch = pos_profile_doc.branch
+                for item in invoice_doc.get("items", []):
+                    if not item.get("branch"):
+                        item.branch = pos_profile_doc.branch
+        except Exception as e:
+            frappe.log_error(
+                f"Failed to set branch from POS Profile {pos_profile}: {e}",
+                "POS Profile Branch",
+            )
+
+    _auto_set_return_batches(invoice_doc)
+    _ensure_pos_item_warehouses(invoice_doc, invoice_doc.get("pos_profile"))
+    _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
+
+    pos_settings_allow_negative = False
+    if pos_profile:
+        pos_settings_allow_negative = cint(
+            frappe.db.get_value(
+                "POS Settings",
+                {"pos_profile": pos_profile},
+                "allow_negative_stock",
+            )
+            or 0
+        )
+    if not pos_settings_allow_negative:
+        _validate_stock_on_invoice(invoice_doc)
+
+    invoice_doc.flags.ignore_permissions = True
+    frappe.flags.ignore_account_permission = True
+    invoice_doc.save()
+    invoice_doc.submit()
+    return invoice_doc
+
+
 @frappe.whitelist()
 def submit_invoice(invoice=None, data=None):
     """Submit the invoice (Step 2)."""
@@ -1245,7 +1461,8 @@ def submit_invoice(invoice=None, data=None):
         # Auto-set batch numbers for returns
         _auto_set_return_batches(invoice_doc)
 
-        # POS: optional auto FIFO batch assignment for skipped batch-picker lines
+        # POS: auto FIFO batch for lines without batch (incl. free gifts)
+        _ensure_pos_item_warehouses(invoice_doc, pos_profile)
         _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
 
         # Handle write-off amount if provided

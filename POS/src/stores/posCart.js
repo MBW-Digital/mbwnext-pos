@@ -1,5 +1,6 @@
 import { useInvoice } from "@/composables/useInvoice"
 import { usePOSOffersStore } from "@/stores/posOffers"
+import { usePOSShiftStore } from "@/stores/posShift"
 import { usePOSSettingsStore } from "@/stores/posSettings"
 import { parseError } from "@/utils/errorHandler"
 import {
@@ -105,7 +106,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		removeItem,
 		updateItemQuantity,
 		submitInvoice: baseSubmitInvoice,
-		createDraftForVnpostPay,
+		createDraftForVnpostPay: baseCreateDraftForVnpostPay,
 		clearCart: clearInvoiceCart,
 		loadTaxRules,
 		setTaxInclusive,
@@ -118,11 +119,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		recalculateItem,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
+		buildItemsForSubmission,
 	} = useInvoice()
 
 	const offersStore = usePOSOffersStore()
 	const settingsStore = usePOSSettingsStore()
+	const shiftStore = usePOSShiftStore()
 	const itemSearchStore = useItemSearchStore()
+
+	function invoiceSubmissionExtras() {
+		return {
+			freeGiftItems: freeGiftItems.value,
+			warehouse: shiftStore.profileWarehouse || null,
+		}
+	}
+
+	function getItemsForInvoiceSubmission() {
+		return buildItemsForSubmission(toRaw(invoiceItems.value), invoiceSubmissionExtras())
+	}
 
 	// Additional cart state
 	const pendingItem = ref(null)
@@ -920,12 +934,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			return
 		}
 
-		const result = await baseSubmitInvoice(targetDoctype.value, deliveryDate.value, writeOffAmount.value)
+		const result = await baseSubmitInvoice(
+			targetDoctype.value,
+			deliveryDate.value,
+			writeOffAmount.value,
+			invoiceSubmissionExtras(),
+		)
 		// Reset write-off amount after successful submission
 		if (result) {
 			writeOffAmount.value = 0
 		}
 		return result
+	}
+
+	async function createDraftForVnpostPayWithGifts(
+		targetDoctype = "Sales Invoice",
+		deliveryDate = null,
+		existingPayments = [],
+	) {
+		return baseCreateDraftForVnpostPay(
+			targetDoctype,
+			deliveryDate,
+			existingPayments,
+			invoiceSubmissionExtras(),
+		)
 	}
 
 	async function createSalesOrder() {
@@ -2881,7 +2913,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		loadTaxRules,
 		setTaxInclusive,
 		submitInvoice,
-		createDraftForVnpostPay,
+		createDraftForVnpostPay: createDraftForVnpostPayWithGifts,
 		applyDiscountToCart,
 		removeDiscountFromCart,
 		applyOffer,
@@ -2896,6 +2928,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		applyOffersResource,
 		buildOfferEvaluationPayload,
 		formatItemsForSubmission,
+		getItemsForInvoiceSubmission,
 
 		// Sales Order feature
 		targetDoctype,

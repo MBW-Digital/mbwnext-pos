@@ -100,6 +100,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		transactionPricingRule,
 		taxInclusive,
 		isSubmitting,
 		addItem: addItemToInvoice,
@@ -833,6 +834,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		customer.value = null
 		appliedOffers.value = []
 		appliedCoupon.value = null
+		transactionPricingRule.value = ""
 		currentDraftId.value = null
 		targetDoctype.value = "Sales Invoice"
 
@@ -1208,6 +1210,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			additionalDiscountAmt: Number(payload.additional_discount_amount) || 0,
 			applyDiscountOn: payload.apply_discount_on || null,
 			previewTotals: payload.preview_totals || null,
+			// Transaction-level Pricing Rule name (for KM reclaim on return)
+			transactionPricingRuleName: payload.transaction_pricing_rule || "",
 		}
 	}
 
@@ -1414,6 +1418,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				additionalDiscountAmt,
 				applyDiscountOn,
 				previewTotals,
+				transactionPricingRuleName,
 			} = parseOfferResponse(response)
 
 			suppressOfferReapply.value = true
@@ -1425,6 +1430,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				applyDiscountOn,
 				previewTotals,
 			})
+			if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
 			const offerApplied = isOfferAppliedInResponse(offerCode, appliedRules, freeItems)
 
@@ -1606,6 +1612,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				additionalDiscountAmt,
 				applyDiscountOn,
 				previewTotals,
+				transactionPricingRuleName,
 			} = parseOfferResponse(response)
 
 			suppressOfferReapply.value = true
@@ -1618,6 +1625,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				applyDiscountOn,
 				previewTotals,
 			})
+			if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -1724,6 +1732,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					const parsed = await submitAppliedOfferCodes(currentProfile, codesToApply, signal)
 					if (parsed) {
 						syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
+						if (parsed.transactionPricingRuleName) transactionPricingRule.value = parsed.transactionPricingRuleName
 					}
 				}
 
@@ -1810,6 +1819,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			additionalDiscountAmt,
 			applyDiscountOn,
 			previewTotals,
+			transactionPricingRuleName,
 		} = parseOfferResponse(response)
 
 		applyDiscountsFromServer(responseItems)
@@ -1821,6 +1831,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			applyDiscountOn,
 			previewTotals,
 		})
+		if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
 		const newlyAppliedOffers = appliedOffers.value
 				.filter((entry) => !previouslyApplied.has(entry.code))

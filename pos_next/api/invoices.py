@@ -92,6 +92,27 @@ def _pricing_rule_to_string(value):
     return ""
 
 
+def _parse_pricing_rule_names(value):
+    """Convert any pricing_rules value to a flat list of rule name strings."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(r).strip() for r in value if r]
+    if not isinstance(value, str):
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(r).strip() for r in parsed if r]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return [r.strip() for r in stripped.split(",") if r.strip()]
+
+
 def get_payment_account(mode_of_payment, company):
     """
     Get account for mode of payment.
@@ -730,6 +751,12 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
                 ).format(item_code),
             }
 
+    # Validate free item return requirement (Option A)
+    if frappe.db.exists(f"{doctype} Item", {"parent": original_invoice_name, "is_free_item": 1}):
+        result = _check_free_item_return_requirement(original_invoice_name, return_items, doctype)
+        if result:
+            return result
+
     return {"valid": True}
 
 
@@ -903,6 +930,11 @@ def update_invoice(data):
                     except (json.JSONDecodeError, TypeError):
                         # Keep original value - malformed JSON will be handled by standardize_pricing_rules
                         item.pricing_rules = ""
+
+        # Save transaction pricing rule (for KM reclaim on return)
+        transaction_pricing_rule = data.get("posa_transaction_pricing_rule")
+        if transaction_pricing_rule and frappe.db.has_column("Sales Invoice", "posa_transaction_pricing_rule"):
+            invoice_doc.posa_transaction_pricing_rule = transaction_pricing_rule
 
         # Set invoice flags BEFORE calculations
         if doctype == "Sales Invoice":
@@ -2175,6 +2207,182 @@ def _build_item_tax_map(taxes: list) -> dict:
     return dict(tax_map)
 
 
+def _check_free_item_return_requirement(original_invoice_name, return_items, doctype="Sales Invoice"):
+    """Check that free items are included when their paired paid items are returned (Option A).
+
+    Returns {"valid": False, "message": "..."} if validation fails, else None.
+    """
+    from frappe.query_builder.functions import Sum, Abs, Coalesce
+
+    si_item = frappe.qb.DocType(f"{doctype} Item")
+    orig_items = (
+        frappe.qb.from_(si_item)
+        .select(si_item.name, si_item.item_code, si_item.qty, si_item.pricing_rules, si_item.is_free_item)
+        .where(si_item.parent == original_invoice_name)
+    ).run(as_dict=True)
+
+    all_rule_names = set()
+    for item in orig_items:
+        all_rule_names.update(_parse_pricing_rule_names(item.get("pricing_rules")))
+
+    if not all_rule_names:
+        return None
+
+    product_rule_names = set(frappe.get_all(
+        "Pricing Rule",
+        filters={"name": ["in", list(all_rule_names)], "price_or_product_discount": "Product"},
+        pluck="name",
+    ))
+
+    if not product_rule_names:
+        return None
+
+    # Previously returned quantities (to detect free items already returned)
+    ret_si = frappe.qb.DocType(doctype)
+    ret_item_q = frappe.qb.DocType(f"{doctype} Item")
+    returned_rows = (
+        frappe.qb.from_(ret_si)
+        .inner_join(ret_item_q).on(ret_item_q.parent == ret_si.name)
+        .select(
+            Coalesce(ret_item_q.sales_invoice_item, ret_item_q.item_code).as_("key_field"),
+            Sum(Abs(ret_item_q.qty)).as_("returned_qty"),
+        )
+        .where(
+            (ret_si.return_against == original_invoice_name)
+            & (ret_si.docstatus == 1)
+            & (ret_si.is_return == 1)
+        )
+        .groupby(Coalesce(ret_item_q.sales_invoice_item, ret_item_q.item_code))
+    ).run(as_dict=True)
+    returned_qty_map = {r["key_field"]: flt(r["returned_qty"]) for r in returned_rows}
+
+    # Build rule → free items map (only items still returnable)
+    free_by_rule = {}
+    for item in orig_items:
+        if not item.get("is_free_item"):
+            continue
+        rules = [r for r in _parse_pricing_rule_names(item.get("pricing_rules")) if r in product_rule_names]
+        remaining = flt(item.qty) - flt(returned_qty_map.get(item.name, 0))
+        if remaining <= 0:
+            continue
+        for rule in rules:
+            free_by_rule.setdefault(rule, []).append({
+                "row_id": item.name,
+                "item_code": item.item_code,
+            })
+
+    if not free_by_rule:
+        return None
+
+    returning_row_ids = {
+        item.get("sales_invoice_item")
+        for item in return_items
+        if item.get("sales_invoice_item")
+    }
+    orig_by_row_id = {item.name: item for item in orig_items}
+
+    for ret_item_data in return_items:
+        row_id = ret_item_data.get("sales_invoice_item")
+        if not row_id:
+            continue
+        orig = orig_by_row_id.get(row_id)
+        if not orig or orig.get("is_free_item"):
+            continue
+
+        paid_rules = [r for r in _parse_pricing_rule_names(orig.get("pricing_rules")) if r in product_rule_names]
+        for rule in paid_rules:
+            for free_entry in free_by_rule.get(rule, []):
+                if free_entry["row_id"] not in returning_row_ids:
+                    return {
+                        "valid": False,
+                        "message": _(
+                            "Mặt hàng {0} được bán kèm hàng tặng ({1}). "
+                            "Vui lòng chọn trả kèm hàng tặng."
+                        ).format(orig.item_code, free_entry["item_code"]),
+                    }
+
+    return None
+
+
+def _compute_free_item_linkage(items, invoice_name):
+    """Annotate return items with free item pairing for frontend enforcement (Option A).
+
+    Reads pricing_rules from the ORIGINAL invoice (not the return doc) because
+    make_sales_return may clear pricing_rules on copied items.
+
+    Adds to paid items:  free_item_row_ids = [original Sales Invoice Item names of free items]
+    Adds to free items:  paired_paid_item_row_id = original Sales Invoice Item name of paid item
+    """
+    # Quick exit if no free items present
+    if not any(item.get("is_free_item") for item in items):
+        return
+
+    # Read original invoice items' pricing_rules directly from DB (reliable source)
+    si_item = frappe.qb.DocType("Sales Invoice Item")
+    orig_items = (
+        frappe.qb.from_(si_item)
+        .select(si_item.name, si_item.item_code, si_item.pricing_rules, si_item.is_free_item)
+        .where(si_item.parent == invoice_name)
+    ).run(as_dict=True)
+
+    all_rule_names = set()
+    for oi in orig_items:
+        all_rule_names.update(_parse_pricing_rule_names(oi.get("pricing_rules")))
+
+    if not all_rule_names:
+        return
+
+    product_rule_names = set(frappe.get_all(
+        "Pricing Rule",
+        filters={"name": ["in", list(all_rule_names)], "price_or_product_discount": "Product"},
+        pluck="name",
+    ))
+
+    if not product_rule_names:
+        return
+
+    # Build rule → original item name maps
+    paid_by_rule = {}
+    free_by_rule = {}
+    for oi in orig_items:
+        rules = [r for r in _parse_pricing_rule_names(oi.get("pricing_rules")) if r in product_rule_names]
+        if not rules:
+            continue
+        bucket = free_by_rule if oi.get("is_free_item") else paid_by_rule
+        for rule in rules:
+            bucket.setdefault(rule, []).append(oi.name)
+
+    orig_by_name = {oi.name: oi for oi in orig_items}
+
+    # Annotate return doc items via sales_invoice_item → original item linkage
+    for item in items:
+        orig_row_id = item.get("sales_invoice_item")
+        if not orig_row_id:
+            continue
+        orig = orig_by_name.get(orig_row_id)
+        if not orig:
+            continue
+
+        rules = [r for r in _parse_pricing_rule_names(orig.get("pricing_rules")) if r in product_rule_names]
+        if not rules:
+            continue
+
+        if orig.get("is_free_item"):
+            for rule in rules:
+                paid_list = paid_by_rule.get(rule, [])
+                if paid_list:
+                    item["paired_paid_item_row_id"] = paid_list[0]
+                    break
+        else:
+            linked = []
+            for rule in rules:
+                for free_orig_id in free_by_rule.get(rule, []):
+                    if free_orig_id not in linked:
+                        linked.append(free_orig_id)
+            if linked:
+                item["free_item_row_ids"] = linked
+
+
 @frappe.whitelist()
 def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     """Prepare a return invoice using ERPNext's make_sales_return.
@@ -2206,22 +2414,20 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
 
     # Validate invoice and get fields needed for return period check
     si = frappe.qb.DocType("Sales Invoice")
+
+    has_tpr_field = frappe.db.has_column("Sales Invoice", "posa_transaction_pricing_rule")
+    select_fields = [
+        si.docstatus, si.is_return, si.pos_profile, si.posting_date,
+        si.is_pos, si.grand_total, si.paid_amount, si.outstanding_amount,
+        si.customer, si.customer_name, si.net_total, si.total_taxes_and_charges,
+        si.discount_amount,
+    ]
+    if has_tpr_field:
+        select_fields.append(si.posa_transaction_pricing_rule)
+
     invoice_check = (
         frappe.qb.from_(si)
-        .select(
-            si.docstatus,
-            si.is_return,
-            si.pos_profile,
-            si.posting_date,
-            si.is_pos,
-            si.grand_total,
-            si.paid_amount,
-            si.outstanding_amount,
-            si.customer,
-            si.customer_name,
-            si.net_total,
-            si.total_taxes_and_charges
-        )
+        .select(*select_fields)
         .where(si.name == invoice_name)
     ).run(as_dict=True)
 
@@ -2307,6 +2513,38 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         .where(si_payment.parent == invoice_name)
     ).run(as_dict=True)
 
+    # Build transaction pricing rule data for KM reclaim check on return
+    transaction_rule_data = None
+    discount_account_for_reclaim = None
+    header_discount = flt(invoice_info.get("discount_amount") or 0)
+
+    if header_discount > 0 and has_tpr_field:
+        tpr_name = invoice_info.get("posa_transaction_pricing_rule")
+        if tpr_name:
+            rule_info = frappe.db.get_value(
+                "Pricing Rule", tpr_name,
+                ["min_amt", "discount_amount", "discount_percentage"],
+                as_dict=True,
+            )
+            if rule_info:
+                # Original subtotal = net items value before header discount
+                original_subtotal = flt(invoice_info.net_total) + header_discount
+
+                # Discount account from first item (for write-off account on return)
+                discount_account_for_reclaim = frappe.db.get_value(
+                    "Sales Invoice Item",
+                    {"parent": invoice_name, "is_free_item": 0},
+                    "discount_account",
+                )
+
+                transaction_rule_data = {
+                    "rule_name": tpr_name,
+                    "min_amount": flt(rule_info.min_amt),
+                    "header_discount_amount": header_discount,
+                    "original_subtotal": original_subtotal,
+                    "discount_account": discount_account_for_reclaim,
+                }
+
     # Include original invoice data for reference (payments, amounts, etc.)
     return_dict["_original_invoice"] = {
         "name": invoice_name,
@@ -2319,6 +2557,7 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         "payments": payments_data,
         "net_total": invoice_info.net_total,
         "total_taxes_and_charges": invoice_info.total_taxes_and_charges,
+        "transaction_rule_data": transaction_rule_data,
     }
 
     item_tax_map = _build_item_tax_map(return_dict.get("taxes", []))
@@ -2356,6 +2595,9 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         processed for item in return_dict.get("items", [])
         if (processed := process_return_item(item)) is not None
     ]
+
+    # Annotate items with free item pairing for frontend enforcement (Option A)
+    _compute_free_item_linkage(return_dict["items"], invoice_name)
 
     # Check if all items have been fully returned
     if not return_dict["items"]:

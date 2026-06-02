@@ -33,6 +33,9 @@ export function useInvoice() {
 	// ERPNext preview totals after transaction-level pricing rule (tax + discount recalc)
 	const transactionPreviewTotals = ref(null)
 	const transactionApplyDiscountOn = ref(null)
+	// Transaction-level Pricing Rule gây ra header discount (VD: PRLE-0004)
+	// Lưu lại để check threshold khi trả hàng (KM reclaim)
+	const transactionPricingRule = ref("")
 	const couponCode = ref(null)
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
@@ -1102,6 +1105,7 @@ export function useInvoice() {
 					})),
 				discount_amount: additionalDiscount.value || 0,
 				additional_discount_percentage: additionalDiscountPercentage.value || 0,
+				posa_transaction_pricing_rule: transactionPricingRule.value || "",
 				coupon_code: couponCode.value,
 				is_pos: 1,
 				update_stock: 1, // Critical: Ensures stock is updated
@@ -1461,6 +1465,7 @@ export function useInvoice() {
 		additionalDiscount,
 		additionalDiscountPercentage,
 		transactionApplyDiscountOn,
+		transactionPricingRule,
 		couponCode,
 		taxRules,
 		taxInclusive,

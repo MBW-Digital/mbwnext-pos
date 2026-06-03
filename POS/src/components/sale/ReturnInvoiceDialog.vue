@@ -525,7 +525,7 @@
 						</p>
 						<div class="flex justify-between items-center text-sm">
 							<span class="text-emerald-700">{{ __('Amount to Credit:') }}</span>
-							<span class="font-bold text-emerald-900">{{ formatCurrency(returnTotal) }}</span>
+							<span class="font-bold text-emerald-900">{{ formatCurrency(effectiveRefundAmount) }}</span>
 						</div>
 					</div>
 
@@ -630,18 +630,18 @@
 						<div class="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
 							<div class="flex items-center justify-between text-sm">
 								<span class="text-gray-600">{{ isPartiallyPaid ? __('Refundable Amount:') : __('Total Refund:') }}</span>
-								<span class="font-bold text-gray-900">{{ formatCurrency(isPartiallyPaid ? maxRefundableAmount : returnTotal) }}</span>
+								<span class="font-bold text-gray-900">{{ formatCurrency(isPartiallyPaid ? maxRefundableAmount : effectiveRefundAmount) }}</span>
 							</div>
 							<div class="flex items-center justify-between text-sm mt-1">
 								<span class="text-gray-600">{{ __('Payment Total:') }}</span>
 								<span :class="[
 									'font-bold',
-									Math.abs(totalPaymentAmount - (isPartiallyPaid ? maxRefundableAmount : returnTotal)) < 0.01 ? 'text-green-600' : 'text-red-600'
+									Math.abs(totalPaymentAmount - (isPartiallyPaid ? maxRefundableAmount : effectiveRefundAmount)) < 0.01 ? 'text-green-600' : 'text-red-600'
 								]">
 									{{ formatCurrency(totalPaymentAmount) }}
 								</span>
 							</div>
-							<p v-if="Math.abs(totalPaymentAmount - (isPartiallyPaid ? maxRefundableAmount : returnTotal)) >= 0.01" class="mt-2 text-xs text-amber-600 text-start">
+							<p v-if="Math.abs(totalPaymentAmount - (isPartiallyPaid ? maxRefundableAmount : effectiveRefundAmount)) >= 0.01" class="mt-2 text-xs text-amber-600 text-start">
 								{{ isPartiallyPaid ? __('⚠️ Payment total must equal refundable amount') : __('⚠️ Payment total must equal refund amount') }}
 							</p>
 						</div>
@@ -673,19 +673,19 @@
 						<!-- KM Reclaim breakdown -->
 						<template v-if="needsKmReclaim || (kmReclaimConfirmed && kmReclaimAmount > 0)">
 							<div class="flex justify-between items-center text-sm pt-2 border-t border-red-200">
-								<span class="text-gray-600">{{ __('Hoàn hàng:') }}</span>
-								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotal) }}</span>
+								<span class="text-gray-600">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
+								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotalAtListPrice) }}</span>
 							</div>
 							<div class="flex justify-between items-center text-sm">
 								<span class="text-red-600 font-medium">{{ __('Thu hồi KM:') }}</span>
-								<span class="font-medium text-red-600">-{{ formatCurrency(transactionRuleData?.header_discount_amount || 0) }}</span>
+								<span class="font-medium text-red-600">-{{ formatCurrency(kmReclaimDeduction) }}</span>
 							</div>
 						</template>
 						<!-- Final refund amount -->
 						<div class="flex justify-between items-center pt-2 border-t border-red-200">
 							<span class="text-sm sm:text-base font-semibold text-gray-700">{{ __(summaryRefundLabel) }}</span>
 							<span class="text-xl sm:text-2xl font-bold text-red-600">
-								{{ formatCurrency(summaryRefundAmount - (kmReclaimConfirmed ? kmReclaimAmount : 0)) }}
+								{{ formatCurrency(effectiveRefundAmount) }}
 							</span>
 						</div>
 					</div>
@@ -817,11 +817,13 @@
 					</div>
 					<div class="flex justify-between">
 						<span class="text-gray-500">{{ __('Ngưỡng KM:') }}</span>
-						<span class="font-semibold text-gray-800">≥ {{ formatCurrency(kmReclaimDialog.threshold) }}</span>
+						<span class="font-semibold text-gray-800">
+							{{ kmReclaimDialog.threshold > 0 ? `≥ ${formatCurrency(kmReclaimDialog.threshold)}` : __('Không yêu cầu tối thiểu') }}
+						</span>
 					</div>
 					<div class="border-t border-gray-200 pt-2 flex justify-between">
-						<span class="text-gray-500">{{ __('Hoàn hàng:') }}</span>
-						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotal) }}</span>
+						<span class="text-gray-500">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
+						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotalAtListPrice) }}</span>
 					</div>
 					<div class="flex justify-between text-red-600">
 						<span>{{ __('Thu hồi KM:') }}</span>
@@ -829,7 +831,7 @@
 					</div>
 					<div class="border-t border-gray-300 pt-2 flex justify-between">
 						<span class="font-semibold text-gray-700">{{ __('Thực hoàn:') }}</span>
-						<span class="font-bold text-gray-900">{{ formatCurrency(returnTotal - kmReclaimDialog.reclaim) }}</span>
+						<span class="font-bold text-gray-900">{{ formatCurrency(returnTotalAtListPrice - kmReclaimDialog.reclaim) }}</span>
 					</div>
 				</div>
 			</div>
@@ -1045,8 +1047,22 @@ const fetchInvoiceResource = createResource({
 				is_return: 0,
 			}
 
-			// Store transaction rule data for KM reclaim check
+			// Store transaction rule data for KM reclaim check (from API / fallback)
 			transactionRuleData.value = origInvoice.transaction_rule_data || null
+			if (
+				!transactionRuleData.value &&
+				Number(origInvoice.discount_amount) > 0
+			) {
+				transactionRuleData.value = {
+					rule_name: origInvoice.posa_transaction_pricing_rule || "",
+					min_amount: Number(origInvoice.transaction_min_amount) || 0,
+					header_discount_amount: Number(origInvoice.discount_amount),
+					original_subtotal:
+						Number(origInvoice.net_total || 0) +
+						Number(origInvoice.discount_amount),
+					discount_account: origInvoice.discount_account || null,
+				}
+			}
 			kmReclaimAmount.value = 0
 			kmReclaimConfirmed.value = false
 
@@ -1277,23 +1293,67 @@ const selectedItems = computed(() =>
 	returnItems.value.filter((item) => item.selected && item.return_qty > 0),
 )
 
-// Tính giá trị đơn hàng còn lại (theo price_list_rate) sau khi trừ items được chọn trả
+// Trả full: mọi dòng còn có thể trả đều được chọn và return_qty = hết remaining
+const isFullReturn = computed(() => {
+	if (!returnItems.value.length || !selectedItems.value.length) return false
+	return returnItems.value.every((item) => {
+		const maxQty = Number(item.quantity) || 0
+		if (maxQty <= 0) return true
+		return item.selected && Number(item.return_qty) >= maxQty
+	})
+})
+
+// Đã trả hết mọi dòng trả phí (kể cả khi còn sót hàng tặng chưa tick)
+const allPaidItemsFullyReturned = computed(() => {
+	const paidItems = returnItems.value.filter(
+		(item) => !item.is_free_item && (Number(item.quantity) || 0) > 0,
+	)
+	if (!paidItems.length) return false
+	return paidItems.every(
+		(item) => item.selected && Number(item.return_qty) >= Number(item.quantity),
+	)
+})
+
+function lineReturnAtListPrice(item) {
+	const qty = Number(item.return_qty) || 0
+	const priceListRate = Number(item.price_list_rate) || 0
+	const netRate = Number(item.rate ?? item.net_rate) || 0
+	const taxPerUnit = Number(item.tax_per_unit) || 0
+	let taxOnList = taxPerUnit
+	if (priceListRate > 0 && netRate > 0 && taxPerUnit > 0) {
+		taxOnList = priceListRate * (taxPerUnit / netRate)
+	}
+	return roundCurrency(qty * (priceListRate + taxOnList))
+}
+
+// Giá trị còn lại để so với min_amt — cùng cơ sở với POS lúc bán (price_list_rate × qty, trước CK dòng/bill)
 const remainingOrderValue = computed(() => {
 	if (!transactionRuleData.value) return 0
-	const selectedRowIds = new Set(selectedItems.value.map((i) => i.name))
+	const selectedByName = new Map(selectedItems.value.map((i) => [i.name, i]))
 	return returnItems.value.reduce((sum, item) => {
 		if (item.is_free_item) return sum
-		if (selectedRowIds.has(item.name)) return sum
-		return sum + (item.price_list_rate || item.rate || 0) * (item.original_qty || item.quantity || 0)
+		const originalQty = Number(item.original_qty || item.quantity) || 0
+		const selected = selectedByName.get(item.name)
+		const returningQty = selected ? Number(selected.return_qty) || 0 : 0
+		const stayingQty = originalQty - returningQty
+		if (stayingQty <= 0) return sum
+		const unitListRate = Number(item.price_list_rate) || 0
+		return sum + roundCurrency(stayingQty * roundCurrency(unitListRate))
 	}, 0)
 })
 
-// Check xem có cần thu hồi KM không (remaining < min_amount threshold)
+// Thu hồi KM bill-level: trả một phần, còn lại < min_amt, chưa trả hết hàng trả phí
 const needsKmReclaim = computed(() => {
 	if (!transactionRuleData.value || !selectedItems.value.length) return false
-	const { min_amount, header_discount_amount } = transactionRuleData.value
-	if (!min_amount || !header_discount_amount) return false
-	return remainingOrderValue.value < min_amount
+	if (isFullReturn.value || allPaidItemsFullyReturned.value) return false
+
+	const headerDiscount = Number(transactionRuleData.value.header_discount_amount) || 0
+	if (headerDiscount <= 0) return false
+
+	const threshold = Number(transactionRuleData.value.min_amount) || 0
+	if (threshold <= 0) return false
+
+	return remainingOrderValue.value < threshold
 })
 
 // Map: item.name (= sales_invoice_item row ID) → item for O(1) linkage lookup
@@ -1323,7 +1383,7 @@ const filteredReturnItems = computed(() => {
 
 const hasOpenShift = computed(() => Boolean(props.posOpeningShift))
 
-// Use rate_with_tax (includes tax) for accurate refund calculation
+// Hoàn theo giá net đã ghi trên HĐ (sau phân bổ chiết khấu bill)
 const returnTotal = computed(() =>
 	roundCurrency(
 		selectedItems.value.reduce(
@@ -1334,6 +1394,26 @@ const returnTotal = computed(() =>
 		),
 	),
 )
+
+// Hoàn theo giá list + thuế (trước chiết khấu bill) — dùng khi thu hồi KM
+const returnTotalAtListPrice = computed(() =>
+	roundCurrency(
+		selectedItems.value.reduce((sum, item) => sum + lineReturnAtListPrice(item), 0),
+	),
+)
+
+// Số tiền thực hoàn cho khách
+const effectiveRefundAmount = computed(() => {
+	if (showPartialBreakdown.value) {
+		return maxRefundableAmount.value
+	}
+	if (needsKmReclaim.value || kmReclaimConfirmed.value) {
+		return roundCurrency(
+			Math.max(0, returnTotalAtListPrice.value - kmReclaimDeduction.value),
+		)
+	}
+	return returnTotal.value
+})
 
 const totalPaymentAmount = computed(() =>
 	roundCurrency(
@@ -1370,9 +1450,14 @@ const showPartialBreakdown = computed(
 const summaryRefundLabel = computed(() =>
 	showPartialBreakdown.value ? "Cash Refund:" : "Refund Amount:",
 )
-const summaryRefundAmount = computed(() =>
-	showPartialBreakdown.value ? maxRefundableAmount.value : returnTotal.value,
-)
+const kmReclaimDeduction = computed(() => {
+	if (!needsKmReclaim.value && !kmReclaimConfirmed.value) return 0
+	return (
+		kmReclaimAmount.value ||
+		Number(transactionRuleData.value?.header_discount_amount) ||
+		0
+	)
+})
 
 // Cache RTL direction check (only needs to run once per session)
 const isRTL = document.documentElement.dir === "rtl"
@@ -1404,7 +1489,7 @@ const canCreateReturn = computed(() => {
 	)
 	return (
 		hasValidPayments &&
-		Math.abs(totalPaymentAmount.value - returnTotal.value) < 0.01
+		Math.abs(totalPaymentAmount.value - effectiveRefundAmount.value) < 0.01
 	)
 })
 
@@ -1468,15 +1553,17 @@ watch(normalizedSearchTerm, (searchTerm) => {
 	}, SEARCH_DEBOUNCE_MS)
 })
 
-// Auto-populate payment amount when return total changes (single payment only)
-watch(returnTotal, (newTotal) => {
-	if (!returnModal.visible || !showDialog.value || isOriginalCreditSale.value)
-		return
-	if (refundPayments.value.length !== 1 || newTotal <= 0) return
+function syncRefundPaymentAmount() {
+	if (!returnModal.visible || !showDialog.value || isOriginalCreditSale.value) return
+	if (refundPayments.value.length !== 1) return
+	const amount = effectiveRefundAmount.value
+	if (amount <= 0) return
+	refundPayments.value[0].amount = roundCurrency(amount)
+}
 
-	refundPayments.value[0].amount = isPartiallyPaid.value
-		? roundCurrency(maxRefundableAmount.value)
-		: newTotal
+// Auto-populate payment amount when refund amount changes (single payment only)
+watch(effectiveRefundAmount, () => {
+	syncRefundPaymentAmount()
 })
 
 // Methods
@@ -1687,12 +1774,14 @@ function selectAllFilteredItems() {
 		item.selected = true
 		item.return_qty = item.quantity
 	})
+	syncRefundPaymentAmount()
 }
 
 function deselectAllItems() {
 	returnItems.value.forEach((item) => {
 		item.selected = false
 	})
+	syncRefundPaymentAmount()
 }
 
 function toggleItemSelection(item) {
@@ -1722,6 +1811,7 @@ function toggleItemSelection(item) {
 			})
 		}
 	}
+	syncRefundPaymentAmount()
 }
 
 function handleKeyboardShortcuts(event) {
@@ -1749,12 +1839,14 @@ function handleKeyboardShortcuts(event) {
 function incrementReturnQuantity(item) {
 	if (item.return_qty < item.quantity) {
 		item.return_qty++
+		syncRefundPaymentAmount()
 	}
 }
 
 function decrementReturnQuantity(item) {
 	if (item.return_qty > 1) {
 		item.return_qty--
+		syncRefundPaymentAmount()
 	}
 }
 

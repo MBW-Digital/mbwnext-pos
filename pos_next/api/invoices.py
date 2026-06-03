@@ -1504,8 +1504,16 @@ def submit_invoice(invoice=None, data=None):
             if pos_profile:
                 try:
                     pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-                    write_off_account = pos_profile_doc.write_off_account
-                    write_off_cost_center = pos_profile_doc.write_off_cost_center
+                    write_off_account = (
+                        data.get("write_off_account")
+                        or invoice.get("write_off_account")
+                        or pos_profile_doc.write_off_account
+                    )
+                    write_off_cost_center = (
+                        data.get("write_off_cost_center")
+                        or invoice.get("write_off_cost_center")
+                        or pos_profile_doc.write_off_cost_center
+                    )
                     write_off_limit = flt(pos_profile_doc.write_off_limit or 0)
 
                     # Validate write-off amount is within limit
@@ -2383,6 +2391,111 @@ def _compute_free_item_linkage(items, invoice_name):
                 item["free_item_row_ids"] = linked
 
 
+def _build_return_transaction_rule_data(invoice_name, invoice_info, has_tpr_field):
+    """Build KM reclaim metadata for bill-level (Transaction) pricing rules on return."""
+    from frappe.utils import cstr
+
+    header_discount = flt(invoice_info.get("discount_amount") or 0)
+    add_disc_pct = flt(invoice_info.get("additional_discount_percentage") or 0)
+
+    if header_discount <= 0 and add_disc_pct <= 0:
+        return None
+
+    tpr_name = None
+    if has_tpr_field:
+        tpr_name = cstr(invoice_info.get("posa_transaction_pricing_rule") or "").strip() or None
+
+    company = invoice_info.get("company") or frappe.db.get_value(
+        "Sales Invoice", invoice_name, "company"
+    )
+
+    if not tpr_name and company:
+        candidates = frappe.get_all(
+            "Pricing Rule",
+            filters={
+                "apply_on": "Transaction",
+                "disable": 0,
+                "selling": 1,
+                "company": company,
+                "price_or_product_discount": "Price",
+            },
+            fields=["name", "discount_percentage", "discount_amount"],
+            order_by="priority desc, name asc",
+        )
+        for row in candidates:
+            if (
+                header_discount > 0
+                and row.discount_amount
+                and abs(flt(row.discount_amount) - header_discount) < 0.01
+            ):
+                tpr_name = row.name
+                break
+            if (
+                add_disc_pct > 0
+                and row.discount_percentage
+                and abs(flt(row.discount_percentage) - add_disc_pct) < 0.01
+            ):
+                tpr_name = row.name
+                break
+
+        if not tpr_name:
+            for row in candidates:
+                try:
+                    rule_doc = frappe.get_cached_doc("Pricing Rule", row.name)
+                    pct, amt = _get_rule_discount_values(rule_doc)
+                except Exception:
+                    continue
+                if header_discount > 0 and amt and abs(flt(amt) - header_discount) < 0.01:
+                    tpr_name = row.name
+                    break
+                if add_disc_pct > 0 and pct and abs(flt(pct) - add_disc_pct) < 0.01:
+                    tpr_name = row.name
+                    break
+
+    if not tpr_name:
+        return None
+
+    rule_info = frappe.db.get_value(
+        "Pricing Rule",
+        tpr_name,
+        ["min_amt", "discount_amount", "discount_percentage"],
+        as_dict=True,
+    )
+    if not rule_info:
+        return None
+
+    if header_discount <= 0 and add_disc_pct > 0:
+        try:
+            rule_doc = frappe.get_cached_doc("Pricing Rule", tpr_name)
+            pct, amt = _get_rule_discount_values(rule_doc)
+            if amt:
+                header_discount = amt
+            elif pct:
+                base = flt(invoice_info.get("net_total") or 0) + flt(
+                    invoice_info.get("discount_amount") or 0
+                )
+                header_discount = base * pct / 100
+        except Exception:
+            pass
+
+    if header_discount <= 0:
+        return None
+
+    discount_account = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"parent": invoice_name, "is_free_item": 0},
+        "discount_account",
+    )
+
+    return {
+        "rule_name": tpr_name,
+        "min_amount": flt(rule_info.min_amt),
+        "header_discount_amount": header_discount,
+        "original_subtotal": flt(invoice_info.get("net_total") or 0) + header_discount,
+        "discount_account": discount_account,
+    }
+
+
 @frappe.whitelist()
 def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     """Prepare a return invoice using ERPNext's make_sales_return.
@@ -2419,8 +2532,9 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     select_fields = [
         si.docstatus, si.is_return, si.pos_profile, si.posting_date,
         si.is_pos, si.grand_total, si.paid_amount, si.outstanding_amount,
-        si.customer, si.customer_name, si.net_total, si.total_taxes_and_charges,
-        si.discount_amount,
+        si.customer, si.customer_name, si.company, si.net_total,
+        si.total_taxes_and_charges, si.discount_amount,
+        si.additional_discount_percentage,
     ]
     if has_tpr_field:
         select_fields.append(si.posa_transaction_pricing_rule)
@@ -2513,37 +2627,9 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         .where(si_payment.parent == invoice_name)
     ).run(as_dict=True)
 
-    # Build transaction pricing rule data for KM reclaim check on return
-    transaction_rule_data = None
-    discount_account_for_reclaim = None
-    header_discount = flt(invoice_info.get("discount_amount") or 0)
-
-    if header_discount > 0 and has_tpr_field:
-        tpr_name = invoice_info.get("posa_transaction_pricing_rule")
-        if tpr_name:
-            rule_info = frappe.db.get_value(
-                "Pricing Rule", tpr_name,
-                ["min_amt", "discount_amount", "discount_percentage"],
-                as_dict=True,
-            )
-            if rule_info:
-                # Original subtotal = net items value before header discount
-                original_subtotal = flt(invoice_info.net_total) + header_discount
-
-                # Discount account from first item (for write-off account on return)
-                discount_account_for_reclaim = frappe.db.get_value(
-                    "Sales Invoice Item",
-                    {"parent": invoice_name, "is_free_item": 0},
-                    "discount_account",
-                )
-
-                transaction_rule_data = {
-                    "rule_name": tpr_name,
-                    "min_amount": flt(rule_info.min_amt),
-                    "header_discount_amount": header_discount,
-                    "original_subtotal": original_subtotal,
-                    "discount_account": discount_account_for_reclaim,
-                }
+    transaction_rule_data = _build_return_transaction_rule_data(
+        invoice_name, invoice_info, has_tpr_field
+    )
 
     # Include original invoice data for reference (payments, amounts, etc.)
     return_dict["_original_invoice"] = {
@@ -2557,6 +2643,19 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         "payments": payments_data,
         "net_total": invoice_info.net_total,
         "total_taxes_and_charges": invoice_info.total_taxes_and_charges,
+        "discount_amount": flt(invoice_info.get("discount_amount") or 0),
+        "additional_discount_percentage": flt(
+            invoice_info.get("additional_discount_percentage") or 0
+        ),
+        "posa_transaction_pricing_rule": (
+            invoice_info.get("posa_transaction_pricing_rule") if has_tpr_field else None
+        ),
+        "transaction_min_amount": (
+            flt(transaction_rule_data.get("min_amount")) if transaction_rule_data else 0
+        ),
+        "discount_account": (
+            transaction_rule_data.get("discount_account") if transaction_rule_data else None
+        ),
         "transaction_rule_data": transaction_rule_data,
     }
 

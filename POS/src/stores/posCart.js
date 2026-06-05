@@ -773,7 +773,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		if (!offlineState.isOffline) {
 			try {
 				const result = await call(
-					"mbwnext_vnpost.controllers.python.discontinued_product.check_item_stop_selling",
+					"mbwnext_advanced_selling.controllers.python.discontinued_product.check_item_stop_selling",
 					{ item_code: itemCode, pos_profile: profileName },
 				)
 				item.pos_stop_selling = parseStopSellingApiResult(result) ? 1 : 0

@@ -1,17 +1,17 @@
 {
  "charts": [],
  "content": "[{\"id\":\"cDBfxZcI12\",\"type\":\"header\",\"data\":{\"text\":\"<span class=\\\"h4\\\">POSNext</span>\",\"col\":12}},{\"id\":\"EuDVjJUKSQ\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Start POS\",\"col\":3}},{\"id\":\"uXQ4aBaRfk\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Item\",\"col\":3}},{\"id\":\"jEFYB2fX3t\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Settings\",\"col\":3}},{\"id\":\"RoWvjX8Ocp\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Profile\",\"col\":3}},{\"id\":\"p4KrSYzInK\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Opening Shift\",\"col\":3}},{\"id\":\"VO-VLNdx_2\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Closing Shift\",\"col\":3}},{\"id\":\"OYrA05uyCG\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Offer\",\"col\":3}},{\"id\":\"FUd4_fFBgH\",\"type\":\"shortcut\",\"data\":{\"shortcut_name\":\"Pos Coupon\",\"col\":3}}]",
- "creation": "2026-02-05 10:25:00.548230",
+ "creation": "2026-06-02 10:20:47.743421",
  "custom_blocks": [],
  "docstatus": 0,
  "doctype": "Workspace",
  "for_user": "",
  "hide_custom": 0,
- "icon": "message",
+ "icon": "heart-active",
  "idx": 0,
- "indicator_color": "green",
- "is_hidden": 1,
- "label": "POSNext",
+ "indicator_color": "",
+ "is_hidden": 0,
+ "label": "MBWNext POS",
  "links": [
   {
    "hidden": 0,
@@ -124,17 +124,17 @@
    "type": "Link"
   }
  ],
- "modified": "2026-05-18 21:37:57.797006",
+ "modified": "2026-06-05 08:59:47.585974",
  "modified_by": "Administrator",
  "module": "POS Next",
- "name": "POSNext",
+ "name": "MBWNext POS",
  "number_cards": [],
  "owner": "Administrator",
  "parent_page": "",
  "public": 1,
  "quick_lists": [],
  "roles": [],
- "sequence_id": 42.0,
+ "sequence_id": 6.0,
  "shortcuts": [
   {
    "color": "Grey",
@@ -200,5 +200,5 @@
    "type": "DocType"
   }
  ],
- "title": "POSNext"
+ "title": "MBWNext POS"
 }

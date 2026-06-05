@@ -2,11 +2,8 @@
 	<div ref="menuRef" class="relative">
 		<button
 			@click="isOpen = !isOpen"
-			class="flex items-center gap-3 px-3 py-2 hover:bg-gray-50 rounded-lg transition-colors"
+			class="flex items-center gap-2 px-2 py-2 hover:bg-gray-50 rounded-lg transition-colors"
 		>
-			<div class="text-end mx-1 hidden sm:block">
-				<p class="text-sm font-semibold text-gray-900">{{ userName }}</p>
-			</div>
 			<Avatar :image="profileImage" :name="userName" :initials="userInitials" size="sm" />
 			<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>

@@ -21,7 +21,7 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 	const profileCompany = computed(() => currentProfile.value?.company)
 	const profileCustomer = computed(() => currentProfile.value?.customer)
 	const autoPrintEnabled = computed(
-		() => currentProfile.value?.print_receipt_on_order_complete,
+		() => !!currentProfile.value?.print_receipt_on_order_complete,
 	)
 	const writeOffAccount = computed(() => currentProfile.value?.write_off_account)
 	const writeOffCostCenter = computed(() => currentProfile.value?.write_off_cost_center)
@@ -69,6 +69,15 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 		return hasOpenShift.value
 	}
 
+	function toggleAutoPrint() {
+		const profile = currentProfile.value
+		if (!profile) return null
+
+		const enabled = !profile.print_receipt_on_order_complete
+		profile.print_receipt_on_order_complete = enabled ? 1 : 0
+		return enabled
+	}
+
 	return {
 		// State
 		currentProfile,
@@ -94,5 +103,6 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 		startTimers,
 		checkShift,
 		checkOpeningShift,
+		toggleAutoPrint,
 	}
 })

@@ -5,3 +5,6 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 pos_next.patches.v1_7_0.reinstall_workspace
+pos_next.patches.v1_7_1.sync_pos_receipt_logo_print_format
+pos_next.patches.v1_7_2.migrate_loyalty_exclusion_to_loyalty_program
+pos_next.patches.v1_7_4.sync_receipt_item_cols_print_format

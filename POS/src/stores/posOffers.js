@@ -25,6 +25,37 @@ function getDiscountSortValue(offer) {
 	return Number.parseFloat(offer?.discount_amount) || 0
 }
 
+function parseTimeToSeconds(value) {
+	if (!value) return null
+	const parts = String(value).trim().split(":")
+	if (parts.length < 2) return null
+	const h = Number.parseInt(parts[0], 10)
+	const m = Number.parseInt(parts[1], 10)
+	const s = parts.length > 2 ? Number.parseInt(parts[2], 10) : 0
+	if ([h, m, s].some((n) => Number.isNaN(n))) return null
+	return h * 3600 + m * 60 + s
+}
+
+function isCurrentTimeInWindow(fromSeconds, toSeconds) {
+	if (fromSeconds == null || toSeconds == null) return false
+	const now = new Date()
+	const current =
+		now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()
+	if (fromSeconds <= toSeconds) {
+		return current >= fromSeconds && current <= toSeconds
+	}
+	return current >= fromSeconds || current <= toSeconds
+}
+
+function isOfferInTimeWindow(offer) {
+	if (!offer?.apply_time_window) {
+		return true
+	}
+	const from = parseTimeToSeconds(offer.valid_time_from)
+	const to = parseTimeToSeconds(offer.valid_time_to)
+	return isCurrentTimeInWindow(from, to)
+}
+
 export const usePOSOffersStore = defineStore("posOffers", () => {
 	const availableOffers = ref([])
 	const cartSnapshot = ref(defaultSnapshot())
@@ -230,6 +261,15 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			}
 		}
 
+		if (!isOfferInTimeWindow(offer)) {
+			const from = offer.valid_time_from || ""
+			const to = offer.valid_time_to || ""
+			return {
+				eligible: false,
+				reason: __("Offer is only valid from {0} to {1}", [from, to]),
+			}
+		}
+
 		return { eligible: true, reason: null }
 	}
 
@@ -305,7 +345,7 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 					// Load offers from cache when offline
 					const cachedOffers = await offlineWorker.getCachedOffers(posProfile)
 					if (cachedOffers && cachedOffers.length > 0) {
-						setAvailableOffers(cachedOffers)
+						setAvailableOffers(cachedOffers.filter(isOfferInTimeWindow))
 						return true
 					}
 					// No cached offers available offline
@@ -361,5 +401,6 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 		checkOfferEligibility,
 		getUnlockAmount,
 		ensureOffersFetched,
+		isOfferInTimeWindow,
 	}
 })

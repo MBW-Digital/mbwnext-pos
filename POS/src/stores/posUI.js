@@ -1,22 +1,47 @@
-import { useDialog, useDialogState } from "@/composables/useDialogState"
+import {
+	registerDialog,
+	useDialog,
+	useDialogState,
+} from "@/composables/useDialogState"
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
-const LEFT_PANEL_MIN = 320
-const RIGHT_PANEL_MIN = 360
+const LEFT_PANEL_MIN = 520
+const RIGHT_PANEL_MIN = 320
+// ~50% product list — wide enough for list table columns including UOM
+const LEFT_PANEL_RATIO = 0.5
+const LEFT_PANEL_TABLE_MIN = 660
+const LEFT_PANEL_IDEAL_MAX = 720
+
+function getDefaultLeftPanelWidth(containerWidth) {
+	const safeContainerWidth =
+		Number.isFinite(containerWidth) && containerWidth > 0
+			? containerWidth
+			: LEFT_PANEL_MIN + RIGHT_PANEL_MIN
+	const maxWidth = Math.max(
+		LEFT_PANEL_MIN,
+		safeContainerWidth - RIGHT_PANEL_MIN,
+	)
+	const byRatio = Math.round(safeContainerWidth * LEFT_PANEL_RATIO)
+	const preferred = Math.max(byRatio, LEFT_PANEL_TABLE_MIN)
+	return Math.min(Math.max(preferred, LEFT_PANEL_MIN), Math.min(maxWidth, LEFT_PANEL_IDEAL_MAX))
+}
 
 export const usePOSUIStore = defineStore("posUI", () => {
 	// Loading state
 	const isLoading = ref(true)
 
 	// Dialog states using the dialog composable
-	const { isOpen: showPaymentDialog } = useDialog("payment")
+	// Payment & VNPost: plain refs registered globally — POSSale syncs them per invoice tab
+	const showPaymentDialog = ref(false)
+	const showVnpostPayDialog = ref(false)
+	registerDialog(showPaymentDialog, "payment")
+	registerDialog(showVnpostPayDialog, "vnpost")
 	const { isOpen: showCustomerDialog } = useDialog("customer")
 	const { isOpen: showSuccessDialog } = useDialog("success")
 	const { isOpen: showOpenShiftDialog } = useDialog("openShift")
 	const { isOpen: showCloseShiftDialog } = useDialog("closeShift")
 	const { isOpen: showDraftDialog } = useDialog("draft")
-	const { isOpen: showSePayDialog } = useDialog("sepay")
 	const { isOpen: showReturnDialog } = useDialog("return")
 	const { isOpen: showCouponDialog } = useDialog("coupon")
 	const { isOpen: showOffersDialog } = useDialog("offers")
@@ -28,6 +53,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	const { isOpen: showLogoutDialog } = useDialog("logout")
 	const { isOpen: showItemSelectionDialog } = useDialog("itemSelection")
 	const { isOpen: showErrorDialog } = useDialog("invoiceError")
+	const { isOpen: showKeyboardShortcutsDialog } = useDialog("keyboardShortcuts")
 
 	// Global dialog state
 	const { isAnyDialogOpen } = useDialogState()
@@ -55,8 +81,9 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	)
 
 	// Layout state
-	const leftPanelWidth = ref(800)
+	const leftPanelWidth = ref(680)
 	const isResizing = ref(false)
+	let hasInitializedLayout = false
 
 	// Computed
 	const isDesktop = computed(() => windowWidth.value >= 1024)
@@ -138,6 +165,14 @@ export const usePOSUIStore = defineStore("posUI", () => {
 
 	function updateLayoutBounds(containerWidth) {
 		if (containerWidth) {
+			if (!hasInitializedLayout) {
+				leftPanelWidth.value = clampLeftPanelWidth(
+					getDefaultLeftPanelWidth(containerWidth),
+					containerWidth,
+				)
+				hasInitializedLayout = true
+				return
+			}
 			leftPanelWidth.value = clampLeftPanelWidth(
 				leftPanelWidth.value,
 				containerWidth,
@@ -153,7 +188,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showOpenShiftDialog.value = false
 		showCloseShiftDialog.value = false
 		showDraftDialog.value = false
-		showSePayDialog.value = false
+		showVnpostPayDialog.value = false
 		showReturnDialog.value = false
 		showCouponDialog.value = false
 		showOffersDialog.value = false
@@ -165,6 +200,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showLogoutDialog.value = false
 		showItemSelectionDialog.value = false
 		showErrorDialog.value = false
+		showKeyboardShortcutsDialog.value = false
 		clearError()
 	}
 
@@ -177,7 +213,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showOpenShiftDialog,
 		showCloseShiftDialog,
 		showDraftDialog,
-		showSePayDialog,
+		showVnpostPayDialog,
 		showReturnDialog,
 		showCouponDialog,
 		showOffersDialog,
@@ -189,6 +225,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showLogoutDialog,
 		showItemSelectionDialog,
 		showErrorDialog,
+		showKeyboardShortcutsDialog,
 		isAnyDialogOpen,
 		errorDialogTitle,
 		errorDialogMessage,

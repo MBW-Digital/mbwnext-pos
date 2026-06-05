@@ -247,6 +247,7 @@ export default defineConfig({
 		__BUILD_VERSION__: JSON.stringify(buildVersion),
 	},
 	optimizeDeps: {
+		exclude: ["frappe-ui"],
 		include: [
 			"feather-icons",
 			"showdown",

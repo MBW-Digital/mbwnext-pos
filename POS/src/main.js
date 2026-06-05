@@ -26,6 +26,7 @@ import { logger } from "./utils/logger"
 import { getSetting, setSetting } from "./utils/offline/db"
 import { offlineWorker } from "./utils/offline/workerClient"
 import translationPlugin from "./utils/translation"
+import { useWebUSBPrinter } from "./composables/useWebUSBPrinter"
 
 import {
 	Alert,
@@ -194,6 +195,29 @@ async function initializeApp() {
 	log.debug("Registering router, auth state:", session.isLoggedIn)
 	app.use(router)
 	app.mount("#app")
+
+	// ── WebUSB thermal printer: restore session after reload / PWA restart ──
+	// Chrome persists granted devices per origin; reconnect() re-opens without picker.
+	if (typeof navigator !== "undefined" && "usb" in navigator) {
+		const usb = useWebUSBPrinter()
+		usb
+			.reconnect()
+			.catch((e) => log.debug("WebUSB reconnect skipped:", e))
+
+		navigator.usb.addEventListener("connect", () => {
+			if (!usb.isConnected.value) {
+				usb.reconnect().catch(() => {})
+			}
+		})
+
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState !== "visible") return
+			if (!usb.isConnected.value) {
+				usb.reconnect().catch(() => {})
+			}
+		})
+	}
+
 	// Keep document title as app name so Chrome "Add to home screen" shows MBW Next POS
 	if (typeof document !== "undefined") {
 		document.title = "MBW Next POS"

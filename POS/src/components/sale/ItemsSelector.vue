@@ -83,7 +83,7 @@
 						:aria-label="__('Search items')"
 					/>
 					<!-- Barcode Scanner + Auto-Add Toggle (inside search input) -->
-					<div class="absolute inset-y-0 end-0 pe-1 sm:pe-2 flex items-center gap-0.5">
+					<div class="absolute inset-y-0 end-0 z-10 pe-1 sm:pe-2 flex items-center gap-0.5">
 						<button
 							@click="toggleBarcodeScanner"
 							:class="[
@@ -559,7 +559,7 @@
 								</div>
 							</td>
 							<td class="hidden sm:table-cell px-2 sm:px-3 py-2 whitespace-nowrap sm:max-w-[150px]">
-								<div class="text-xs sm:text-sm text-gray-500 truncate" :title="item.item_code">{{ item.item_code }}</div>
+								<div class="text-xs sm:text-sm font-semibold text-gray-700 truncate" :title="item.item_code">{{ item.item_code }}</div>
 							</td>
 							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[70px] sm:w-[100px]">
 								<div class="text-xs sm:text-sm font-semibold text-blue-600">{{ formatCurrency(item.rate || item.price_list_rate || 0) }}</div>
@@ -591,7 +591,7 @@
 								</span>
 							</td>
 							<td class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]">
-								<div class="text-xs sm:text-sm text-gray-500">{{ item.uom || item.stock_uom || __('Nos', null, 'UOM') }}</div>
+								<div class="text-xs sm:text-sm font-semibold text-gray-700">{{ item.uom || item.stock_uom || __('Nos', null, 'UOM') }}</div>
 							</td>
 						</tr>
 						<!-- Loading More Indicator Row -->
@@ -735,6 +735,8 @@ import { useItemSearchStore } from "@/stores/itemSearch"
 import { usePOSSettingsStore } from "@/stores/posSettings"
 import { useStock } from "@/composables/useStock"
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
+import { getPosStopSellingMessage, isPosStopSelling } from "@/utils/posStopSelling"
+import { usePOSShiftStore } from "@/stores/posShift"
 import { useToast } from "@/composables/useToast"
 import { storeToRefs } from "pinia"
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue"
@@ -762,6 +764,7 @@ const emit = defineEmits(["item-selected"])
 // Use composables
 const { getStockStatus } = useStock()
 const settingsStore = usePOSSettingsStore()
+const shiftStore = usePOSShiftStore()
 const { showError, showWarning } = useToast()
 
 // Use Pinia store
@@ -1157,8 +1160,22 @@ function clearLongPress() {
 function selectItem(item, autoAdd = false) {
 	if (!item) return false
 
+	const company = shiftStore.profileCompany
+	if (isPosStopSelling(item, company)) {
+		showError(getPosStopSellingMessage())
+		return false
+	}
+
 	// Skip stock validation for: variants (template), serial items, batch items (they have own validation)
-	const skipValidation = item.has_variants || item.has_serial_no || item.has_batch_no
+	const skipManualBatchPick =
+		settingsStore.isEnabled &&
+		settingsStore.allowSkipManualBatchSelection &&
+		item.has_batch_no &&
+		!item.has_serial_no
+	const skipValidation =
+		item.has_variants ||
+		item.has_serial_no ||
+		(item.has_batch_no && !skipManualBatchPick)
 	const isStockTracked = item.is_stock_item || item.is_bundle
 	const qty = Math.floor(item.actual_qty ?? item.stock_qty ?? 0)
 
@@ -1207,6 +1224,14 @@ async function handleBarcodeSearch(forceAutoAdd = false) {
 			return
 		}
 	} catch (error) {
+		const errMsg = String(error?.message || error?.messages?.[0] || "")
+		if (errMsg.includes("khóa kinh doanh")) {
+			showError(getPosStopSellingMessage())
+			if (shouldAutoAdd) {
+				itemStore.clearSearch()
+			}
+			return
+		}
 		console.error("Barcode API error:", error)
 	}
 
@@ -1256,6 +1281,24 @@ function toggleBarcodeScanner() {
 	}
 }
 
+function toggleBarcodeScanMode() {
+	const active = scannerEnabled.value || autoAddEnabled.value
+	if (active) {
+		scannerEnabled.value = false
+		autoAddEnabled.value = false
+		if (autoSearchTimer.value) {
+			clearTimeout(autoSearchTimer.value)
+			autoSearchTimer.value = null
+		}
+		return
+	}
+
+	scannerEnabled.value = true
+	autoAddEnabled.value = true
+	const input = searchInputRef.value || document.getElementById("item-search")
+	input?.focus()
+}
+
 function toggleAutoAdd() {
 	// Auto-add works independently - no need for scanner mode
 	autoAddEnabled.value = !autoAddEnabled.value
@@ -1300,6 +1343,14 @@ defineExpose({
 	loadItems: () => itemStore.loadAllItems(props.posProfile),
 	loadItemGroups: () => itemStore.loadItemGroups(),
 	loadMoreItems: () => itemStore.loadMoreItems(),
+	focusSearch: () => {
+		const input = searchInputRef.value || document.getElementById("item-search")
+		input?.focus()
+		input?.select?.()
+	},
+	toggleAutoAdd,
+	toggleBarcodeScanner,
+	toggleBarcodeScanMode,
 })
 
 // Watch for view mode changes and rebind scroll listeners

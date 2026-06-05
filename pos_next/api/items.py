@@ -9,7 +9,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_qty
 from erpnext.stock.get_item_details import get_item_details as erpnext_get_item_details
 from frappe import _
 from frappe.query_builder import DocType, functions as fn
-from frappe.utils import flt, nowdate
+from frappe.utils import flt, nowdate, nowtime
 
 ITEM_RESULT_FIELDS = [
 	"name as item_code",
@@ -52,7 +52,46 @@ def get_stock_availability(item_code, warehouse):
 	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
 
 
-def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=None):
+def _apply_pos_pricing_rule_context(doc, company, transaction_date=None, posting_time=None):
+	"""Attach posting_date / posting_time for ERPNext + POS Next time-based Pricing Rules."""
+	if doc is not None:
+		if isinstance(doc, dict) and not isinstance(doc, frappe._dict):
+			doc = frappe._dict(doc)
+
+	def dget(d, key):
+		if d is None:
+			return None
+		if isinstance(d, dict):
+			return d.get(key)
+		return getattr(d, key, None)
+
+	td = transaction_date or dget(doc, "posting_date") or dget(doc, "transaction_date")
+	if not td:
+		td = nowdate()
+
+	tm = posting_time or dget(doc, "posting_time")
+	if not tm:
+		tm = nowtime()
+
+	if not doc and company:
+		doc = frappe._dict({"doctype": "Sales Invoice", "company": company})
+
+	if doc is not None:
+		doc.posting_date = td
+		doc.posting_time = tm
+
+	return doc, td, tm
+
+
+def get_item_detail(
+	item,
+	doc=None,
+	warehouse=None,
+	price_list=None,
+	company=None,
+	transaction_date=None,
+	posting_time=None,
+):
 	"""
 	Get comprehensive item details including batch/serial data, pricing, and stock information.
 
@@ -86,6 +125,9 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 	- Applies conversion factors (plc_conversion_rate)
 	- Falls back to 1:1 if exchange rate unavailable (with error logging)
 
+	Pricing rules (POS):
+	- Transaction date/time default to today and current server time so time-based Pricing Rules apply at the till.
+
 	UOM (Unit of Measure) Handling:
 	================================
 	Returns all UOM conversions for the item:
@@ -103,6 +145,8 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 		warehouse (str, optional): Warehouse for stock/batch/serial lookup
 		price_list (str, optional): Selling price list name
 		company (str, optional): Company for currency conversion
+		transaction_date (str|date, optional): Sales date for Pricing Rule validity (defaults to today)
+		posting_time (str|time, optional): Transaction time for time-window rules (defaults to now)
 
 	Returns:
 		dict: Enriched item details containing:
@@ -248,9 +292,9 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 	if company:
 		item["company"] = company
 
-	# Create a proper doc structure with company
-	if not doc and company:
-		doc = frappe._dict({"doctype": "Sales Invoice", "company": company})
+	doc, pos_transaction_date, pos_posting_time = _apply_pos_pricing_rule_context(
+		doc, company, transaction_date, posting_time
+	)
 
 	# Fetch all needed Item fields in a single query (performance optimization)
 	item_data = frappe.db.get_value(
@@ -272,10 +316,31 @@ def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=Non
 			"price_list_currency": item.get("price_list_currency"),
 			"plc_conversion_rate": item.get("plc_conversion_rate"),
 			"conversion_rate": item.get("conversion_rate"),
+			"transaction_date": pos_transaction_date,
+			"posting_time": pos_posting_time,
 		}
 	)
 
 	res = erpnext_get_item_details(args, doc)
+
+	if item.get("company"):
+		try:
+			from mbwnext_advanced_selling.controllers.python_hook.sales_invoice import (
+				ensure_selling_item_tax_for_item_line,
+			)
+
+			tpl, tr = ensure_selling_item_tax_for_item_line(
+				item_code,
+				item.get("company"),
+				res.get("item_tax_template"),
+				res.get("item_tax_rate"),
+			)
+			if tpl:
+				res["item_tax_template"] = tpl
+			if tr:
+				res["item_tax_rate"] = tr
+		except Exception:
+			pass
 
 	if item.get("is_stock_item") and warehouse:
 		res["actual_qty"] = get_stock_availability(item_code, warehouse)
@@ -321,9 +386,25 @@ def search_by_barcode(barcode, pos_profile):
 		if not pos_profile:
 			frappe.throw(_("POS Profile is required"))
 
+		raw_barcode = (barcode or "").strip()
+
+		from pos_next.services.barcode import (
+			compute_resolved_item_data,
+			resolve_barcode,
+			resolve_internal_scale_barcode,
+		)
+
+		resolved_barcode_data = resolve_barcode(raw_barcode, pos_profile)
+		if not resolved_barcode_data:
+			resolved_barcode_data = resolve_internal_scale_barcode(raw_barcode, pos_profile)
+
+		lookup_barcode = (
+			resolved_barcode_data.get("item_barcode") if resolved_barcode_data else raw_barcode
+		)
+
 		# Search for item by barcode - also get UOM if barcode has specific UOM
 		barcode_data = frappe.db.get_value(
-			"Item Barcode", {"barcode": barcode}, ["parent", "uom"], as_dict=True
+			"Item Barcode", {"barcode": lookup_barcode}, ["parent", "uom"], as_dict=True
 		)
 
 		if barcode_data:
@@ -331,11 +412,11 @@ def search_by_barcode(barcode, pos_profile):
 			barcode_uom = barcode_data.uom
 		else:
 			# Try searching in item code field directly
-			item_code = frappe.db.get_value("Item", {"name": barcode})
+			item_code = frappe.db.get_value("Item", {"name": lookup_barcode})
 			barcode_uom = None
 
 		if not item_code:
-			frappe.throw(_("Item with barcode {0} not found").format(barcode))
+			frappe.throw(_("Item with barcode {0} not found").format(lookup_barcode))
 
 		# Get POS Profile details
 		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
@@ -375,6 +456,28 @@ def search_by_barcode(barcode, pos_profile):
 			price_list=pos_profile_doc.selling_price_list,
 			company=pos_profile_doc.company,
 		)
+
+		if resolved_barcode_data:
+			prices = frappe.get_all(
+				"Item Price",
+				filters={
+					"item_code": item_code,
+					"price_list": pos_profile_doc.selling_price_list,
+				},
+				fields=["uom", "price_list_rate"],
+			)
+			uom_prices = {p["uom"]: p["price_list_rate"] for p in prices if p.get("uom")}
+			enrich_item = {
+				"name": item_code,
+				"item_code": item_code,
+				"uom": item_details.get("uom") or item_doc.stock_uom,
+				"rate": flt(item_details.get("rate") or item_details.get("price_list_rate")),
+				"uom_prices": uom_prices,
+			}
+
+			extra = compute_resolved_item_data(resolved_barcode_data, enrich_item)
+			if extra:
+				item_details.update(extra)
 
 		return item_details
 	except Exception as e:
@@ -972,12 +1075,16 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 	try:
 		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
 
-		# Try to resolve weighted/priced barcodes if barcode_resolver is available
+		# Resolve weighted / priced / internal scale barcodes
 		resolved_barcode_data = None
 		effective_search_term = search_term
 		if search_term and len(search_term.strip().split()) == 1:
-			from pos_next.services.barcode import resolve_barcode
-			resolved_barcode_data = resolve_barcode(search_term.strip(), pos_profile)
+			from pos_next.services.barcode import resolve_barcode, resolve_internal_scale_barcode
+
+			st = search_term.strip()
+			resolved_barcode_data = resolve_barcode(st, pos_profile)
+			if not resolved_barcode_data:
+				resolved_barcode_data = resolve_internal_scale_barcode(st, pos_profile)
 			if resolved_barcode_data and resolved_barcode_data.get("item_barcode"):
 				# Use the extracted item barcode for searching
 				effective_search_term = resolved_barcode_data["item_barcode"]
@@ -1272,6 +1379,23 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 			# UOM-specific prices map for frontend selector
 			item["uom_prices"] = uom_prices_map.get(item["item_code"], {})
 
+			# Item tax template + rate for offline cart / tax totals
+			try:
+				from pos_next.controllers.python.sales_invoice import (
+					ensure_selling_item_tax_for_item_line,
+				)
+
+				tpl, tr = ensure_selling_item_tax_for_item_line(
+					item["item_code"],
+					pos_profile_doc.company,
+				)
+				if tpl:
+					item["item_tax_template"] = tpl
+				if tr:
+					item["item_tax_rate"] = tr
+			except Exception:
+				pass
+
 		# Apply resolved barcode data (weighted/priced) to the first matching item
 		if resolved_barcode_data and items:
 			from pos_next.services.barcode import compute_resolved_item_data
@@ -1289,7 +1413,15 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 
 
 @frappe.whitelist()
-def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):  # noqa: ARG001 - customer reserved for future use
+def get_item_details(
+	item_code,
+	pos_profile,
+	customer=None,
+	qty=1,
+	uom=None,
+	transaction_date=None,
+	posting_time=None,
+):  # noqa: ARG001 - customer reserved for future use
 	"""Get detailed item info including price, tax, stock"""
 	try:
 		# Parse pos_profile if it's a JSON string
@@ -1332,6 +1464,8 @@ def get_item_details(item_code, pos_profile, customer=None, qty=1, uom=None):  #
 			warehouse=pos_profile_doc.warehouse,
 			price_list=pos_profile_doc.selling_price_list,
 			company=pos_profile_doc.company,
+			transaction_date=transaction_date,
+			posting_time=posting_time,
 		)
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Item Details Error")

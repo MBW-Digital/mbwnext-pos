@@ -354,18 +354,160 @@
 												:description="__('Enable partial payment for invoices')"
 											/>
 											<CheckboxField
-												v-model="settings.silent_print"
-												:label="__('Silent Print')"
-												:description="__('Print without confirmation')"
+												v-model="settings.allow_skip_manual_batch_selection"
+												:label="__('Skip batch picker (FIFO auto-batch)')"
+												:description="__('Batch-only items skip the batch dialog; ERPNext assigns batches by FIFO when the invoice is saved. Serial items still require serial selection.')"
 											/>
+										<CheckboxField
+											v-model="settings.silent_print"
+											:label="__('Silent Print')"
+											:description="__('Print without confirmation')"
+										/>
+										<CheckboxField
+											v-model="settings.allow_manual_cash_drawer"
+											:label="__('Allow Manual Cash Drawer Open')"
+											:description="__('When enabled, cashiers can use Open Cash Drawer below. Each open is saved on the server with exact time (Till Exception Report).')"
+										/>
+										<div
+											v-if="Number(settings.allow_manual_cash_drawer)"
+											class="flex flex-col gap-2 pt-1 border-t border-gray-100"
+										>
+											<Button
+												:loading="openingCashDrawer"
+												variant="solid"
+												theme="gray"
+												size="sm"
+												class="self-start"
+												:disabled="!usbPrinter.isSupported.value || !usbPrinter.isConnected.value"
+												@click="openManualCashDrawer"
+											>
+												{{ __('Open Cash Drawer (manual)') }}
+											</Button>
+											<p v-if="usbPrinter.isSupported.value && !usbPrinter.isConnected.value" class="text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-3 py-2">
+												{{ __('Connect the USB thermal printer first. The drawer uses the printer kick (DK) port.') }}
+											</p>
+											<p v-else-if="!usbPrinter.isSupported.value" class="text-xs text-gray-500">
+												{{ __('Manual drawer open requires WebUSB (Chrome or Edge) and a connected USB receipt printer.') }}
+											</p>
 										</div>
 									</div>
 								</div>
 							</div>
 
+
+						<!-- USB Thermal Printer (WebUSB) -->
+						<div v-if="activeTab === 'sales'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+							<div :class="usbSectionClasses.header">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-3">
+										<div :class="usbSectionClasses.iconContainer">
+											<svg :class="usbSectionClasses.icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+											</svg>
+										</div>
+										<div>
+											<h3 class="text-lg font-bold text-gray-900">{{ __('USB Thermal Printer') }}</h3>
+											<p class="text-xs text-gray-600 mt-0.5">{{ __('Print directly via USB — no dialog. Requires Chrome or Edge.') }}</p>
+										</div>
+									</div>
+									<div :class="usbSectionClasses.badge">
+										<span :class="['w-2 h-2 rounded-full', usbPrinter.isConnected.value ? 'bg-green-500' : 'bg-gray-400']"></span>
+										<span :class="usbSectionClasses.badgeText">
+											{{ usbPrinter.isConnected.value ? __('Connected') : __('Not Connected') }}
+										</span>
+									</div>
+								</div>
+							</div>
+
+							<div class="p-4 space-y-4">
+								<!-- Not supported -->
+								<div v-if="!usbPrinter.isSupported.value" class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+									⚠ {{ __('WebUSB not supported. Please use Chrome or Edge.') }}
+								</div>
+
+								<!-- Buttons -->
+								<div v-else class="flex flex-wrap items-center gap-3">
+									<Button
+										v-if="!usbPrinter.isConnected.value"
+										:loading="usbPrinter.isConnecting.value"
+										variant="solid"
+										theme="blue"
+										size="sm"
+										@click="usbPrinter.connect()"
+									>
+										{{ __('Select USB Printer…') }}
+									</Button>
+									<Button
+										v-else
+										variant="outline"
+										theme="gray"
+										size="sm"
+										@click="usbPrinter.disconnect()"
+									>
+										{{ __('Disconnect') }}
+									</Button>
+								</div>
+
+								<!-- Error -->
+								<p v-if="usbPrinter.lastError.value" class="text-xs text-red-600 bg-red-50 rounded px-3 py-2">
+									{{ usbPrinter.lastError.value }}
+								</p>
+
+								<!-- Connected info -->
+								<div v-if="usbPrinter.isConnected.value" class="space-y-3">
+									<p class="text-xs text-green-700 bg-green-50 rounded px-3 py-2">
+										✓ {{ __('Connected: ') }}<strong>{{ usbPrinter.deviceName.value }}</strong>
+									</p>
+									<div>
+										<label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Paper Width') }}</label>
+										<select
+											:value="usbPrinter.paperWidth.value"
+											@change="usbPrinter.setPaperWidth(Number($event.target.value))"
+											class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+										>
+											<option :value="58">58mm (P103, Xprinter XP-58)</option>
+											<option :value="80">80mm (HPRT TP808, Xprinter XP-80, Epson TM-T82)</option>
+										</select>
+									</div>
+								<div class="border border-gray-200 rounded-lg p-3 space-y-3 bg-gray-50/80">
+									<div>
+										<label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Vietnamese printing') }}</label>
+										<select
+											:value="usbPrinter.viMode.value"
+											@change="usbPrinter.setViMode($event.target.value)"
+											class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+										>
+											<option value="bitmap">{{ __('Full Vietnamese') }}</option>
+											<option value="ascii">{{ __('No diacritics (ASCII)') }}</option>
+										</select>
+										<p class="text-xs text-gray-500 mt-1">{{ __('Full Vietnamese. ASCII: faster, Latin letters without accents.') }}</p>
+									</div>
+									<CheckboxField
+											:model-value="usbPrinter.cashDrawerKickEnabled.value ? 1 : 0"
+											:label="__('Open cash drawer after print (WebUSB)')"
+											:description="__('Use when the drawer is connected to the printer DK port (RJ11). Only works with direct USB printing, not the browser print dialog.')"
+											@update:model-value="(v) => usbPrinter.setCashDrawerKickEnabled(!!Number(v))"
+										/>
+										<div>
+											<label class="block text-sm font-medium text-gray-700 mb-1">{{ __('Drawer kick connector') }}</label>
+											<select
+												:value="usbPrinter.cashDrawerKickM.value"
+												@change="usbPrinter.setCashDrawerKickM(Number($event.target.value))"
+												class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+											>
+												<option :value="0">{{ __('Default (pin 2)') }}</option>
+												<option :value="1">{{ __('Alternate (pin 5)') }}</option>
+											</select>
+											<p class="text-xs text-gray-500 mt-1">{{ __('If the drawer does not open, try the alternate option.') }}</p>
+										</div>
+									</div>
+								</div>
+							</div>
 						</div>
 
-						<!-- Empty State -->
+					</div>
+
+					<!-- Empty State -->
 						<div v-else class="flex flex-col items-center justify-center py-16 text-center">
 							<svg class="w-16 h-16 text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
@@ -378,10 +520,12 @@
 				</div>
 			</div>
 		</div>
+		</div>
 	</Transition>
 </template>
 
 <script setup>
+import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter"
 import CheckboxField from "@/components/settings/CheckboxField.vue"
 import NumberField from "@/components/settings/NumberField.vue"
 import SelectField from "@/components/settings/SelectField.vue"
@@ -430,10 +574,12 @@ const settings = ref({
 	allow_credit_sale: 0,
 	allow_return: 0,
 	allow_write_off_change: 0,
-	allow_partial_payment: 0,
-	silent_print: 0,
-	allow_negative_stock: 0,
+				allow_partial_payment: 0,
+				silent_print: 0,
+				allow_skip_manual_batch_selection: 0,
+				allow_negative_stock: 0,
 	tax_inclusive: 0,
+	allow_manual_cash_drawer: 0,
 })
 
 // Stock Sync Settings (localStorage persisted)
@@ -460,6 +606,45 @@ const warehouseOptions = computed(() => {
 // Dynamic classes using configuration helpers (DRY principle)
 const stockSectionClasses = computed(() => getSectionHeaderClasses("purple"))
 const salesSectionClasses = computed(() => getSectionHeaderClasses("green"))
+const usbSectionClasses = computed(() => getSectionHeaderClasses("blue"))
+
+const usbPrinter = useWebUSBPrinter()
+
+const openingCashDrawer = ref(false)
+
+async function openManualCashDrawer() {
+	if (!props.posProfile) {
+		showError(__("POS Profile not found"))
+		return
+	}
+	if (!Number(settings.value.allow_manual_cash_drawer)) {
+		showError(__("Manual cash drawer open is not allowed"))
+		return
+	}
+	if (!usbPrinter.isSupported.value) {
+		showError(__("WebUSB is not available in this browser"))
+		return
+	}
+	if (!usbPrinter.isConnected.value) {
+		showError(__("Connect the USB printer first"))
+		return
+	}
+	openingCashDrawer.value = true
+	try {
+		await call("pos_next.api.till_exception.log_cash_drawer_event", {
+			pos_profile: props.posProfile,
+			event_type: "Manual Open",
+		})
+		await usbPrinter.kickCashDrawer()
+		showSuccess(__("Event logged and cash drawer opened"))
+	} catch (error) {
+		log.error("Manual cash drawer failed:", error)
+		showError(error.message || __("Failed to open cash drawer"))
+	} finally {
+		openingCashDrawer.value = false
+	}
+}
+
 const warehouseSubsectionClasses = computed(() => getSubsectionClasses("gray"))
 const stockPolicySubsectionClasses = computed(() =>
 	getSubsectionClasses("blue"),

@@ -6,6 +6,7 @@
 
 import { logger } from '../logger'
 import { offlineState } from './offlineState'
+import { sanitizeItemsForCache } from './itemCacheSanitizer'
 
 const log = logger.create('OfflineWorker')
 
@@ -411,7 +412,9 @@ class OfflineWorkerClient {
 	}
 
 	async cacheItems(items) {
-		return this.sendMessage("CACHE_ITEMS", { items })
+		return this.sendMessage("CACHE_ITEMS", {
+			items: sanitizeItemsForCache(items),
+		})
 	}
 
 	async cacheCustomers(customers) {
@@ -543,6 +546,14 @@ class OfflineWorkerClient {
 	 */
 	async clearOffersCache(posProfile = null) {
 		return this.sendMessage("CLEAR_OFFERS_CACHE", { posProfile })
+	}
+
+	async cacheProductBundles(bundles, posProfile) {
+		return this.sendMessage("CACHE_PRODUCT_BUNDLES", { bundles, posProfile })
+	}
+
+	async getCachedProductBundles(posProfile) {
+		return this.sendMessage("GET_CACHED_PRODUCT_BUNDLES", { posProfile })
 	}
 
 	terminate() {

@@ -2,7 +2,7 @@ import { call } from "@/utils/apiWrapper"
 import { getSetting, setSetting } from "@/utils/offline/db"
 import { isOffline } from "@/utils/offline"
 import { offlineWorker } from "@/utils/offline/workerClient"
-import { cacheItems, getCachedVariants, updateItemBatchSerialData, searchCachedItems as searchCachedItemsMain } from "@/utils/offline/items"
+import { cacheItems, getCachedItemByCodeOrName, getCachedVariants, updateItemBatchSerialData, searchCachedItems as searchCachedItemsMain } from "@/utils/offline/items"
 import { performanceConfig } from "@/utils/performanceConfig"
 import { logger } from "@/utils/logger"
 import { createResource } from "frappe-ui"
@@ -457,6 +457,21 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 			bucket.add(item)
 			registrySet.add(item)
 		})
+	}
+
+	function findItemByCode(itemCode) {
+		if (!itemCode) return null
+
+		const bucket = itemRegistry.get(itemCode)
+		if (bucket?.size) {
+			return [...bucket][0]
+		}
+
+		return (
+			allItems.value.find((item) => item.item_code === itemCode) ||
+			searchResults.value.find((item) => item.item_code === itemCode) ||
+			null
+		)
 	}
 
 	function replaceAllItems(items) {
@@ -1447,14 +1462,23 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 
 	async function getItem(itemCode) {
 		try {
+			const fromMemory = findItemByCode(itemCode)
+			if (fromMemory?.item_code) {
+				return fromMemory
+			}
+
 			const cacheReady = await offlineWorker.isCacheReady()
 			if (isOffline() || cacheReady) {
-				const items = await offlineWorker.searchCachedItems(itemCode, 1)
-				return items?.[0] || null
-			} else {
-				// Fallback to server (implement if needed)
-				return null
+				const exact = await getCachedItemByCodeOrName(itemCode)
+				if (exact?.item_code) {
+					return exact
+				}
+				const items = await offlineWorker.searchCachedItems(itemCode, 20)
+				return (
+					items?.find((row) => row.item_code === itemCode) || items?.[0] || null
+				)
 			}
+			return null
 		} catch (error) {
 			log.error("Error getting item", error)
 			return null
@@ -1673,6 +1697,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 		loadItemGroups,
 		searchByBarcode,
 		getItem,
+		findItemByCode,
 		setSearchTerm,
 		clearSearch,
 		setSelectedItemGroup,

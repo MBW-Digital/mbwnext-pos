@@ -96,30 +96,8 @@
 								/>
 							</div>
 
-							<!-- Create New Button -->
+							<!-- Actions -->
 							<div class="p-4 bg-white border-b flex flex-col gap-2">
-								<Button
-									v-if="permissions.create"
-									@click="handleCreateNew"
-									variant="solid"
-									class="w-full"
-								>
-									<template #prefix>
-										<FeatherIcon name="plus-circle" class="w-4 h-4" />
-									</template>
-									{{ __('Create New Promotion') }}
-								</Button>
-								<!-- Permission Warning -->
-								<div v-else class="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-									<div class="flex items-start gap-2">
-										<svg class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-											<path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
-										</svg>
-										<div class="flex-1">
-											<p class="text-xs font-medium text-amber-900">{{ __('Create permission required') }}</p>
-										</div>
-									</div>
-								</div>
 								<Button
 									@click="loadPromotions"
 									variant="outline"
@@ -222,20 +200,7 @@
 										<FeatherIcon name="tag" class="w-16 h-16 mx-auto" />
 									</div>
 									<h3 class="text-xl font-semibold text-gray-900 mb-2">{{ __('Select a Promotion') }}</h3>
-									<p class="text-sm text-gray-600 mb-6">{{ __('Choose a promotion from the list to view and edit, or create a new one to get started') }}</p>
-									<Button
-										v-if="permissions.create"
-										@click="handleCreateNew"
-										variant="solid"
-									>
-										<template #prefix>
-											<FeatherIcon name="plus" class="w-4 h-4" />
-										</template>
-										{{ __('Create New Promotion') }}
-									</Button>
-									<p v-else class="text-sm text-amber-600">
-										{{ __("You don't have permission to create promotions") }}
-									</p>
+									<p class="text-sm text-gray-600">{{ __('Choose a promotion from the list to view and edit') }}</p>
 								</div>
 							</div>
 

@@ -49,9 +49,12 @@ _asset_version = get_build_version()
 
 # include js in doctype views
 doctype_js = {
-	"Material Request" : "controllers/js/material_request.js"
+	"Material Request": "controllers/js/material_request.js",
+	"Loyalty Program": "public/js/loyalty_program.js",
 }
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_list_js = {
+	"Sales Invoice": "public/js/sales_invoice_list.js",
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -63,7 +66,7 @@ doctype_js = {
 # Home Pages
 # ----------
 
-template_apps = ["erpnext", "pos_next"]
+template_apps = ["erpnext", "pos_next", "hrms"]
 
 # application home page (will override Website Settings)
 # home_page = "login"
@@ -104,7 +107,10 @@ fixtures = [
 					"POS Profile-posa_cash_mode_of_payment",
 					"POS Profile-posa_allow_delete",
 					"POS Profile-posa_block_sale_beyond_available_qty",
-					"Mode of Payment-is_wallet_payment"
+					"Mode of Payment-is_wallet_payment",
+					"Pricing Rule-apply_time_window",
+					"Pricing Rule-valid_time_from",
+					"Pricing Rule-valid_time_to",
 				]
 			]
 		]
@@ -194,7 +200,8 @@ standard_queries = {
 # Override standard doctype classes
 
 override_doctype_class = {
-	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice"
+	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice",
+	"Pricing Rule": "pos_next.overrides.pricing_rule.PricingRule",
 }
 
 # Document Events
@@ -210,6 +217,7 @@ doc_events = {
 		"after_insert": "pos_next.api.customers.auto_assign_loyalty_program"
 	},
 	"Sales Invoice": {
+        "before_validate": "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
 		"validate": [
 			"pos_next.api.sales_invoice_hooks.validate",
 			"pos_next.api.wallet.validate_wallet_payment"
@@ -223,8 +231,11 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
-		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event"
-	}
+		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
+	},
+	"Loyalty Program": {
+		"validate": "pos_next.api.loyalty_program_hooks.validate",
+	},
 }
 
 # Scheduled Tasks

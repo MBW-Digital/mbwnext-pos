@@ -1,13 +1,27 @@
 import { useInvoice } from "@/composables/useInvoice"
 import { usePOSOffersStore } from "@/stores/posOffers"
 import { usePOSSettingsStore } from "@/stores/posSettings"
+import { usePOSShiftStore } from "@/stores/posShift"
 import { parseError } from "@/utils/errorHandler"
+import {
+	assertCanSellInPos,
+	getPosStopSellingMessage,
+	isPosStopSelling,
+	parseStopSellingApiResult,
+} from "@/utils/posStopSelling"
 import {
 	checkStockAvailability,
 	formatStockError,
 } from "@/utils/stockValidator"
 import { offlineState } from "@/utils/offline/offlineState"
+import { offlineWorker } from "@/utils/offline/workerClient"
+import { evaluateProductBundleMatches } from "@/utils/productBundleMatch"
+import { cacheItems, getCachedItemByCodeOrName, getItemWithPrice } from "@/utils/offline/items"
+import { useItemSearchStore } from "@/stores/itemSearch"
 import { useToast } from "@/composables/useToast"
+import { call } from "@/utils/apiWrapper"
+import { roundCurrency } from "@/utils/currency"
+import { CoalescingMutex } from "@/utils/mutex"
 import { defineStore } from "pinia"
 import { computed, nextTick, ref, toRaw, watch } from "vue"
 
@@ -91,28 +105,46 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		payments,
 		salesTeam,
 		additionalDiscount,
+		additionalDiscountPercentage,
+		transactionPricingRule,
 		taxInclusive,
 		isSubmitting,
 		addItem: addItemToInvoice,
 		removeItem,
 		updateItemQuantity,
 		submitInvoice: baseSubmitInvoice,
-		createDraftForSePay,
+		createDraftForVnpostPay: baseCreateDraftForVnpostPay,
 		clearCart: clearInvoiceCart,
 		loadTaxRules,
 		setTaxInclusive,
 		setDefaultCustomer,
 		applyDiscount,
 		removeDiscount,
+		applyTransactionDiscountFromResponse,
 		applyOffersResource,
 		getItemDetailsResource,
 		recalculateItem,
 		rebuildIncrementalCache,
+		findMergeableLine,
 		formatItemsForSubmission,
+		buildItemsForSubmission,
 	} = useInvoice()
 
 	const offersStore = usePOSOffersStore()
 	const settingsStore = usePOSSettingsStore()
+	const shiftStore = usePOSShiftStore()
+	const itemSearchStore = useItemSearchStore()
+
+	function invoiceSubmissionExtras() {
+		return {
+			freeGiftItems: freeGiftItems.value,
+			warehouse: shiftStore.profileWarehouse || null,
+		}
+	}
+
+	function getItemsForInvoiceSubmission() {
+		return buildItemsForSubmission(toRaw(invoiceItems.value), invoiceSubmissionExtras())
+	}
 
 	// Additional cart state
 	const pendingItem = ref(null)
@@ -139,6 +171,477 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	// Async queue for sequential offer processing
 	const offerQueue = createAsyncQueue()
+
+	// Product Bundle auto-match state
+	const bundleMatchChoices = ref([])
+	const showBundleChoiceDialog = ref(false)
+	const bundleSuggestions = ref([])
+	const suppressBundleMatch = ref(false)
+	const lastBundlePromptHash = ref("")
+	const isProcessingBundleMatch = ref(false)
+	const bundleSuggestionAddMutex = new CoalescingMutex({
+		name: "BundleSuggestionAdd",
+		timeout: 15000,
+	})
+
+	function findCartLineForItem(itemCode, { excludeDiscounted = true } = {}) {
+		return invoiceItems.value.find((line) => {
+			if (line.item_code !== itemCode || line.is_free_item) {
+				return false
+			}
+			if (
+				excludeDiscounted &&
+				(Number.parseFloat(line.discount_percentage) || 0) > 0
+			) {
+				return false
+			}
+			return true
+		})
+	}
+
+	function buildBundleCartPayload() {
+		return (invoiceItems.value || []).map((item) => ({
+			item_code: item.item_code,
+			quantity: item.quantity,
+			uom: item.uom,
+			is_free_item: item.is_free_item ? 1 : 0,
+			is_bundle: item.is_bundle ? 1 : 0,
+		}))
+	}
+
+	function consumeComponentsFromCart(consumeList = []) {
+		for (const entry of consumeList) {
+			let remaining = Number.parseFloat(entry.qty) || 0
+			if (remaining <= 1e-9) continue
+
+			const matchCodes = new Set(entry.match_codes || [entry.item_code])
+			const lines = invoiceItems.value.filter(
+				(line) =>
+					line.item_code &&
+					matchCodes.has(line.item_code) &&
+					!line.is_free_item,
+			)
+
+			for (const line of lines) {
+				if (remaining <= 1e-9) break
+				const lineQty = Number.parseFloat(line.quantity) || 0
+				if (lineQty <= remaining + 1e-9) {
+					remaining -= lineQty
+					removeItem(line.item_code, line.uom)
+				} else {
+					updateItemQuantity(line.item_code, lineQty - remaining, line.uom)
+					remaining = 0
+				}
+			}
+		}
+	}
+
+	let lastBundleCacheProfile = null
+	const bundleDefinitions = ref([])
+	let bundleDefinitionsProfile = null
+	let bundleDefinitionsFetchPromise = null
+	/** Bump when bundle definition shape changes (e.g. custom_bundle_item support). */
+	const BUNDLE_DEFINITIONS_SCHEMA_VERSION = 2
+	let bundleDefinitionsSchemaVersion = 0
+
+	function bundleDefinitionsAreCurrent(profile) {
+		return (
+			bundleDefinitionsProfile === profile &&
+			bundleDefinitions.value.length > 0 &&
+			bundleDefinitionsSchemaVersion === BUNDLE_DEFINITIONS_SCHEMA_VERSION
+		)
+	}
+
+	async function cacheMissingBundleParentItems(bundles) {
+		if (offlineState.isOffline || !posProfile.value || !bundles?.length) {
+			return
+		}
+		for (const bundle of bundles) {
+			if (!bundle?.bundle_code) continue
+			const existing = await getCachedItemByCodeOrName(bundle.bundle_code)
+			if (existing?.item_code) continue
+			try {
+				const details = await getItemDetailsResource.submit({
+					item_code: bundle.bundle_code,
+					pos_profile: posProfile.value,
+					customer: customer.value?.name || customer.value,
+					qty: 1,
+				})
+				if (details?.item_code) {
+					await cacheItems(
+						[{ ...details, is_bundle: 1 }],
+						details.price_list || details.selling_price_list,
+					)
+				}
+			} catch (cacheError) {
+				console.warn(
+					"cacheMissingBundleParentItems:",
+					bundle.bundle_code,
+					cacheError,
+				)
+			}
+		}
+	}
+
+	async function prefetchProductBundleDefinitions() {
+		if (offlineState.isOffline || !posProfile.value) {
+			return
+		}
+		if (bundleDefinitionsAreCurrent(posProfile.value)) {
+			return
+		}
+		if (bundleDefinitionsFetchPromise) {
+			return bundleDefinitionsFetchPromise
+		}
+
+		bundleDefinitionsFetchPromise = (async () => {
+			try {
+				const response = await call(
+					"pos_next.api.product_bundle_match.get_product_bundle_definitions",
+				)
+				const bundles = response?.message || response || []
+				if (!Array.isArray(bundles) || bundles.length === 0) {
+					bundleDefinitions.value = []
+					bundleDefinitionsProfile = posProfile.value
+					return
+				}
+
+				bundleDefinitions.value = bundles
+				bundleDefinitionsProfile = posProfile.value
+				bundleDefinitionsSchemaVersion = BUNDLE_DEFINITIONS_SCHEMA_VERSION
+				lastBundleCacheProfile = posProfile.value
+
+				await offlineWorker.cacheProductBundles(bundles, posProfile.value)
+				void cacheMissingBundleParentItems(bundles)
+
+				if (invoiceItems.value.length > 0 && !suppressBundleMatch.value) {
+					debouncedProcessBundleMatch()
+				}
+			} catch (error) {
+				console.warn("prefetchProductBundleDefinitions:", error)
+			} finally {
+				bundleDefinitionsFetchPromise = null
+			}
+		})()
+
+		return bundleDefinitionsFetchPromise
+	}
+
+	/** @deprecated Use prefetchProductBundleDefinitions — kept for offline refresh */
+	async function refreshProductBundleCache() {
+		bundleDefinitionsProfile = null
+		bundleDefinitionsSchemaVersion = 0
+		bundleDefinitions.value = []
+		await prefetchProductBundleDefinitions()
+	}
+
+	async function resolveOfflineBundleItem(match) {
+		let item =
+			(await getCachedItemByCodeOrName(match.bundle_code)) ||
+			itemSearchStore.allItems.find(
+				(row) => row.item_code === match.bundle_code,
+			)
+
+		if (!item?.item_code && match.bundle_name) {
+			item = await getCachedItemByCodeOrName(match.bundle_name)
+		}
+
+		if (!item?.item_code) {
+			const cachedBundles = await offlineWorker.getCachedProductBundles(
+				posProfile.value,
+			)
+			const bundleDef = (cachedBundles || []).find(
+				(row) => row.bundle_code === match.bundle_code,
+			)
+			if (bundleDef) {
+				item = {
+					item_code: bundleDef.bundle_code,
+					item_name: bundleDef.item_name || bundleDef.bundle_name,
+					stock_uom: bundleDef.stock_uom,
+					uom: bundleDef.stock_uom,
+					description: bundleDef.description,
+					image: bundleDef.image,
+					is_stock_item: bundleDef.is_stock_item || 0,
+					is_bundle: 1,
+					rate: 0,
+					price_list_rate: 0,
+				}
+			}
+		}
+
+		return item
+	}
+
+	async function applyProductBundleMatch(match) {
+		if (!match?.bundle_code || !match.complete_sets || match.complete_sets < 1) {
+			return false
+		}
+
+		suppressBundleMatch.value = true
+		try {
+			let bundleItem = null
+			if (offlineState.isOffline) {
+				bundleItem = await resolveOfflineBundleItem(match)
+			} else {
+				bundleItem = await getItemDetailsResource.submit({
+					item_code: match.bundle_code,
+					pos_profile: posProfile.value,
+					customer: customer.value?.name || customer.value,
+					qty: match.complete_sets,
+				})
+			}
+
+			if (!bundleItem?.item_code) {
+				throw new Error(__("Unable to load product bundle item"))
+			}
+
+			const row = offlineState.isOffline
+				? { ...bundleItem, applied_bundle: 1 }
+				: await enrichItemTaxIfNeeded(
+						{
+							...bundleItem,
+							item_code: bundleItem.item_code || match.bundle_code,
+							item_name:
+								bundleItem.item_name || match.bundle_name || match.bundle_code,
+							applied_bundle: 1,
+						},
+						match.complete_sets,
+					)
+
+			consumeComponentsFromCart(match.consume || [])
+
+			const bundleCode = bundleItem.item_code || match.bundle_code
+			const existingParent = invoiceItems.value.find(
+				(line) => line.item_code === bundleCode,
+			)
+
+			if (existingParent) {
+				existingParent.is_bundle = 1
+				const newQty =
+					(Number.parseFloat(existingParent.quantity) || 0) +
+					match.complete_sets
+				updateItemQuantity(existingParent.item_code, newQty, existingParent.uom)
+			} else {
+				await addItem(row, match.complete_sets, true, posProfile.value, {
+					merge: true,
+				})
+			}
+
+			showSuccess(
+				__("Applied product bundle: {0}", [
+					match.bundle_name || match.bundle_code,
+				]),
+			)
+			bundleMatchChoices.value = []
+			showBundleChoiceDialog.value = false
+			bundleSuggestions.value = []
+			debouncedProcessOffers()
+			return true
+		} catch (error) {
+			console.error("applyProductBundleMatch:", error)
+			showError(parseError(error))
+			return false
+		} finally {
+			await nextTick()
+			suppressBundleMatch.value = false
+		}
+	}
+
+	async function processBundleMatchInternal() {
+		if (
+			suppressBundleMatch.value ||
+			isProcessingBundleMatch.value ||
+			!posProfile.value ||
+			!invoiceItems.value.length
+		) {
+			if (!suppressBundleMatch.value) {
+				bundleSuggestions.value = []
+			}
+			return
+		}
+
+		const cartHash = generateCartHash()
+		isProcessingBundleMatch.value = true
+		try {
+			let result = { auto_apply: null, choices: [], suggestions: [] }
+
+			if (offlineState.isOffline) {
+				const bundles = await offlineWorker.getCachedProductBundles(
+					posProfile.value,
+				)
+				if (!bundles?.length) {
+					bundleSuggestions.value = []
+					return
+				}
+				result = evaluateProductBundleMatches(
+					buildBundleCartPayload(),
+					bundles,
+				)
+			} else {
+				// Always match on server when online — ensures custom_bundle_item and latest rules apply
+				const response = await call(
+					"pos_next.api.product_bundle_match.get_product_bundle_matches",
+					{
+						cart_items: buildBundleCartPayload(),
+						pos_profile: posProfile.value,
+					},
+				)
+				result = response?.message || response || {}
+				void prefetchProductBundleDefinitions()
+			}
+
+			bundleSuggestions.value = result.suggestions || []
+
+			if (result.auto_apply) {
+				await applyProductBundleMatch(result.auto_apply)
+				lastBundlePromptHash.value = cartHash
+				return
+			}
+
+			if (result.choices?.length > 1) {
+				if (lastBundlePromptHash.value !== cartHash) {
+					bundleMatchChoices.value = result.choices
+					showBundleChoiceDialog.value = true
+					lastBundlePromptHash.value = cartHash
+				}
+				return
+			}
+
+			bundleMatchChoices.value = []
+			showBundleChoiceDialog.value = false
+		} catch (error) {
+			console.error("processBundleMatchInternal:", error)
+		} finally {
+			isProcessingBundleMatch.value = false
+		}
+	}
+
+	let bundleMatchTimeoutId = null
+	function debouncedProcessBundleMatch() {
+		if (bundleMatchTimeoutId) {
+			clearTimeout(bundleMatchTimeoutId)
+		}
+		bundleMatchTimeoutId = setTimeout(() => {
+			bundleMatchTimeoutId = null
+			processBundleMatchInternal()
+		}, 150)
+	}
+	debouncedProcessBundleMatch.cancel = () => {
+		if (bundleMatchTimeoutId) {
+			clearTimeout(bundleMatchTimeoutId)
+			bundleMatchTimeoutId = null
+		}
+	}
+
+	async function confirmBundleChoice(choice) {
+		await applyProductBundleMatch(choice)
+	}
+
+	async function resolveOfflineSuggestionItem(itemCode, missingItem) {
+		const priceList = posProfile.value?.selling_price_list
+
+		const memoryItem = itemSearchStore.findItemByCode(itemCode)
+		if (memoryItem?.item_code) {
+			return { ...memoryItem }
+		}
+
+		try {
+			const cachedWithPrice = await getItemWithPrice(itemCode, priceList)
+			if (cachedWithPrice?.item_code) {
+				return cachedWithPrice
+			}
+		} catch (error) {
+			console.warn("resolveOfflineSuggestionItem cache:", error)
+		}
+
+		try {
+			const searchResults = await offlineWorker.searchCachedItems(itemCode, 20)
+			const exact = searchResults?.find((row) => row.item_code === itemCode)
+			if (exact?.item_code) {
+				return exact
+			}
+		} catch (error) {
+			console.warn("resolveOfflineSuggestionItem worker search:", error)
+		}
+
+		if (missingItem?.item_name || missingItem?.uom) {
+			return {
+				item_code: itemCode,
+				item_name: missingItem.item_name || itemCode,
+				uom: missingItem.uom,
+				stock_uom: missingItem.uom,
+				rate: 0,
+				price_list_rate: 0,
+			}
+		}
+
+		return null
+	}
+
+	async function addBundleSuggestionItem(suggestion, missingItem) {
+		if (!missingItem?.item_code) return
+
+		await bundleSuggestionAddMutex.withLock(async () => {
+			const itemCode = missingItem.item_code
+			const qty = Number.parseFloat(missingItem.qty) || 1
+
+			suppressBundleMatch.value = true
+			try {
+				const existingLine = findCartLineForItem(itemCode)
+				if (existingLine) {
+					updateItemQuantity(
+						existingLine.item_code,
+						(Number.parseFloat(existingLine.quantity) || 0) + qty,
+						existingLine.uom,
+					)
+					return
+				}
+
+				let details = null
+				if (offlineState.isOffline) {
+					details = await resolveOfflineSuggestionItem(itemCode, missingItem)
+				} else {
+					details = await getItemDetailsResource.submit({
+						item_code: itemCode,
+						pos_profile: posProfile.value,
+						customer: customer.value?.name || customer.value,
+						qty,
+						uom: missingItem.uom,
+					})
+				}
+				if (!details?.item_code) {
+					showError(
+						__("Item not available offline: {0}", [
+							missingItem.item_name || itemCode,
+						]),
+					)
+					return
+				}
+
+				const mergeTarget = findCartLineForItem(details.item_code)
+				if (mergeTarget) {
+					details.uom = mergeTarget.uom || details.uom || details.stock_uom
+					details.stock_uom = mergeTarget.stock_uom || details.stock_uom
+					details.price_list_rate =
+						mergeTarget.price_list_rate ||
+						details.price_list_rate ||
+						details.rate
+					details.rate = mergeTarget.rate || details.rate
+				}
+
+				const row = offlineState.isOffline
+					? details
+					: await enrichItemTaxIfNeeded(details, qty)
+				await addItem(row, qty, true, posProfile.value, { merge: true })
+			} catch (error) {
+				showError(parseError(error))
+			} finally {
+				await nextTick()
+				suppressBundleMatch.value = false
+				debouncedProcessBundleMatch()
+			}
+		})
+	}
 
 	// Computed for backward compatibility and UI binding
 	const isProcessingOffers = computed(() => offerProcessingState.value.isProcessing)
@@ -172,6 +675,76 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const isEmpty = computed(() => invoiceItems.value.length === 0)
 	const hasCustomer = computed(() => !!customer.value)
 
+	/**
+	 * Grid / search payloads often omit `item_tax_rate`. Detect a non-empty ERPNext tax map.
+	 */
+	function itemTaxRateMapLooksComplete(item) {
+		if (!item?.item_tax_rate) return false
+		const s = String(item.item_tax_rate).trim()
+		if (!s || s === "{}") return false
+		try {
+			const o = JSON.parse(s)
+			return Boolean(o && typeof o === "object" && Object.keys(o).length > 0)
+		} catch {
+			return false
+		}
+	}
+
+	/**
+	 * Fetch `get_item_details` when online so Item Tax Template + item_tax_rate apply on cart lines and totals.
+	 * When offline, merge tax fields from IndexedDB item cache.
+	 */
+	async function enrichItemTaxIfNeeded(item, qty = 1) {
+		if (!item?.item_code || !posProfile.value) {
+			return item
+		}
+		if (itemTaxRateMapLooksComplete(item)) {
+			return item
+		}
+
+		if (offlineState.isOffline) {
+			try {
+				const cached = await getCachedItemByCodeOrName(item.item_code)
+				if (cached?.item_tax_rate || cached?.item_tax_template) {
+					return {
+						...item,
+						item_tax_template:
+							cached.item_tax_template ?? item.item_tax_template,
+						item_tax_rate: cached.item_tax_rate ?? item.item_tax_rate,
+					}
+				}
+			} catch (e) {
+				console.warn("enrichItemTaxIfNeeded offline cache:", e)
+			}
+			return item
+		}
+
+		try {
+			const details = await getItemDetailsResource.submit({
+				item_code: item.item_code,
+				pos_profile: posProfile.value,
+				customer: customer.value?.name || customer.value,
+				qty,
+				uom: item.uom || item.stock_uom,
+			})
+			if (!details || typeof details !== "object") {
+				return item
+			}
+			const enriched = {
+				...item,
+				item_tax_template: details.item_tax_template ?? item.item_tax_template,
+				item_tax_rate: details.item_tax_rate ?? item.item_tax_rate,
+			}
+			if (enriched.item_tax_rate || enriched.item_tax_template) {
+				cacheItems([enriched]).catch(() => {})
+			}
+			return enriched
+		} catch (e) {
+			console.warn("enrichItemTaxIfNeeded:", e)
+			return item
+		}
+	}
+
 	// Actions
 	/**
 	 * @param {Object} item - Item to add
@@ -180,7 +753,60 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {Object|null} currentProfile - POS profile
 	 * @param {{ merge?: boolean }} options - merge: false = add as new line each time (for per-line service items)
 	 */
-	function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
+	async function ensureStopSellingChecked(item, currentProfile) {
+		const company =
+			currentProfile?.company ||
+			shiftStore.profileCompany ||
+			shiftStore.currentCompany?.name ||
+			shiftStore.currentCompany ||
+			null
+		const profileName = currentProfile?.name || currentProfile
+		const itemCode = item.item_code || item.name
+
+		assertCanSellInPos(item, company)
+
+		if (!profileName || !itemCode) {
+			return
+		}
+
+		// Online: always confirm with server (catalog cache may be stale)
+		if (!offlineState.isOffline) {
+			try {
+				const result = await call(
+					"mbwnext_vnpost.controllers.python.discontinued_product.check_item_stop_selling",
+					{ item_code: itemCode, pos_profile: profileName },
+				)
+				item.pos_stop_selling = parseStopSellingApiResult(result) ? 1 : 0
+				assertCanSellInPos(item, company)
+			} catch (error) {
+				const errMsg = String(
+					error?.message || error?.messages?.[0] || "",
+				)
+				if (errMsg.includes("khóa kinh doanh")) {
+					throw new Error(getPosStopSellingMessage())
+				}
+				throw error
+			}
+		}
+	}
+
+	async function addItem(item, qty = 1, autoAdd = false, currentProfile = null, options = {}) {
+		await ensureStopSellingChecked(item, currentProfile)
+
+		const row = await enrichItemTaxIfNeeded(item, qty)
+		await ensureStopSellingChecked(row, currentProfile)
+
+		if (options.merge !== false) {
+			const existingLine = findMergeableLine(row)
+			if (existingLine) {
+				row.uom = existingLine.uom || row.uom || row.stock_uom
+				row.stock_uom = existingLine.stock_uom || row.stock_uom
+				row.price_list_rate =
+					existingLine.price_list_rate || row.price_list_rate || row.rate
+				row.rate = existingLine.rate || row.rate
+			}
+		}
+
 		// Check stock availability before adding to cart
 		// Skip validation for batch/serial items - they have their own validation in the dialog
 		// Check for stock items AND Product Bundles (bundles now have calculated stock)
@@ -189,27 +815,40 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		// Determine if this item should be validated for stock
 		// Include: stock items, bundles, OR items with actual_qty defined (catches misconfigured items)
 		// CRITICAL: If is_stock_item is explicitly false/0, we must skip validation even if actual_qty exists
-		const isNonStockItem = item.is_stock_item === 0 || item.is_stock_item === false
-		const hasActualQty = item.actual_qty !== undefined || item.stock_qty !== undefined
-		const shouldValidateStock = !isNonStockItem && (item.is_stock_item || item.is_bundle || hasActualQty)
+		const isNonStockItem = row.is_stock_item === 0 || row.is_stock_item === false
+		const hasActualQty = row.actual_qty !== undefined || row.stock_qty !== undefined
+		const shouldValidateStock = !isNonStockItem && (row.is_stock_item || row.is_bundle || hasActualQty)
 
-		if (currentProfile && !autoAdd && settingsStore.shouldEnforceStockValidation() && shouldValidateStock && !item.has_serial_no && !item.has_batch_no) {
-			const warehouse = item.warehouse || currentProfile.warehouse
+		const allowsSkipManualBatchPick =
+			settingsStore.isEnabled &&
+			settingsStore.allowSkipManualBatchSelection &&
+			row.has_batch_no &&
+			!row.has_serial_no
+
+		if (
+			currentProfile &&
+			!autoAdd &&
+			settingsStore.shouldEnforceStockValidation() &&
+			shouldValidateStock &&
+			!row.has_serial_no &&
+			(!(row.has_batch_no) || allowsSkipManualBatchPick)
+		) {
+			const warehouse = row.warehouse || currentProfile.warehouse
 			const actualQty =
-				item.actual_qty !== undefined ? item.actual_qty : item.stock_qty || 0
+				row.actual_qty !== undefined ? row.actual_qty : row.stock_qty || 0
 
 			if (warehouse && actualQty !== undefined && actualQty !== null) {
 				const stockCheck = checkStockAvailability({
-					itemCode: item.item_code,
+					itemCode: row.item_code,
 					qty: qty,
 					warehouse: warehouse,
 					actualQty: actualQty,
 				})
 
 				if (!stockCheck.available) {
-					const itemType = item.is_bundle ? "Bundle" : "Item"
+					const itemType = row.is_bundle ? "Bundle" : "Item"
 					const errorMsg = formatStockError(
-						item.item_name,
+						row.item_name,
 						qty,
 						stockCheck.actualQty,
 						warehouse,
@@ -221,18 +860,21 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		// Add item to cart - no toast notification for performance
-		addItemToInvoice(item, qty, options)
+		addItemToInvoice(row, qty, options)
 	}
 
 	function clearCart() {
 		// Cancel any pending offer processing
 		debouncedProcessOffers.cancel()
+		debouncedProcessBundleMatch.cancel()
 		offerQueue.cancel()
 
 		clearInvoiceCart()
+		freeGiftItems.value = []
 		customer.value = null
 		appliedOffers.value = []
 		appliedCoupon.value = null
+		transactionPricingRule.value = ""
 		currentDraftId.value = null
 		targetDoctype.value = "Sales Invoice"
 
@@ -241,6 +883,13 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		offerProcessingState.value.lastCartHash = ''
 		offerProcessingState.value.error = null
 		offerProcessingState.value.retryCount = 0
+
+		bundleMatchChoices.value = []
+		showBundleChoiceDialog.value = false
+		bundleSuggestions.value = []
+		lastBundlePromptHash.value = ""
+
+		lastBundleCacheProfile = null
 
 		// Sync the empty snapshot
 		syncOfferSnapshot()
@@ -327,12 +976,30 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			return
 		}
 
-		const result = await baseSubmitInvoice(targetDoctype.value, deliveryDate.value, writeOffAmount.value)
+		const result = await baseSubmitInvoice(
+			targetDoctype.value,
+			deliveryDate.value,
+			writeOffAmount.value,
+			invoiceSubmissionExtras(),
+		)
 		// Reset write-off amount after successful submission
 		if (result) {
 			writeOffAmount.value = 0
 		}
 		return result
+	}
+
+	async function createDraftForVnpostPayWithGifts(
+		targetDoctype = "Sales Invoice",
+		deliveryDate = null,
+		existingPayments = [],
+	) {
+		return baseCreateDraftForVnpostPay(
+			targetDoctype,
+			deliveryDate,
+			existingPayments,
+			invoiceSubmissionExtras(),
+		)
 	}
 
 	async function createSalesOrder() {
@@ -397,6 +1064,8 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				price_list_rate: item.price_list_rate || item.rate,
 				discount_percentage: item.discount_percentage || 0,
 				discount_amount: item.discount_amount || 0,
+				item_tax_template: item.item_tax_template || null,
+				item_tax_rate: item.item_tax_rate || null,
 			})),
 		}
 	}
@@ -423,15 +1092,19 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			const serverItem = serverItems[index] || {}
 			const discountPct = Number.parseFloat(serverItem.discount_percentage) || 0
 			const discountAmt = Number.parseFloat(serverItem.discount_amount) || 0
+			const serverHasPricingRules = hasPricingRules(serverItem.pricing_rules)
 
-			// Only update if server applied a pricing rule or discount
-			if (hasPricingRules(serverItem.pricing_rules) || discountPct > 0 || discountAmt > 0) {
+			if (serverHasPricingRules || discountPct > 0 || discountAmt > 0) {
 				item.discount_percentage = discountPct
 				item.discount_amount = discountAmt
 				item.pricing_rules = serverItem.pricing_rules
 				hasDiscounts = discountPct > 0 || discountAmt > 0
+			} else if (hasPricingRules(item.pricing_rules)) {
+				// Server cleared promotional discount (e.g. outside time window)
+				item.discount_percentage = 0
+				item.discount_amount = 0
+				item.pricing_rules = []
 			}
-			// Otherwise preserve existing manual discount
 
 			recalculateItem(item)
 		})
@@ -439,6 +1112,54 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		rebuildIncrementalCache()
 		return hasDiscounts
 	}
+
+	/**
+	 * Free gift lines from pricing rules (different product not already in cart).
+	 */
+	const freeGiftItems = ref([])
+
+	function expandCartItemsForDisplay(paidItems = [], giftItems = []) {
+		const rows = []
+		for (const item of paidItems) {
+			rows.push({
+				...item,
+				is_free_display: false,
+				_rowKey: `${item.item_code}|${item.uom || item.stock_uom || ""}|paid`,
+			})
+			const freeQty = Number.parseFloat(item.free_qty) || 0
+			if (freeQty > 0) {
+				rows.push({
+					...item,
+					quantity: freeQty,
+					qty: freeQty,
+					rate: 0,
+					amount: 0,
+					discount_amount: 0,
+					discount_percentage: 0,
+					is_free_display: true,
+					is_free_item: true,
+					_rowKey: `${item.item_code}|${item.uom || item.stock_uom || ""}|free`,
+				})
+			}
+		}
+		for (const gift of giftItems) {
+			const qty = Number.parseFloat(gift.quantity || gift.qty) || 0
+			if (qty <= 0) continue
+			rows.push({
+				...gift,
+				quantity: qty,
+				qty: qty,
+				is_free_display: true,
+				is_free_item: true,
+				_rowKey: `gift|${gift.item_code}|${gift.uom || gift.stock_uom || ""}`,
+			})
+		}
+		return rows
+	}
+
+	const displayCartItems = computed(() =>
+		expandCartItemsForDisplay(invoiceItems.value, freeGiftItems.value),
+	)
 
 	/**
 	 * Parses the backend offer response and applies free item quantities to cart items
@@ -449,23 +1170,26 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @example
 	 * // Backend returns: [{ item_code: "SKU001", qty: 1, uom: "Nos" }]
 	 * // Cart has: [{ item_code: "SKU001", quantity: 2, uom: "Nos" }]
-	 * // Result: Cart item gets free_qty = 1 (shown as "2 items + 1 FREE")
+	 * // Result: separate free display line with qty = 1
 	 */
 	function processFreeItems(freeItems) {
 		// Reset all free quantities
 		invoiceItems.value.forEach(item => {
 			item.free_qty = 0
 		})
+		freeGiftItems.value = []
 
 		// Early return if no free items
 		if (!Array.isArray(freeItems) || freeItems.length === 0) {
 			return
 		}
 
-		// Match free items to cart items and set free_qty
+		// Match free items to cart items and set free_qty / gift lines
 		for (const freeItem of freeItems) {
 			const freeQty = Number.parseFloat(freeItem.qty) || 0
 			if (freeQty <= 0) continue
+
+			const ruleCode = freeItem.pricing_rules || ""
 
 			// Find matching cart item by item_code and uom
 			const cartItem = invoiceItems.value.find(
@@ -474,7 +1198,31 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			)
 
 			if (cartItem) {
-				cartItem.free_qty = freeQty
+				cartItem.free_qty = (Number.parseFloat(cartItem.free_qty) || 0) + freeQty
+			} else {
+				const existingGift = freeGiftItems.value.find(
+					(item) =>
+						item.item_code === freeItem.item_code
+						&& (item.pricing_rules || "") === ruleCode,
+				)
+				if (existingGift) {
+					existingGift.quantity = Math.max(
+						Number.parseFloat(existingGift.quantity) || 0,
+						freeQty,
+					)
+				} else {
+					freeGiftItems.value.push({
+						item_code: freeItem.item_code,
+						item_name: freeItem.item_name || freeItem.description || freeItem.item_code,
+						quantity: freeQty,
+						uom: freeItem.uom || freeItem.stock_uom || "",
+						stock_uom: freeItem.stock_uom || freeItem.uom || "",
+						rate: 0,
+						amount: 0,
+						is_free_item: true,
+						pricing_rules: ruleCode,
+					})
+				}
 			}
 		}
 	}
@@ -496,24 +1244,130 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			items: Array.isArray(payload.items) ? payload.items : [],
 			freeItems: Array.isArray(payload.free_items) ? payload.free_items : [],
 			// CRITICAL: Only trust explicitly returned rules - NO FALLBACK
-			// If backend doesn't return applied_pricing_rules, NO offers were applied
-			appliedRules: Array.isArray(payload.applied_pricing_rules) ? payload.applied_pricing_rules : []
+			appliedRules: Array.isArray(payload.applied_pricing_rules) ? payload.applied_pricing_rules : [],
+			// Invoice-level discount from Transaction pricing rules
+			additionalDiscountPct: Number(payload.additional_discount_percentage) || 0,
+			additionalDiscountAmt: Number(payload.additional_discount_amount) || 0,
+			applyDiscountOn: payload.apply_discount_on || null,
+			previewTotals: payload.preview_totals || null,
+			// Transaction-level Pricing Rule name (for KM reclaim on return)
+			transactionPricingRuleName: payload.transaction_pricing_rule || "",
 		}
+	}
+
+	function applyTransactionDiscountFromParsed({
+		additionalDiscountPct = 0,
+		additionalDiscountAmt = 0,
+		applyDiscountOn = null,
+		previewTotals = null,
+	} = {}) {
+		applyTransactionDiscountFromResponse({
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+		})
 	}
 
 	function getAppliedOfferCodes() {
 		return appliedOffers.value.map((entry) => entry.code)
 	}
 
-	function filterActiveOffers(appliedRuleNames = []) {
-		if (!Array.isArray(appliedRuleNames) || appliedRuleNames.length === 0) {
+	function isOfferAppliedInResponse(offerCode, appliedRules, freeItems) {
+		if (Array.isArray(appliedRules) && appliedRules.includes(offerCode)) {
+			return true
+		}
+		return Array.isArray(freeItems)
+			&& freeItems.some((row) => row?.pricing_rules === offerCode)
+	}
+
+	function collectAppliedRuleCodes(appliedRuleNames = [], freeItems = []) {
+		const ruleNames = new Set()
+
+		for (const rule of appliedRuleNames || []) {
+			if (rule) {
+				ruleNames.add(rule)
+			}
+		}
+
+		for (const row of freeItems || []) {
+			if (row?.pricing_rules) {
+				ruleNames.add(row.pricing_rules)
+			}
+		}
+
+		return [...ruleNames]
+	}
+
+	/**
+	 * Sync appliedOffers with backend response — adds missing rules and removes stale ones.
+	 * Required when multiple promotions stack (e.g. item discount + free item).
+	 */
+	function syncAppliedOffersFromResponse(appliedRuleNames = [], freeItems = [], source = "auto") {
+		const ruleNames = collectAppliedRuleCodes(appliedRuleNames, freeItems)
+
+		if (ruleNames.length === 0) {
 			appliedOffers.value = []
 			return
 		}
 
-		appliedOffers.value = appliedOffers.value.filter((entry) =>
-			appliedRuleNames.includes(entry.code),
-		)
+		const next = []
+
+		for (const code of ruleNames) {
+			const existing = appliedOffers.value.find((entry) => entry.code === code)
+			if (existing) {
+				next.push(existing)
+				continue
+			}
+
+			const offer = offersStore.availableOffers.find((o) => o.name === code)
+			next.push({
+				name: offer?.title || offer?.name || code,
+				code,
+				offer: offer || null,
+				source,
+				applied: true,
+				rules: [code],
+				min_qty: offer?.min_qty,
+				max_qty: offer?.max_qty,
+				min_amt: offer?.min_amt,
+				max_amt: offer?.max_amt,
+			})
+		}
+
+		appliedOffers.value = next
+	}
+
+	function filterActiveOffers(appliedRuleNames = [], freeItems = []) {
+		syncAppliedOffersFromResponse(appliedRuleNames, freeItems)
+	}
+
+	async function submitAppliedOfferCodes(currentProfile, offerCodes, signal = null) {
+		if (!offerCodes?.length) {
+			return null
+		}
+
+		const invoiceData = buildOfferEvaluationPayload(currentProfile)
+		const response = await applyOffersResource.submit({
+			invoice_data: invoiceData,
+			selected_offers: offerCodes,
+		})
+
+		if (signal?.aborted) {
+			return null
+		}
+
+		const parsed = parseOfferResponse(response)
+		applyDiscountsFromServer(parsed.items)
+		processFreeItems(parsed.freeItems)
+		syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
+		applyTransactionDiscountFromParsed({
+			additionalDiscountPct: parsed.additionalDiscountPct,
+			additionalDiscountAmt: parsed.additionalDiscountAmt,
+			applyDiscountOn: parsed.applyDiscountOn,
+			previewTotals: parsed.previewTotals,
+		})
+		return parsed
 	}
 
 	async function applyOffer(offer, currentProfile, offersDialogRef = null) {
@@ -551,8 +1405,42 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				offerProcessingState.value.isProcessing = true
 				offerProcessingState.value.error = null
 
+				if (offlineState.isOffline) {
+					offersStore.updateCartSnapshot(buildCartSnapshot())
+					const { eligible, reason } = offersStore.checkOfferEligibility(offer)
+					if (!eligible) {
+						showWarning(
+							reason || __("Your cart doesn't meet the requirements for this offer."),
+						)
+						offersDialogRef?.resetApplyingState()
+						result = false
+						return
+					}
+
+					if (!applySingleOfflineOffer(offer)) {
+						showWarning(__("Your cart doesn't meet the requirements for this offer."))
+						offersDialogRef?.resetApplyingState()
+						result = false
+						return
+					}
+
+					appliedOffers.value.push(buildAppliedOfferEntry(offer, "manual"))
+					syncOfflineTransactionDiscounts()
+					if (!isTransactionPriceOffer(offer)) {
+						rebuildIncrementalCache()
+					}
+
+					offerProcessingState.value.lastProcessedAt = Date.now()
+					await nextTick()
+					showSuccess(__('{0} applied successfully', [(offer.title || offer.name)]))
+					result = true
+					return
+				}
+
 				const invoiceData = buildOfferEvaluationPayload(currentProfile)
-				const offerNames = [...new Set([...existingCodes, offerCode])]
+				offersStore.updateCartSnapshot(buildCartSnapshot())
+				const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+				const offerNames = [...new Set([...eligibleCodes, ...existingCodes, offerCode])]
 
 				const response = await applyOffersResource.submit({
 					invoice_data: invoiceData,
@@ -562,33 +1450,58 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				// Check if cancelled during API call
 				if (signal?.aborted) return
 
-				const { items: responseItems, freeItems, appliedRules } =
-					parseOfferResponse(response)
+			const {
+				items: responseItems,
+				freeItems,
+				appliedRules,
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+				transactionPricingRuleName,
+			} = parseOfferResponse(response)
 
-				suppressOfferReapply.value = true
-				applyDiscountsFromServer(responseItems)
-				processFreeItems(freeItems)
-				filterActiveOffers(appliedRules)
+			suppressOfferReapply.value = true
+			applyDiscountsFromServer(responseItems)
+			processFreeItems(freeItems)
+			applyTransactionDiscountFromParsed({
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			})
+			if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
-				const offerApplied = appliedRules.includes(offerCode)
+			const offerApplied = isOfferAppliedInResponse(offerCode, appliedRules, freeItems)
 
-				if (!offerApplied) {
-					// No new offer applied - restore previous state without new offer
-					if (existingCodes.length) {
-						try {
-							const rollbackResponse = await applyOffersResource.submit({
-								invoice_data: invoiceData,
-								selected_offers: existingCodes,
-							})
-							const {
-								items: rollbackItems,
-								freeItems: rollbackFreeItems,
-								appliedRules: rollbackRules,
-							} = parseOfferResponse(rollbackResponse)
+			if (!offerApplied) {
+				// No new offer applied - restore previous state without new offer
+				applyTransactionDiscountFromResponse()
+				if (existingCodes.length) {
+					try {
+						const rollbackResponse = await applyOffersResource.submit({
+							invoice_data: invoiceData,
+							selected_offers: existingCodes,
+						})
+						const {
+							items: rollbackItems,
+							freeItems: rollbackFreeItems,
+							appliedRules: rollbackRules,
+							additionalDiscountPct: rollbackPct,
+							additionalDiscountAmt: rollbackAmt,
+							applyDiscountOn: rollbackApplyOn,
+							previewTotals: rollbackPreview,
+						} = parseOfferResponse(rollbackResponse)
 
-							applyDiscountsFromServer(rollbackItems)
-							processFreeItems(rollbackFreeItems)
-							filterActiveOffers(rollbackRules)
+						applyDiscountsFromServer(rollbackItems)
+						processFreeItems(rollbackFreeItems)
+						syncAppliedOffersFromResponse(rollbackRules, rollbackFreeItems, "auto")
+						applyTransactionDiscountFromParsed({
+							additionalDiscountPct: rollbackPct,
+							additionalDiscountAmt: rollbackAmt,
+							applyDiscountOn: rollbackApplyOn,
+							previewTotals: rollbackPreview,
+						})
 						} catch (rollbackError) {
 							console.error("Error rolling back offers:", rollbackError)
 						}
@@ -600,27 +1513,11 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					return
 				}
 
-				const offerRuleCodes = appliedRules.includes(offerCode)
-					? appliedRules.filter((ruleName) => ruleName === offerCode)
-					: [offerCode]
-
-				const updatedEntries = appliedOffers.value.filter(
-					(entry) => entry.code !== offerCode,
-				)
-				updatedEntries.push({
-					name: offer.title || offer.name,
-					code: offerCode,
-					offer, // Store full offer object for validation
-					source: "manual",
-					applied: true,
-					rules: offerRuleCodes,
-					// Store constraints for quick validation
-					min_qty: offer.min_qty,
-					max_qty: offer.max_qty,
-					min_amt: offer.min_amt,
-					max_amt: offer.max_amt,
-				})
-				appliedOffers.value = updatedEntries
+				syncAppliedOffersFromResponse(appliedRules, freeItems, "manual")
+				const manualEntry = appliedOffers.value.find((entry) => entry.code === offerCode)
+				if (manualEntry) {
+					manualEntry.source = "manual"
+				}
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -686,6 +1583,49 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			return true
 		}
 
+		if (offlineState.isOffline) {
+			let result = false
+			await offerQueue.enqueue(async (signal) => {
+				if (signal?.aborted) {
+					return
+				}
+
+				try {
+					offerProcessingState.value.isProcessing = true
+					offerProcessingState.value.error = null
+
+					const removedOffer = appliedOffers.value.find(
+						(entry) => entry.code === offerCode,
+					)
+					if (removedOffer) {
+						removeOfflineOfferEffects(removedOffer)
+					}
+
+					appliedOffers.value = remainingOffers
+					syncOfflineTransactionDiscounts()
+					rebuildIncrementalCache()
+
+					offerProcessingState.value.lastProcessedAt = Date.now()
+					await nextTick()
+					showSuccess(__("Offer has been removed from cart"))
+					offersDialogRef?.resetApplyingState()
+					result = true
+				} catch (error) {
+					if (signal?.aborted) {
+						return
+					}
+					console.error("Error removing offer offline:", error)
+					offerProcessingState.value.error = error.message
+					showError(__("Failed to update cart after removing offer."))
+					offersDialogRef?.resetApplyingState()
+					result = false
+				} finally {
+					offerProcessingState.value.isProcessing = false
+				}
+			})
+			return result
+		}
+
 		let result = false
 
 		await offerQueue.enqueue(async (signal) => {
@@ -704,17 +1644,28 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 				if (signal?.aborted) return
 
-				const { items: responseItems, freeItems, appliedRules } =
-					parseOfferResponse(response)
+			const {
+				items: responseItems,
+				freeItems,
+				appliedRules,
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+				transactionPricingRuleName,
+			} = parseOfferResponse(response)
 
-				suppressOfferReapply.value = true
-				applyDiscountsFromServer(responseItems)
-				processFreeItems(freeItems)
-				filterActiveOffers(appliedRules)
-
-				appliedOffers.value = appliedOffers.value.filter((entry) =>
-					remainingCodes.includes(entry.code),
-				)
+			suppressOfferReapply.value = true
+			applyDiscountsFromServer(responseItems)
+			processFreeItems(freeItems)
+			syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
+			applyTransactionDiscountFromParsed({
+				additionalDiscountPct,
+				additionalDiscountAmt,
+				applyDiscountOn,
+				previewTotals,
+			})
+			if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
 				offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -802,6 +1753,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					// All offers invalid - clear everything
 					appliedOffers.value = []
 					processFreeItems([])
+					applyTransactionDiscountFromResponse()
 
 					// Reset all item rates to original (remove discounts)
 					invoiceItems.value.forEach(item => {
@@ -814,34 +1766,31 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					})
 					rebuildIncrementalCache()
 				} else {
-					// Reapply only valid offers
-					const invoiceData = buildOfferEvaluationPayload(currentProfile)
-					const response = await applyOffersResource.submit({
-						invoice_data: invoiceData,
-						selected_offers: validOfferCodes,
-					})
-
-					if (signal?.aborted) return false
-
-					const { items: responseItems, freeItems, appliedRules } =
-						parseOfferResponse(response)
-
-					applyDiscountsFromServer(responseItems)
-					processFreeItems(freeItems)
-					filterActiveOffers(appliedRules)
-
-					// Update appliedOffers to only include valid ones
-					appliedOffers.value = appliedOffers.value.filter(entry =>
-						appliedRules.includes(entry.code)
-					)
+					offersStore.updateCartSnapshot(buildCartSnapshot())
+					const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+					const codesToApply = [...new Set([...validOfferCodes, ...eligibleCodes])]
+					const parsed = await submitAppliedOfferCodes(currentProfile, codesToApply, signal)
+					if (parsed) {
+						syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
+						if (parsed.transactionPricingRuleName) transactionPricingRule.value = parsed.transactionPricingRuleName
+					}
 				}
 
-				// Wait for Vue to update before showing toast
 				await nextTick()
-
-				// Show warning about removed offers
 				const offerNames = invalidOffers.map(o => o.name).join(', ')
 				showWarning(__('Offer removed: {0}. Cart no longer meets requirements.', [offerNames]))
+				return true
+			}
+
+			// All applied offers still valid — re-apply with ALL eligible codes so
+			// newly eligible promotions (e.g. buy-5-get-1) stack with existing ones.
+			offersStore.updateCartSnapshot(buildCartSnapshot())
+			const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
+			const activeCodes = appliedOffers.value.map((o) => o.code)
+			const codesToApply = [...new Set([...activeCodes, ...eligibleCodes])]
+			const parsed = await submitAppliedOfferCodes(currentProfile, codesToApply, signal)
+			if (parsed) {
+				syncAppliedOffersFromResponse(parsed.appliedRules, parsed.freeItems, "auto")
 				return true
 			}
 			return false
@@ -878,71 +1827,55 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			const allEligibleOffers = offersStore.allEligibleOffers
 
 			if (allEligibleOffers.length === 0) {
+				if (appliedOffers.value.length > 0) {
+					appliedOffers.value = []
+					processFreeItems([])
+				}
+				applyTransactionDiscountFromResponse()
 				return
 			}
 
-			// Find offers that are not yet applied
-			const appliedOfferCodes = new Set(appliedOffers.value.map(o => o.code))
-			const newOffers = allEligibleOffers.filter(offer =>
-				!appliedOfferCodes.has(offer.name)
-			)
-
-			if (newOffers.length === 0) {
-				return
-			}
+			const eligibleCodes = allEligibleOffers.map((offer) => offer.name)
+			const previouslyApplied = new Set(appliedOffers.value.map((entry) => entry.code))
 
 			// Check for cancellation before API call
 			if (signal?.aborted) return
-
-			// Apply all new eligible offers in a single batch
-			const existingCodes = appliedOffers.value.map(entry => entry.code)
-			const newOfferCodes = newOffers.map(offer => offer.name)
-			const allCodes = [...existingCodes, ...newOfferCodes]
 
 			const invoiceData = buildOfferEvaluationPayload(currentProfile)
 
 			const response = await applyOffersResource.submit({
 				invoice_data: invoiceData,
-				selected_offers: allCodes,
+				selected_offers: eligibleCodes,
 			})
 
 			// Check for cancellation after API call
 			if (signal?.aborted) return
 
-			const { items: responseItems, freeItems, appliedRules } =
-				parseOfferResponse(response)
+		const {
+			items: responseItems,
+			freeItems,
+			appliedRules,
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+			transactionPricingRuleName,
+		} = parseOfferResponse(response)
 
-			applyDiscountsFromServer(responseItems)
-			processFreeItems(freeItems)
-			filterActiveOffers(appliedRules)
+		applyDiscountsFromServer(responseItems)
+		processFreeItems(freeItems)
+		syncAppliedOffersFromResponse(appliedRules, freeItems, "auto")
+		applyTransactionDiscountFromParsed({
+			additionalDiscountPct,
+			additionalDiscountAmt,
+			applyDiscountOn,
+			previewTotals,
+		})
+		if (transactionPricingRuleName) transactionPricingRule.value = transactionPricingRuleName
 
-			// Collect newly applied offers for notification
-			const newlyAppliedOffers = []
-
-			// Add newly applied offers to the list
-			for (const offer of newOffers) {
-				const offerCode = offer.name
-				// Check if the offer was actually applied by ERPNext
-				if (!appliedRules.includes(offerCode)) {
-					continue
-				}
-
-				const offerRuleCodes = appliedRules.filter(ruleName => ruleName === offerCode)
-				appliedOffers.value.push({
-					name: offer.title || offer.name,
-					code: offerCode,
-					offer, // Store full offer object for validation
-					source: "auto",
-					applied: true,
-					rules: offerRuleCodes,
-					min_qty: offer.min_qty,
-					max_qty: offer.max_qty,
-					min_amt: offer.min_amt,
-					max_amt: offer.max_amt,
-				})
-
-				newlyAppliedOffers.push(offer.title || offer.name)
-			}
+		const newlyAppliedOffers = appliedOffers.value
+				.filter((entry) => !previouslyApplied.has(entry.code))
+				.map((entry) => entry.name)
 
 			offerProcessingState.value.lastProcessedAt = Date.now()
 
@@ -965,120 +1898,319 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 	}
 
+	function isTransactionPriceOffer(offer) {
+		return offer?.apply_on === "Transaction" && offer?.offer !== "Give Product"
+	}
+
+	function getEligibleItemsForOffer(offer) {
+		if (offer.apply_on === "Item Code") {
+			const eligibleCodes = offer.eligible_items || []
+			return invoiceItems.value.filter((item) =>
+				eligibleCodes.includes(item.item_code),
+			)
+		}
+		if (offer.apply_on === "Item Group") {
+			const eligibleGroups = offer.eligible_item_groups || []
+			return invoiceItems.value.filter((item) =>
+				eligibleGroups.includes(item.item_group),
+			)
+		}
+		if (offer.apply_on === "Brand") {
+			const eligibleBrands = offer.eligible_brands || []
+			return invoiceItems.value.filter((item) =>
+				eligibleBrands.includes(item.brand),
+			)
+		}
+		if (offer.apply_on === "Transaction") {
+			return invoiceItems.value
+		}
+		return []
+	}
+
+	function buildAppliedOfferEntry(offer, source = "offline") {
+		return {
+			name: offer.title || offer.name,
+			code: offer.name,
+			offer,
+			source,
+			applied: true,
+			rules: [offer.name],
+			min_qty: offer.min_qty,
+			max_qty: offer.max_qty,
+			min_amt: offer.min_amt,
+			max_amt: offer.max_amt,
+		}
+	}
+
+	/**
+	 * Apply invoice-level discount for Transaction pricing rules offline.
+	 * Mirrors online applyTransactionDiscountFromResponse behaviour.
+	 */
+	function applyOfflineTransactionDiscount(offer) {
+		if (!offer) {
+			return false
+		}
+
+		const discountType = offer.discount_type || offer.rate_or_discount
+		const discountPercentage = Number.parseFloat(offer.discount_percentage) || 0
+		const discountAmount = Number.parseFloat(offer.discount_amount) || 0
+		const applyDiscountOn = offer.apply_discount_on || "Net Total"
+
+		if (discountType === "Discount Percentage" && discountPercentage > 0) {
+			applyTransactionDiscountFromResponse({
+				additionalDiscountPct: discountPercentage,
+				additionalDiscountAmt: 0,
+				applyDiscountOn,
+			})
+			return true
+		}
+
+		if (discountType === "Discount Amount" && discountAmount > 0) {
+			applyTransactionDiscountFromResponse({
+				additionalDiscountPct: 0,
+				additionalDiscountAmt: discountAmount,
+				applyDiscountOn,
+			})
+			return true
+		}
+
+		return false
+	}
+
+	function syncOfflineTransactionDiscounts() {
+		const transactionOffer = appliedOffers.value
+			.map((entry) => entry.offer)
+			.find((offer) => offer && isTransactionPriceOffer(offer))
+
+		if (!transactionOffer) {
+			applyTransactionDiscountFromResponse()
+			return
+		}
+
+		applyOfflineTransactionDiscount(transactionOffer)
+	}
+
+	function itemHasPricingRule(item, offerCode) {
+		const rules = item?.pricing_rules
+		if (!rules) {
+			return false
+		}
+		if (Array.isArray(rules)) {
+			return rules.includes(offerCode)
+		}
+		return rules === offerCode
+	}
+
+	function clearOfflineItemPricingRule(offerCode) {
+		let changed = false
+
+		for (const item of invoiceItems.value) {
+			if (!itemHasPricingRule(item, offerCode)) {
+				continue
+			}
+
+			if (Array.isArray(item.pricing_rules)) {
+				item.pricing_rules = item.pricing_rules.filter((rule) => rule !== offerCode)
+			} else {
+				item.pricing_rules = []
+			}
+
+			if (!item.pricing_rules?.length) {
+				item.discount_percentage = 0
+				item.discount_amount = 0
+			}
+
+			recalculateItem(item)
+			changed = true
+		}
+
+		return changed
+	}
+
+	function clearOfflineFreeItemEffects(offerCode) {
+		let changed = false
+
+		for (const item of invoiceItems.value) {
+			if (!itemHasPricingRule(item, offerCode)) {
+				continue
+			}
+
+			item.free_qty = 0
+			if (Array.isArray(item.pricing_rules)) {
+				item.pricing_rules = item.pricing_rules.filter((rule) => rule !== offerCode)
+			} else {
+				item.pricing_rules = []
+			}
+			changed = true
+		}
+
+		const giftIndex = freeGiftItems.value.findIndex(
+			(item) => item.pricing_rules === offerCode,
+		)
+		if (giftIndex > -1) {
+			freeGiftItems.value.splice(giftIndex, 1)
+			changed = true
+		}
+
+		return changed
+	}
+
+	function removeOfflineOfferEffects(appliedOffer) {
+		const offer = appliedOffer?.offer
+		if (!offer) {
+			return false
+		}
+
+		if (isTransactionPriceOffer(offer)) {
+			applyTransactionDiscountFromResponse()
+			return true
+		}
+
+		if (offer.offer === "Give Product") {
+			return clearOfflineFreeItemEffects(appliedOffer.code)
+		}
+
+		return clearOfflineItemPricingRule(appliedOffer.code)
+	}
+
+	function applySingleOfflineOffer(offer) {
+		if (offer.offer === "Give Product") {
+			const eligibleItems = getEligibleItemsForOffer(offer)
+			return eligibleItems.length > 0 && applyOfflineFreeItem(offer, eligibleItems)
+		}
+
+		if (isTransactionPriceOffer(offer)) {
+			return applyOfflineTransactionDiscount(offer)
+		}
+
+		const eligibleItems = getEligibleItemsForOffer(offer)
+		return eligibleItems.length > 0 && applyOfflinePriceDiscount(offer, eligibleItems)
+	}
+
+	async function refreshCartItemTaxFromCache() {
+		if (!offlineState.isOffline || invoiceItems.value.length === 0) {
+			return false
+		}
+
+		let changed = false
+		for (const item of invoiceItems.value) {
+			if (itemTaxRateMapLooksComplete(item)) {
+				continue
+			}
+
+			try {
+				const cached = await getCachedItemByCodeOrName(item.item_code)
+				if (!cached?.item_tax_rate && !cached?.item_tax_template) {
+					continue
+				}
+
+				item.item_tax_template =
+					cached.item_tax_template ?? item.item_tax_template
+				item.item_tax_rate = cached.item_tax_rate ?? item.item_tax_rate
+				recalculateItem(item)
+				changed = true
+			} catch (e) {
+				console.warn("refreshCartItemTaxFromCache:", e)
+			}
+		}
+
+		if (changed) {
+			rebuildIncrementalCache()
+		}
+		return changed
+	}
+
 	/**
 	 * Apply offers when offline using cached offer data.
 	 * Calculates discounts client-side based on offer rules.
 	 *
-	 * In offline mode, we:
-	 * 1. Check eligibility using posOffers.checkOfferEligibility
-	 * 2. Apply discount percentage/amount directly to cart items
-	 * 3. Handle free items (product discounts) by setting free_qty
-	 * 4. Mark offers as applied (with source: "offline")
-	 *
-	 * Supports:
-	 * - Discount Percentage (e.g., 10% off)
-	 * - Discount Amount (e.g., $5 off)
-	 * - Free Items (e.g., Buy 2 Get 1 Free)
+	 * Transaction-level offers use additional_discount_percentage (invoice-level),
+	 * matching online ERPNext behaviour. Item/group/brand offers stay item-level.
 	 */
 	function applyOffersOffline() {
-		// Skip if cart is empty or no offers available
 		if (invoiceItems.value.length === 0 || !offersStore.hasFetched) {
 			return
 		}
 
-		// Verify we're actually offline
 		if (!offlineState.isOffline) {
-			return // Use online mode instead
+			return
 		}
 
-		try {
-			// Build current cart snapshot
-			const cartSnapshot = buildCartSnapshot()
+		void (async () => {
+			try {
+				await refreshCartItemTaxFromCache()
+
+				const cartSnapshot = buildCartSnapshot()
 			offersStore.updateCartSnapshot(cartSnapshot)
 
-			// Get eligible auto offers
+			const invalidOffers = []
+			for (const appliedOffer of appliedOffers.value) {
+				const offer = appliedOffer.offer
+				if (!offer) {
+					continue
+				}
+
+				const { eligible } = offersStore.checkOfferEligibility(offer)
+				if (!eligible) {
+					invalidOffers.push(appliedOffer)
+				}
+			}
+
+			let itemPricingChanged = false
+			for (const invalidOffer of invalidOffers) {
+				if (removeOfflineOfferEffects(invalidOffer)) {
+					itemPricingChanged = true
+				}
+			}
+
+			if (invalidOffers.length > 0) {
+				const invalidCodes = new Set(invalidOffers.map((entry) => entry.code))
+				appliedOffers.value = appliedOffers.value.filter(
+					(entry) => !invalidCodes.has(entry.code),
+				)
+				const offerNames = invalidOffers.map((entry) => entry.name).join(", ")
+				showWarning(
+					__("Offer removed: {0}. Cart no longer meets requirements.", [offerNames]),
+				)
+			}
+
+			syncOfflineTransactionDiscounts()
+
 			const eligibleOffers = offersStore.autoEligibleOffers
-
-			if (eligibleOffers.length === 0) {
-				return
-			}
-
-			// Find new offers to apply (both price and product discounts)
-			const appliedOfferCodes = new Set(appliedOffers.value.map(o => o.code))
-			const newOffers = eligibleOffers.filter(offer => !appliedOfferCodes.has(offer.name))
-
-			if (newOffers.length === 0) {
-				return
-			}
+			const appliedOfferCodes = new Set(appliedOffers.value.map((entry) => entry.code))
+			const newOffers = eligibleOffers.filter(
+				(offer) => !appliedOfferCodes.has(offer.name),
+			)
 
 			const newlyAppliedOffers = []
-
 			for (const offer of newOffers) {
-				// Determine offer type: "Item Price" (discount) or "Give Product" (free item)
-				const isProductDiscount = offer.offer === 'Give Product'
-
-				// Find eligible items based on offer.apply_on
-				let eligibleItems = []
-
-				if (offer.apply_on === 'Item Code') {
-					const eligibleCodes = offer.eligible_items || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleCodes.includes(item.item_code)
-					)
-				} else if (offer.apply_on === 'Item Group') {
-					const eligibleGroups = offer.eligible_item_groups || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleGroups.includes(item.item_group)
-					)
-				} else if (offer.apply_on === 'Brand') {
-					const eligibleBrands = offer.eligible_brands || []
-					eligibleItems = invoiceItems.value.filter(item =>
-						eligibleBrands.includes(item.brand)
-					)
-				} else if (offer.apply_on === 'Transaction') {
-					// Transaction-level discount applies to all items
-					eligibleItems = invoiceItems.value
+				const { eligible } = offersStore.checkOfferEligibility(offer)
+				if (!eligible) {
+					continue
 				}
 
-				if (eligibleItems.length === 0) continue
-
-				let offerApplied = false
-
-				if (isProductDiscount) {
-					// === PRODUCT DISCOUNT (FREE ITEMS) ===
-					offerApplied = applyOfflineFreeItem(offer, eligibleItems)
-				} else {
-					// === PRICE DISCOUNT ===
-					offerApplied = applyOfflinePriceDiscount(offer, eligibleItems)
+				if (!applySingleOfflineOffer(offer)) {
+					continue
 				}
 
-				if (offerApplied) {
-					// Mark offer as applied
-					appliedOffers.value.push({
-						name: offer.title || offer.name,
-						code: offer.name,
-						offer,
-						source: "offline",
-						applied: true,
-						rules: [offer.name],
-						min_qty: offer.min_qty,
-						max_qty: offer.max_qty,
-						min_amt: offer.min_amt,
-						max_amt: offer.max_amt,
-					})
-
-					newlyAppliedOffers.push(offer.title || offer.name)
+				appliedOffers.value.push(buildAppliedOfferEntry(offer))
+				newlyAppliedOffers.push(offer.title || offer.name)
+				if (!isTransactionPriceOffer(offer)) {
+					itemPricingChanged = true
 				}
 			}
 
-			// Rebuild cache after bulk changes
-			if (newlyAppliedOffers.length > 0) {
+			if (itemPricingChanged) {
 				rebuildIncrementalCache()
-				showSuccess(__('Offline: {0} applied', [newlyAppliedOffers.join(', ')]))
 			}
-		} catch (error) {
-			console.error("Error applying offers offline:", error)
-		}
+
+			if (newlyAppliedOffers.length > 0) {
+				showSuccess(__("Offline: {0} applied", [newlyAppliedOffers.join(", ")]))
+			}
+			} catch (error) {
+				console.error("Error applying offers offline:", error)
+			}
+		})()
 	}
 
 	/**
@@ -1172,7 +2304,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 					}
 				}
 
-				if (freeItemsToGive > 0 && (!item.free_qty || item.free_qty === 0)) {
+				if (freeItemsToGive > 0) {
 					item.free_qty = freeItemsToGive
 					item.pricing_rules = item.pricing_rules || []
 					if (!item.pricing_rules.includes(offer.name)) {
@@ -1183,37 +2315,61 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		} else if (freeItemCode) {
 			// Free item is a specific different item
-			// Find if the free item is already in the cart
+			const totalEligibleQty = eligibleItems.reduce(
+				(sum, item) => sum + (item.quantity || 0), 0
+			)
+
+			let freeItemsToGive = 0
+
+			if (isRecursive && recurseFor > 0) {
+				const effectiveQty = Math.max(0, totalEligibleQty - applyRecursionOver)
+				const multiplier = Math.floor(effectiveQty / recurseFor)
+				freeItemsToGive = multiplier * freeQty
+			} else if (offer.min_qty > 0) {
+				if (totalEligibleQty >= offer.min_qty) {
+					freeItemsToGive = freeQty
+				}
+			} else if (totalEligibleQty > 0) {
+				freeItemsToGive = freeQty
+			}
+
+			if (freeItemsToGive <= 0) {
+				return false
+			}
+
 			const freeItemInCart = invoiceItems.value.find(
 				item => item.item_code === freeItemCode
 			)
 
 			if (freeItemInCart) {
-				// Calculate free qty (same recursive logic applies)
-				let freeItemsToGive = freeQty
-
-				if (isRecursive && recurseFor > 0) {
-					// Calculate based on total eligible quantity
-					const totalEligibleQty = eligibleItems.reduce(
-						(sum, item) => sum + (item.quantity || 0), 0
-					)
-					const effectiveQty = Math.max(0, totalEligibleQty - applyRecursionOver)
-					const multiplier = Math.floor(effectiveQty / recurseFor)
-					freeItemsToGive = multiplier * freeQty
+				freeItemInCart.free_qty = freeItemsToGive
+				freeItemInCart.pricing_rules = freeItemInCart.pricing_rules || []
+				if (!freeItemInCart.pricing_rules.includes(offer.name)) {
+					freeItemInCart.pricing_rules.push(offer.name)
 				}
-
-				// Mark existing cart item as having free quantity
-				if (freeItemsToGive > 0 && (!freeItemInCart.free_qty || freeItemInCart.free_qty === 0)) {
-					freeItemInCart.free_qty = freeItemsToGive
-					freeItemInCart.pricing_rules = freeItemInCart.pricing_rules || []
-					if (!freeItemInCart.pricing_rules.includes(offer.name)) {
-						freeItemInCart.pricing_rules.push(offer.name)
-					}
-					applied = true
+				applied = true
+			} else {
+				const existingGift = freeGiftItems.value.find(
+					(item) => item.item_code === freeItemCode,
+				)
+				if (existingGift) {
+					existingGift.quantity = freeItemsToGive
+					existingGift.pricing_rules = offer.name
+				} else {
+					freeGiftItems.value.push({
+						item_code: freeItemCode,
+						item_name: offer.free_item_name || freeItemCode,
+						quantity: freeItemsToGive,
+						uom: offer.free_item_uom || "",
+						stock_uom: offer.free_item_uom || "",
+						rate: 0,
+						amount: 0,
+						is_free_item: true,
+						pricing_rules: offer.name,
+					})
 				}
+				applied = true
 			}
-			// Note: We don't add new items to cart offline - that would require
-			// fetching item details. The free item will be added when back online.
 		}
 
 		return applied
@@ -1343,6 +2499,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		cartItem.conversion_factor = uomData?.conversion_factor || itemDetails.conversion_factor || 1
 		cartItem.rate = itemDetails.price_list_rate || itemDetails.rate
 		cartItem.price_list_rate = itemDetails.price_list_rate
+		if (itemDetails.item_tax_template != null) {
+			cartItem.item_tax_template = itemDetails.item_tax_template
+		}
+		if (itemDetails.item_tax_rate != null) {
+			cartItem.item_tax_rate = itemDetails.item_tax_rate
+		}
 	}
 
 	/**
@@ -1567,21 +2729,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			currency: posProfile.value.currency,
 		}
 
-		// Validate and auto-remove invalid offers (if any are applied)
+		// Re-apply existing offers (includes newly eligible ones) or auto-apply fresh
 		if (appliedOffers.value.length > 0) {
 			await reapplyOffer(currentProfile, signal)
+		} else {
+			await autoApplyEligibleOffers(currentProfile, signal)
 		}
-
-		// Check cancellation before auto-apply
-		if (signal?.aborted) return
-
-		// Check again if stale after reapply
-		if (generation > 0 && generation < cartGeneration) {
-			return
-		}
-
-		// Auto-apply eligible offers (always check for new eligible offers)
-		await autoApplyEligibleOffers(currentProfile, signal)
 
 		// Update last processed hash on success
 		offerProcessingState.value.lastCartHash = generateCartHash()
@@ -1715,8 +2868,26 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// This batches rapid cart changes and ensures only one offer
 			// processing operation runs at a time
 			debouncedProcessOffers()
+			debouncedProcessBundleMatch()
 		},
 		{ immediate: true, flush: "post" },
+	)
+
+	// Prefetch bundle definitions when POS profile is ready (online only)
+	watch(
+		() => posProfile.value,
+		(profile, previousProfile) => {
+			if (profile !== previousProfile) {
+				bundleDefinitionsProfile = null
+				bundleDefinitionsSchemaVersion = 0
+				bundleDefinitions.value = []
+				lastBundleCacheProfile = null
+			}
+			if (profile) {
+				void prefetchProductBundleDefinitions()
+			}
+		},
+		{ immediate: true },
 	)
 
 	// Additional watcher for applied offers changes (to handle removal edge cases)
@@ -1730,9 +2901,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 	)
 
+	// Refresh item tax from cache when switching to offline (same session)
+	watch(
+		() => offlineState.isOffline,
+		async (offline) => {
+			if (!offline || invoiceItems.value.length === 0) {
+				return
+			}
+			await refreshCartItemTaxFromCache()
+			if (posProfile.value) {
+				await loadTaxRules(posProfile.value)
+			}
+		},
+	)
+
 	return {
 		// State
 		invoiceItems,
+		freeGiftItems,
 		customer,
 		subtotal,
 		totalTax,
@@ -1743,6 +2929,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		payments,
 		salesTeam,
 		additionalDiscount,
+		additionalDiscountPercentage,
 		taxInclusive,
 		pendingItem,
 		pendingItemQty,
@@ -1752,8 +2939,13 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		suppressOfferReapply,
 		currentDraftId,
 		offerProcessingState, // Offer processing state for UI feedback
+		bundleMatchChoices,
+		showBundleChoiceDialog,
+		bundleSuggestions,
+		isProcessingBundleMatch,
 
 		// Computed
+		displayCartItems,
 		itemCount,
 		isEmpty,
 		hasCustomer,
@@ -1772,7 +2964,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		loadTaxRules,
 		setTaxInclusive,
 		submitInvoice,
-		createDraftForSePay,
+		createDraftForVnpostPay: createDraftForVnpostPayWithGifts,
 		applyDiscountToCart,
 		removeDiscountFromCart,
 		applyOffer,
@@ -1787,6 +2979,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		applyOffersResource,
 		buildOfferEvaluationPayload,
 		formatItemsForSubmission,
+		getItemsForInvoiceSubmission,
 
 		// Sales Order feature
 		targetDoctype,
@@ -1804,8 +2997,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		loadSnapshot,
 		cancelPendingOfferProcessing: () => {
 			debouncedProcessOffers.cancel()
+			debouncedProcessBundleMatch.cancel()
 			offerQueue.cancel()
 		},
+		confirmBundleChoice,
+		addBundleSuggestionItem,
+		applyProductBundleMatch,
 		forceRefreshOffers, // Force reprocess offers from scratch
 	}
 })

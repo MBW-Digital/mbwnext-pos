@@ -10,10 +10,11 @@ Promotional Schemes and standalone Pricing Rules.
 """
 
 from typing import Dict, List, Optional
+import datetime
 from dataclasses import dataclass, asdict
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, nowdate
+from frappe.utils import flt, getdate, nowdate, cint
 
 
 # ============================================================================
@@ -86,10 +87,51 @@ class Offer:
 	is_recursive: int = 0  # 1 if offer applies recursively (e.g., buy 2 get 1 free for every 2)
 	recurse_for: float = 0  # Give free item for every N quantity (used when is_recursive=1)
 	apply_recursion_over: float = 0  # Qty for which recursion isn't applicable
+	# Transaction-level discount base (Net Total / Grand Total)
+	apply_discount_on: Optional[str] = None
+	# POS Next: daily time window on Pricing Rule (custom fields)
+	apply_time_window: int = 0
+	valid_time_from: Optional[str] = None
+	valid_time_to: Optional[str] = None
 
 	def to_dict(self) -> Dict:
 		"""Convert to dictionary for API response"""
 		return asdict(self)
+
+
+# ============================================================================
+# Helpers (time window on Pricing Rule)
+# ============================================================================
+
+def _pricing_rule_time_sql_columns() -> str:
+	"""Extra SELECT columns when Custom Fields exist on Pricing Rule."""
+	if not frappe.db.has_column("Pricing Rule", "apply_time_window"):
+		return ""
+	return ", apply_time_window, valid_time_from, valid_time_to"
+
+
+def _format_time_for_offer(val) -> Optional[str]:
+	if val is None:
+		return None
+	if isinstance(val, datetime.timedelta):
+		secs = int(val.total_seconds()) % 86400
+		if secs < 0:
+			secs += 86400
+		h = secs // 3600
+		m = (secs % 3600) // 60
+		s = secs % 60
+		return f"{h:02d}:{m:02d}:{s:02d}"
+	if isinstance(val, datetime.time):
+		return f"{val.hour:02d}:{val.minute:02d}:{val.second:02d}"
+	st = str(val)
+	return st.split(".")[0] if st else None
+
+
+def _time_window_from_rule(rule: Dict) -> tuple:
+	aw = cint(rule.get("apply_time_window") or 0)
+	tf = _format_time_for_offer(rule.get("valid_time_from"))
+	tt = _format_time_for_offer(rule.get("valid_time_to"))
+	return aw, tf, tt
 
 
 # ============================================================================
@@ -305,6 +347,8 @@ class OfferBuilder:
 		# Determine offer type
 		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
+		aw, tf, tt = _time_window_from_rule(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule.get("promotional_scheme") or rule["name"],
@@ -336,7 +380,11 @@ class OfferBuilder:
 			same_item=1 if slab.get("same_item") and not is_price_discount else 0,
 			is_recursive=1 if slab.get("is_recursive") and not is_price_discount else 0,
 			recurse_for=flt(slab.get("recurse_for", 0)) if not is_price_discount else 0,
-			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0
+			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
 		)
 
 	@staticmethod
@@ -344,10 +392,11 @@ class OfferBuilder:
 		rule: Dict,
 		eligibility: OfferEligibility
 	) -> Offer:
-		"""Build offer from standalone pricing rule"""
+		"""Build offer from standalone pricing rule (price or product discount)."""
 
 		# Standalone rules auto-apply unless coupon-based
 		is_auto = 0 if rule.get("coupon_code_based") else 1
+		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
 		# Extract eligibility based on apply_on
 		eligible_items = []
@@ -361,22 +410,24 @@ class OfferBuilder:
 		elif rule["apply_on"] == ApplyOn.BRAND:
 			eligible_brands = eligibility.brands
 
+		aw, tf, tt = _time_window_from_rule(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule["name"],
 			description=rule.get("title") or f"Pricing Rule: {rule['name']}",
 			apply_on=rule["apply_on"],
-			offer="Item Price",
+			offer="Item Price" if is_price_discount else "Give Product",
 			auto=is_auto,
 			coupon_based=1 if rule.get("coupon_code_based") else 0,
 			min_qty=flt(rule.get("min_qty", 0)),
 			max_qty=flt(rule.get("max_qty", 0)),
 			min_amt=flt(rule.get("min_amt", 0)),
 			max_amt=flt(rule.get("max_amt", 0)),
-			discount_type=rule.get("rate_or_discount"),
-			rate=flt(rule.get("rate", 0)),
-			discount_amount=flt(rule.get("discount_amount", 0)),
-			discount_percentage=flt(rule.get("discount_percentage", 0)),
+			discount_type=rule.get("rate_or_discount") if is_price_discount else None,
+			rate=flt(rule.get("rate", 0)) if is_price_discount else 0,
+			discount_amount=flt(rule.get("discount_amount", 0)) if is_price_discount else 0,
+			discount_percentage=flt(rule.get("discount_percentage", 0)) if is_price_discount else 0,
 			valid_from=rule.get("valid_from"),
 			valid_upto=rule.get("valid_upto"),
 			source=OfferSource.PRICING_RULE,
@@ -384,7 +435,18 @@ class OfferBuilder:
 			promotional_scheme_id=None,
 			eligible_items=eligible_items,
 			eligible_item_groups=eligible_item_groups,
-			eligible_brands=eligible_brands
+			eligible_brands=eligible_brands,
+			free_item=rule.get("free_item") if not is_price_discount else None,
+			free_qty=flt(rule.get("free_qty", 0)) if not is_price_discount else 0,
+			free_item_uom=rule.get("free_item_uom") if not is_price_discount else None,
+			same_item=1 if rule.get("same_item") and not is_price_discount else 0,
+			is_recursive=1 if rule.get("is_recursive") and not is_price_discount else 0,
+			recurse_for=flt(rule.get("recurse_for", 0)) if not is_price_discount else 0,
+			apply_recursion_over=flt(rule.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
 		)
 
 
@@ -417,7 +479,9 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		standalone_offers = _get_standalone_pricing_rule_offers(profile.company, date)
 		offers.extend(standalone_offers)
 
-		return [offer.to_dict() for offer in offers]
+		from pos_next.pricing_rule_time_window import filter_offer_dicts_by_time_window
+
+		return filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
 
 	except Exception as e:
 		frappe.log_error(f"Error fetching offers: {str(e)}", "Offers API")
@@ -427,12 +491,16 @@ def get_offers(pos_profile: str) -> List[Dict]:
 def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 	"""Fetch offers from promotional schemes"""
 
+	time_cols = _pricing_rule_time_sql_columns()
+
 	# Fetch pricing rules linked to promotional schemes
-	pricing_rules = frappe.db.sql("""
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
-			price_or_product_discount, priority, valid_from, valid_upto
+			price_or_product_discount, apply_discount_on, priority,
+			valid_from, valid_upto
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0
@@ -477,16 +545,22 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 
 
 def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
-	"""Fetch offers from standalone pricing rules"""
+	"""Fetch offers from standalone pricing rules (price and product discounts)."""
 
-	# Fetch standalone pricing rules (not linked to schemes)
-	pricing_rules = frappe.db.sql("""
+	time_cols = _pricing_rule_time_sql_columns()
+
+	# Fetch standalone pricing rules (not linked to schemes).
+	# Include both Price discounts (%, amount) and Product discounts (free items).
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling,
-			coupon_code_based, price_or_product_discount,
+			coupon_code_based, price_or_product_discount, apply_discount_on,
 			rate_or_discount, rate, discount_amount, discount_percentage,
 			min_qty, max_qty, min_amt, max_amt,
+			free_item, free_qty, free_item_uom, same_item, is_recursive,
+			recurse_for, apply_recursion_over,
 			priority, valid_from, valid_upto
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0
@@ -495,9 +569,14 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 			AND company = %(company)s
 			AND (valid_from IS NULL OR valid_from <= %(date)s)
 			AND (valid_upto IS NULL OR valid_upto >= %(date)s)
-			AND price_or_product_discount = %(discount_type)s
+			AND price_or_product_discount IN (%(price_type)s, %(product_type)s)
 		ORDER BY priority DESC, name
-	""", {"company": company, "date": date, "discount_type": DiscountType.PRICE}, as_dict=1)
+	""", {
+		"company": company,
+		"date": date,
+		"price_type": DiscountType.PRICE,
+		"product_type": DiscountType.PRODUCT,
+	}, as_dict=1)
 
 	if not pricing_rules:
 		return []

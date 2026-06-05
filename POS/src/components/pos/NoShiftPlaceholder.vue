@@ -44,9 +44,9 @@
 					{{ __("Please open a shift to start making sales") }}
 				</p>
 
-				<!-- ── State: no employee linked ── -->
+				<!-- ── State: no employee linked (HR shift enforcement only) ── -->
 				<div
-					v-if="!hasEmployee"
+					v-if="requireHrShift && !hasEmployee"
 					class="mt-5 p-4 bg-amber-50 border border-amber-200 rounded-lg text-left"
 				>
 					<div class="flex gap-2">
@@ -78,9 +78,9 @@
 					</div>
 				</div>
 
-				<!-- ── State: no shifts today ── -->
+				<!-- ── State: no shifts today (HR shift enforcement only) ── -->
 				<div
-					v-else-if="shiftStatus === 'none'"
+					v-else-if="requireHrShift && shiftStatus === 'none'"
 					class="mt-5 p-4 bg-amber-50 border border-amber-200 rounded-lg text-left"
 				>
 					<div class="flex gap-2">
@@ -109,7 +109,7 @@
 				</div>
 
 				<!-- ── State: shifts list (active / upcoming / done) ── -->
-				<div v-else class="mt-5 text-left">
+				<div v-else-if="requireHrShift" class="mt-5 text-left">
 					<p class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
 						{{ __("Today's Shifts") }}
 					</p>
@@ -247,11 +247,20 @@
 					<p v-else-if="shiftStatus === 'done'" class="text-xs text-gray-400">
 						{{ __("All shifts completed for today. Contact your manager if needed.") }}
 					</p>
-					<p v-else-if="shiftStatus === 'none'" class="text-xs text-gray-400">
+					<p
+						v-else-if="requireHrShift && shiftStatus === 'none'"
+						class="text-xs text-gray-400"
+					>
 						{{ __("No shift assigned. You cannot open a shift without an HR schedule.") }}
 					</p>
-					<p v-else-if="shiftStatus === 'no_employee'" class="text-xs text-gray-400">
+					<p
+						v-else-if="requireHrShift && shiftStatus === 'no_employee'"
+						class="text-xs text-gray-400"
+					>
 						{{ __("Link your account to an Employee to open a shift.") }}
+					</p>
+					<p v-else-if="!requireHrShift" class="text-xs text-gray-400">
+						{{ __("Open a shift to start making sales.") }}
 					</p>
 				</div>
 			</div>
@@ -269,6 +278,8 @@ const EARLY_OPEN_MINUTES_BEFORE_START = 30
 const props = defineProps({
 	isLoading: { type: Boolean, default: false },
 	hasEmployee: { type: Boolean, default: true },
+	/** When false, skip Employee / HR roster checks and allow opening shift freely. */
+	requireHrShift: { type: Boolean, default: true },
 	employeeName: { type: String, default: "" },
 	/** Array of shift objects: { name, shift_type, shift_location, start_time, end_time, color } */
 	shifts: { type: Array, default: () => [] },
@@ -399,11 +410,14 @@ const openEligibleShift = computed(() => {
 })
 
 /** In scheduled window or early-open lead; not when POS reopen is blocked for today. */
-const canOpenShift = computed(
-	() => !!openEligibleShift.value && !props.posShiftClosedToday,
-)
+const canOpenShift = computed(() => {
+	if (props.posShiftClosedToday) return false
+	if (!props.requireHrShift) return true
+	return !!openEligibleShift.value
+})
 
 const shiftStatus = computed(() => {
+	if (!props.requireHrShift) return "open_anytime"
 	if (!props.hasEmployee) return "no_employee"
 	if (!props.shifts.length) return "none"
 	// Next-slot early window takes UX priority when overlapping current slot
@@ -426,6 +440,8 @@ const iconBgClass = computed(() => {
 		case "none":
 		case "no_employee":
 			return "bg-amber-100"
+		case "open_anytime":
+			return "bg-red-100"
 		case "done":
 			return "bg-gray-100"
 		default:
@@ -445,6 +461,8 @@ const iconColorClass = computed(() => {
 		case "none":
 		case "no_employee":
 			return "text-amber-600"
+		case "open_anytime":
+			return "text-red-600"
 		case "done":
 			return "text-gray-600"
 		default:

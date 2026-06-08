@@ -1,0 +1,120 @@
+{%- set R = ha_vang_receipt_meta_for_jinja(doc) -%}
+{%- set fmt = format_receipt_amount -%}
+<style>
+	@page { size: 80mm auto; margin: 0mm; }
+	body {
+		font-family: 'DejaVu Sans', 'Arial', sans-serif;
+		width: 80mm;
+		max-width: 80mm;
+		margin: 0 auto;
+		padding: 6px 8px 10px;
+		font-size: 10px;
+		line-height: 1.3;
+		color: #000;
+	}
+	.center { text-align: center; }
+	.bold { font-weight: bold; }
+	.company { font-size: 10px; font-weight: bold; }
+	.store { font-size: 11px; font-weight: bold; margin-top: 2px; }
+	.addr, .phone { font-size: 9px; line-height: 1.35; }
+	.title { font-size: 11px; font-weight: bold; margin: 8px 0 2px; letter-spacing: 0.03em; }
+	.copy-line { font-size: 9px; }
+	.reprint { font-size: 10px; font-weight: bold; margin-top: 2px; }
+	.meta { display: table; width: 100%; font-size: 9px; margin: 6px 0; }
+	.meta > div { display: table-cell; width: 50%; vertical-align: top; }
+	.meta .right { text-align: right; }
+	.divider { border-top: 1px dotted #000; margin: 6px 0; }
+	.lr { display: table; width: 100%; }
+	.lr > span { display: table-cell; vertical-align: top; }
+	.lr > span:last-child { text-align: right; white-space: nowrap; }
+	.item-name { font-size: 9px; padding: 1px 0; }
+	.item-name .name { width: 72%; }
+	.item-name .disc { width: 28%; text-align: right; }
+	.item-sub { font-size: 9px; padding-bottom: 3px; }
+	.totals .lr { margin: 2px 0; font-size: 9px; }
+	.totals .grand { font-weight: bold; margin-top: 4px; }
+	.section-title { font-size: 9px; font-weight: bold; margin: 4px 0; }
+	.cust { font-size: 9px; line-height: 1.4; }
+	.footer { font-size: 9px; line-height: 1.4; margin-top: 6px; }
+	.policy { font-size: 8px; line-height: 1.35; margin-top: 6px; text-align: justify; }
+	.stars { text-align: center; font-size: 8px; letter-spacing: 1px; margin-top: 6px; }
+	@media print {
+		body { width: 80mm; max-width: 80mm; padding: 4mm 4mm 5mm; }
+	}
+</style>
+
+<div class="center company">{{ R.receipt_company_display_name }}</div>
+<div class="center store">{{ R.store_display_name }}</div>
+{% if R.store_address %}<div class="center addr">{{ R.store_address }}</div>{% endif %}
+{% if R.store_phone %}<div class="center phone">Điện thoại: {{ R.store_phone }}</div>{% endif %}
+
+<div class="center title">HÓA ĐƠN BÁN LẺ X</div>
+<div class="center copy-line">Liên 1: Lưu hồ sơ</div>
+{% if R.is_reprint %}<div class="center reprint">IN LẠI</div>{% endif %}
+
+<div class="meta">
+	<div>
+		<div>Số HĐ: {{ doc.name }}</div>
+		<div>Ngày: {{ R.posting_date or doc.posting_date }}</div>
+		<div>Nhân viên: {{ R.salesperson }}</div>
+	</div>
+	<div class="right">
+		<div>Shop: {{ R.shop_code or '—' }}</div>
+		<div>Giờ: {{ R.posting_time }}</div>
+		<div>Ca: {{ R.shift_label }}</div>
+	</div>
+</div>
+
+<div class="divider"></div>
+
+{%- for item in doc.items -%}
+<div class="item-name lr">
+	<span class="name">{{ item.item_name }}</span>
+	<span class="disc">{% if item.discount_percentage and item.discount_percentage > 0 %}-{{ "%.2f"|format(item.discount_percentage) }}%{% endif %}</span>
+</div>
+<div class="item-sub lr">
+	<span>{{ item_barcode_for_receipt(item) }}</span>
+	<span>{{ fmt(item_gross_amount_for_receipt(item), 0) }}</span>
+</div>
+{%- endfor -%}
+
+<div class="divider"></div>
+
+<div class="totals">
+	<div class="lr"><span>Tổng cộng:</span><span>{{ fmt(R.gross_total, 0) }}</span></div>
+	<div class="lr"><span>CK hàng hóa:</span><span>{{ fmt(R.item_discount_total, 0) }}</span></div>
+	<div class="lr"><span>Chiết khấu:</span><span>{{ fmt(R.invoice_discount_total or R.item_discount_total, 0) }}</span></div>
+	<div class="lr grand"><span>Tổng thanh toán:</span><span>{{ fmt(doc.grand_total or 0, 0) }}</span></div>
+	<div class="lr"><span>Chuyển khoản:</span><span>{{ fmt(R.bank_paid, 0) }}</span></div>
+	<div class="lr"><span>Tiền mặt:</span><span>{{ fmt(R.cash_paid, 0) }}</span></div>
+	<div class="lr"><span>Tiền mặt phải trả:</span><span>{{ fmt(doc.outstanding_amount or 0, 0) }}</span></div>
+	<div class="lr"><span>Thối lại:</span><span>{{ fmt(doc.change_amount or 0, 0) }}</span></div>
+</div>
+
+<div class="divider"></div>
+
+<div class="section-title">THÔNG TIN KHÁCH HÀNG</div>
+<div class="cust">
+	<div>Họ tên: {% if doc.customer_name %}{{ doc.customer_name }}{% else %}Khách lẻ{% endif %}</div>
+	<div>Điện thoại: {% if R.receipt_customer_phone %}{{ R.receipt_customer_phone }}{% else %}—{% endif %}</div>
+	<div>VIP: {% if R.vip_label %}{{ R.vip_label }}{% else %}—{% endif %}</div>
+</div>
+
+<div class="divider"></div>
+
+<div class="footer">
+	<div class="lr">
+		<span>Ngày in: {{ R.print_date }}</span>
+		<span>Giờ in: {{ R.print_time }}</span>
+	</div>
+	<div class="center" style="margin-top:4px;">Giờ mở cửa: {{ R.store_hours }}</div>
+	<div class="center bold" style="margin-top:4px;">Cảm ơn! Hẹn gặp lại quý khách</div>
+</div>
+
+<div class="divider"></div>
+
+<div class="policy">
+	Hàng mua rồi miễn đổi trả, xem chi tiết bảo hành tại cửa hàng.<br>
+	The purchased items are non-returnable, please refer to the in-store warranty policy for more details.
+</div>
+<div class="stars">****************************************************</div>

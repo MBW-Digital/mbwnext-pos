@@ -85,11 +85,12 @@ template_apps = ["erpnext", "pos_next", "hrms"]
 # Jinja
 # ----------
 
-# add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "pos_next.utils.jinja_methods",
-# 	"filters": "pos_next.utils.jinja_filters"
-# }
+# Receipt print helpers for POS Next Receipt (Jinja sandbox cannot use frappe.get_attr)
+jinja = {
+	"methods": [
+		"pos_next.api.receipt_print",
+	],
+}
 
 # Fixtures
 # --------
@@ -122,7 +123,8 @@ fixtures = [
 				"name",
 				"in",
 				[
-					"POS Next Receipt"
+					"POS Next Receipt",
+					"POS HA Vang Receipt",
 				]
 			]
 		]

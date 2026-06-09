@@ -460,9 +460,10 @@
 				v-else
 				:is-loading="todayShiftsLoading"
 				:has-employee="todayShiftsHasEmployee"
+				:require-hr-shift="requireHrShiftForWelcome"
 				:employee-name="todayShiftsEmployee"
 				:shifts="todayShifts"
-				:pos-shift-closed-today="posShiftClosedToday"
+				:pos-shift-closed-today="effectivePosShiftClosedToday"
 				@open-shift="handleOpenShiftFromPlaceholder"
 			/>
 
@@ -1217,8 +1218,26 @@ const todayShifts = ref([]);
 const todayShiftsLoading = ref(false);
 const todayShiftsEmployee = ref("");
 const todayShiftsHasEmployee = ref(true);
+/** True when user has at least one POS Profile with custom_use_shift_in_pos unchecked. */
+const canOpenWithoutHrShift = ref(false);
 /** Aligns with server: blocks reopen only for single-slot days or after all roster slots ended (not after each close when multiple shifts exist). */
 const posShiftClosedToday = ref(false);
+
+const currentProfileUsesHrShift = computed(() => {
+	const profile = shiftStore.currentProfile;
+	if (!profile) return false;
+	return !!profile.custom_use_shift_in_pos;
+});
+
+/** HR roster gate on welcome screen: only when every accessible profile enforces it. */
+const requireHrShiftForWelcome = computed(
+	() => !canOpenWithoutHrShift.value,
+);
+
+/** Skip same-day close block when user can open via a non-HR-shift profile. */
+const effectivePosShiftClosedToday = computed(() =>
+	canOpenWithoutHrShift.value ? false : posShiftClosedToday.value,
+);
 
 async function loadPosShiftClosedToday() {
 	try {
@@ -1242,10 +1261,12 @@ async function loadTodayShifts() {
 					todayShiftsHasEmployee.value = !!data.has_employee;
 					todayShiftsEmployee.value = data.employee_name || "";
 					todayShifts.value = Array.isArray(data.shifts) ? data.shifts : [];
+					canOpenWithoutHrShift.value = !!data.can_open_without_hr_shift;
 				} catch (err) {
 					log.error("Error loading today HR shifts:", err);
 					todayShiftsHasEmployee.value = true; // soft-fail: don't block POS
 					todayShifts.value = [];
+					canOpenWithoutHrShift.value = true;
 				}
 			})(),
 			loadPosShiftClosedToday(),
@@ -1299,7 +1320,7 @@ const activeHrScheduleShift = computed(() => {
 
 /** Header badge: current HR shift line (next to POS shift duration) */
 const headerHrScheduleBadge = computed(() => {
-	if (!shiftStore.hasOpenShift) return null;
+	if (!shiftStore.hasOpenShift || !currentProfileUsesHrShift.value) return null;
 
 	const active = activeHrScheduleShift.value;
 	if (active) {
@@ -1361,6 +1382,8 @@ const earlyCloseHrConfirmMessage = computed(() => {
 });
 
 function shouldConfirmEarlyHrClose() {
+	if (!currentProfileUsesHrShift.value) return false;
+
 	const active = activeHrScheduleShift.value;
 	if (!active || !active.end_time) return false;
 	const nm = hrNowMinutes.value;
@@ -1389,7 +1412,7 @@ function cancelEarlyCloseShiftConfirm() {
  * Stores the suggested HR shift (if any) and opens the POS shift dialog.
  */
 function handleOpenShiftFromPlaceholder(hrShift) {
-	if (posShiftClosedToday.value) {
+	if (effectivePosShiftClosedToday.value) {
 		showError(
 			__(
 				"You have already closed your POS shift today. You cannot open another until tomorrow."

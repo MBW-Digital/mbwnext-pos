@@ -96,6 +96,7 @@ def get_initial_data():
 		"print_format": pos_profile.get("print_format"),
 		"auto_print": pos_profile.get("print_receipt_on_order_complete", 0),
 		"country": pos_profile.get("country"),
+		"custom_use_shift_in_pos": pos_profile.get("custom_use_shift_in_pos") or 0,
 	}
 
 	result["pos_settings"] = _get_pos_settings(pos_profile)

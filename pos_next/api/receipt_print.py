@@ -6,7 +6,12 @@ from __future__ import annotations
 from typing import Any
 
 import frappe
-from frappe.utils import flt, format_datetime, getdate, now_datetime, today
+from frappe.utils import flt, fmt_money, format_datetime, getdate, now_datetime, today
+
+
+def format_receipt_amount(value, precision: int = 0) -> str:
+	"""Format số theo Number Format trong System Settings (không kèm ký hiệu tiền tệ)."""
+	return fmt_money(value, precision=int(precision or 0))
 
 
 def format_vn_amount(value, decimals: int = 0) -> str:
@@ -214,6 +219,123 @@ def enrich_invoice_dict_for_print(inv: dict[str, Any]) -> dict[str, Any]:
 	return out
 
 
+def _is_cash_mode_of_payment(mode_of_payment: str | None) -> bool:
+	label = (mode_of_payment or "").strip().lower()
+	return label in {"cash", "tiền mặt", "tien mat", "tiền mặt vnđ"} or "cash" in label
+
+
+def _payment_totals_by_type(doc) -> dict[str, float]:
+	cash_paid = 0.0
+	bank_paid = 0.0
+	for row in receipt_payments_for_invoice(doc):
+		amount = flt(row.get("amount"))
+		if amount <= 0:
+			continue
+		if _is_cash_mode_of_payment(row.get("mode_of_payment")):
+			cash_paid += amount
+		else:
+			bank_paid += amount
+	return {"cash_paid": cash_paid, "bank_paid": bank_paid}
+
+
+def _pos_profile_store_fields(pos_profile: str | None) -> dict[str, Any]:
+	if not pos_profile:
+		return {}
+	fields = ["custom_shop_code", "custom_store_name_2", "custom_address", "custom_phone"]
+	if not frappe.db.has_column("POS Profile", fields[0]):
+		return {}
+	return frappe.db.get_value("POS Profile", pos_profile, fields, as_dict=True) or {}
+
+
+def item_barcode_for_receipt(item) -> str:
+	"""Barcode / mã vạch dòng hàng cho phiếu HA VANG."""
+	barcode = getattr(item, "barcode", None)
+	if barcode is None and isinstance(item, dict):
+		barcode = item.get("barcode")
+	if barcode:
+		return str(barcode)
+
+	item_code = getattr(item, "item_code", None) or (item.get("item_code") if isinstance(item, dict) else None)
+	if not item_code:
+		return ""
+
+	# ERPNext stores barcodes in Item Barcode child table (Item has no barcode column).
+	if frappe.db.table_exists("Item Barcode"):
+		row_barcode = frappe.db.get_value(
+			"Item Barcode",
+			{"parent": item_code},
+			"barcode",
+			order_by="idx asc",
+		)
+		if row_barcode:
+			return str(row_barcode)
+
+	return str(item_code)
+
+
+def item_gross_amount_for_receipt(item) -> float:
+	qty = flt(getattr(item, "qty", None) if not isinstance(item, dict) else item.get("qty"))
+	rate = flt(
+		getattr(item, "price_list_rate", None)
+		if not isinstance(item, dict)
+		else item.get("price_list_rate")
+	)
+	if not rate:
+		rate = flt(getattr(item, "rate", None) if not isinstance(item, dict) else item.get("rate"))
+	return flt(rate * qty)
+
+
+def ha_vang_receipt_meta_for_jinja(doc):
+	"""Metadata cho Print Format POS HA Vang Receipt."""
+	inv = doc.as_dict()
+	base = enrich_invoice_dict_for_print(inv)
+	profile = _pos_profile_store_fields(inv.get("pos_profile"))
+	pay = _payment_totals_by_type(doc)
+
+	gross_total = 0.0
+	item_discount_total = 0.0
+	for row in getattr(doc, "items", None) or []:
+		gross_total += item_gross_amount_for_receipt(row)
+		item_discount_total += flt(getattr(row, "discount_amount", None) or 0)
+
+	posting_date = ""
+	if doc.posting_date:
+		posting_date = format_datetime(doc.posting_date, "dd/MM/yyyy")
+	posting_time = ""
+	if doc.posting_time:
+		posting_time = str(doc.posting_time).split(".")[0][:8]
+
+	now = now_datetime()
+	owner = inv.get("owner") or ""
+	salesperson = (
+		frappe.db.get_value("User", owner, "full_name") if owner else ""
+	) or owner
+
+	return frappe._dict(
+		**base,
+		shop_code=profile.get("custom_shop_code") or "",
+		store_display_name=profile.get("custom_store_name_2") or base.get("receipt_branch_label") or "",
+		store_address=profile.get("custom_address") or base.get("receipt_company_address") or "",
+		store_phone=profile.get("custom_phone") or base.get("receipt_company_phone") or "",
+		posting_date=posting_date,
+		posting_time=posting_time,
+		print_date=format_datetime(now, "dd/MM/yyyy"),
+		print_time=format_datetime(now, "HH:mm:ss"),
+		shift_label="Ca 1",
+		gross_total=gross_total,
+		item_discount_total=item_discount_total,
+		invoice_discount_total=abs(
+			flt(inv.get("custom_invoice_discount_amount") or inv.get("discount_amount") or 0)
+		),
+		cash_paid=pay["cash_paid"],
+		bank_paid=pay["bank_paid"],
+		is_reprint=bool(inv.get("posa_is_printed")),
+		vip_label=inv.get("customer_category") or "",
+		store_hours="9h00 - 22h00",
+		salesperson=salesperson,
+	)
+
+
 def receipt_logo_url_for_print() -> str:
 	"""URL logo phiếu in (Bách Hóa Bưu Điện) — dùng absolute URL cho PDF/print."""
 	from frappe.utils import get_url
@@ -222,7 +344,7 @@ def receipt_logo_url_for_print() -> str:
 
 
 def invoice_meta_for_jinja(doc):
-	"""Print Format (Jinja): frappe.get_attr('pos_next.api.receipt_print.invoice_meta_for_jinja')(doc)"""
+	"""Print Format (Jinja): invoice_meta_for_jinja(doc) — registered via pos_next hooks jinja.methods."""
 	return enrich_invoice_dict_for_print(doc.as_dict())
 
 

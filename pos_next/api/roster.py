@@ -5,7 +5,10 @@
 from __future__ import unicode_literals
 
 import frappe
-from frappe.utils import nowdate
+from frappe import _
+from frappe.utils import nowdate, now_datetime
+
+from pos_next.api.pos_profile import get_accessible_pos_profiles_for_user, user_can_open_pos_without_hr_shift
 
 
 def _get_employee_for_user(user=None):
@@ -69,6 +72,56 @@ def get_today_roster_shifts_for_user(user=None):
 	return rows
 
 
+EARLY_OPEN_MINUTES_BEFORE_START = 30
+
+
+def _time_str_to_minutes(timestr):
+	if not timestr:
+		return None
+	parts = str(timestr).split(":")
+	try:
+		return int(parts[0] or 0) * 60 + int(parts[1] or 0)
+	except (ValueError, IndexError):
+		return None
+
+
+def is_within_hr_shift_window(shift_row, now_m=None, early_minutes=EARLY_OPEN_MINUTES_BEFORE_START):
+	"""True when wall-clock time is inside roster slot or early-open lead window."""
+	start = _time_str_to_minutes(shift_row.get("start_time"))
+	end = _time_str_to_minutes(shift_row.get("end_time"))
+	if start is None or end is None:
+		return False
+	if now_m is None:
+		dt = now_datetime()
+		now_m = dt.hour * 60 + dt.minute
+	window_start = max(0, start - early_minutes)
+	return window_start <= now_m <= end
+
+
+def validate_hr_shift_for_pos_opening(user=None):
+	"""Raise when HR shift rules apply but employee/shift window requirements are not met."""
+	effective = user or frappe.session.user
+	employee = _get_employee_for_user(effective)
+	if not employee:
+		frappe.throw(
+			_("No Employee linked to your user account. Please contact your administrator.")
+		)
+
+	rows = get_today_roster_shifts_for_user(effective)
+	if not rows:
+		frappe.throw(_("No shift assigned today. You cannot open a shift without an HR schedule."))
+
+	dt = now_datetime()
+	now_m = dt.hour * 60 + dt.minute
+	if not any(is_within_hr_shift_window(row, now_m) for row in rows):
+		frappe.throw(
+			_(
+				"Your shift has not started yet or has already ended. "
+				"Please open during your scheduled shift window."
+			)
+		)
+
+
 @frappe.whitelist()
 def get_today_shifts():
 	"""Return HR Shift Assignments active today for the current POS user.
@@ -94,6 +147,14 @@ def get_today_shifts():
 	"""
 	today = nowdate()
 	employee = _get_employee_for_user()
+	accessible_profiles = [
+		{
+			"name": profile.name,
+			"use_shift_in_pos": bool(profile.get("custom_use_shift_in_pos")),
+		}
+		for profile in get_accessible_pos_profiles_for_user()
+	]
+	can_open_without_hr_shift = user_can_open_pos_without_hr_shift()
 
 	if not employee:
 		return {
@@ -101,6 +162,8 @@ def get_today_shifts():
 			"employee": None,
 			"employee_name": None,
 			"shifts": [],
+			"accessible_profiles": accessible_profiles,
+			"can_open_without_hr_shift": can_open_without_hr_shift,
 		}
 
 	employee_name = frappe.db.get_value("Employee", employee, "employee_name")
@@ -113,4 +176,6 @@ def get_today_shifts():
 		"employee": employee,
 		"employee_name": employee_name,
 		"shifts": rows,
+		"accessible_profiles": accessible_profiles,
+		"can_open_without_hr_shift": can_open_without_hr_shift,
 	}

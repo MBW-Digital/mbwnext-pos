@@ -7,7 +7,12 @@ import json
 import frappe
 from frappe import _
 from frappe.utils import nowdate, nowtime, get_datetime, now_datetime
-from pos_next.api.roster import get_today_roster_shifts_for_user
+from pos_next.api.pos_profile import (
+	profile_requires_shift_in_pos,
+	user_can_open_pos_without_hr_shift,
+	get_accessible_pos_profiles_for_user,
+)
+from pos_next.api.roster import get_today_roster_shifts_for_user, validate_hr_shift_for_pos_opening
 from pos_next.api.utilities import get_wallet_payment_modes
 
 
@@ -44,12 +49,16 @@ def _roster_still_has_slot_not_ended_today(shifts_rows):
 	return False
 
 
-def _cannot_open_new_pos_after_same_day_close(user):
+def _cannot_open_new_pos_after_same_day_close(user, pos_profile=None):
 	"""After submitting POS Closing Shift, block only when reopening is not allowed for this roster day.
 
 	- Single roster slot today: never reopen after close (same day).
 	- Multiple roster slots: allow another opening until all today's slots have ended (multi-shift work day).
+	- Skipped when POS Profile does not enforce HR shift checks.
 	"""
+	if pos_profile and not profile_requires_shift_in_pos(pos_profile):
+		return False
+
 	if not _user_has_submitted_pos_closing_shift_today(user):
 		return False
 
@@ -64,9 +73,19 @@ def _cannot_open_new_pos_after_same_day_close(user):
 
 
 @frappe.whitelist()
-def user_closed_pos_shift_today():
+def user_closed_pos_shift_today(pos_profile=None):
 	"""Whether POS must stay closed for today after a submitted closing (see multi-shift rules)."""
-	return {"closed_today": _cannot_open_new_pos_after_same_day_close(frappe.session.user)}
+	if pos_profile and not profile_requires_shift_in_pos(pos_profile):
+		return {"closed_today": False}
+
+	if not pos_profile and user_can_open_pos_without_hr_shift():
+		return {"closed_today": False}
+
+	return {
+		"closed_today": _cannot_open_new_pos_after_same_day_close(
+			frappe.session.user, pos_profile
+		)
+	}
 
 
 @frappe.whitelist()
@@ -74,18 +93,7 @@ def get_opening_dialog_data():
 	"""Get data required for opening shift dialog"""
 	data = {}
 
-	# Get POS Profiles where current user is defined in POS Profile User table
-	pos_profiles_data = frappe.db.sql(
-		"""
-		SELECT DISTINCT p.name, p.company, p.currency, p.warehouse, p.selling_price_list
-		FROM `tabPOS Profile` p
-		INNER JOIN `tabPOS Profile User` u ON u.parent = p.name
-		WHERE p.disabled = 0 AND u.user = %s
-		ORDER BY p.name
-		""",
-		frappe.session.user,
-		as_dict=1,
-	)
+	pos_profiles_data = get_accessible_pos_profiles_for_user()
 
 	data["pos_profiles_data"] = pos_profiles_data
 
@@ -161,10 +169,12 @@ def create_opening_shift(pos_profile, company, balance_details):
 	"""Create a new POS Opening Shift"""
 	balance_details = json.loads(balance_details) if isinstance(balance_details, str) else balance_details
 
-	if _cannot_open_new_pos_after_same_day_close(frappe.session.user):
-		frappe.throw(
-			_("You cannot open another POS shift today. If you work multiple roster shifts, try again when the next shift window is active.")
-		)
+	if profile_requires_shift_in_pos(pos_profile):
+		if _cannot_open_new_pos_after_same_day_close(frappe.session.user, pos_profile):
+			frappe.throw(
+				_("You cannot open another POS shift today. If you work multiple roster shifts, try again when the next shift window is active.")
+			)
+		validate_hr_shift_for_pos_opening(frappe.session.user)
 
 	# Check if user already has an open shift
 	existing_shift = check_opening_shift(frappe.session.user)

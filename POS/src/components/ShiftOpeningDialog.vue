@@ -237,8 +237,10 @@ function isCashMethod(methodName) {
 }
 const { showError } = useToast()
 
-async function ensureNotClosedToday() {
-	const res = await call("pos_next.api.shifts.user_closed_pos_shift_today", {})
+async function ensureNotClosedToday(posProfile = null) {
+	const res = await call("pos_next.api.shifts.user_closed_pos_shift_today", {
+		pos_profile: posProfile || undefined,
+	})
 	const data = res?.message ?? res ?? {}
 	if (data.closed_today) {
 		showError(
@@ -359,6 +361,8 @@ async function nextStep() {
 
 async function openShift() {
 	if (!selectedProfile.value) return
+
+	if (!(await ensureNotClosedToday(selectedProfile.value.name))) return
 
 	// Prepare balance details
 	const balance_details = paymentMethods.value.map((method) => ({

@@ -2412,12 +2412,18 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
+		const warehouse =
+			shiftStore.profileWarehouse ||
+			items.find((item) => item.warehouse)?.warehouse ||
+			null
+
 		return {
 			subtotal: subtotal.value,
 			itemCount: totalQty,
 			itemCodes: [...new Set(itemCodes)],
 			itemGroups: [...new Set(itemGroups)],
 			brands: [...new Set(brands)],
+			warehouse,
 			// New: quantity maps for accurate min_qty/max_qty validation
 			itemQuantities,
 			itemGroupQuantities,

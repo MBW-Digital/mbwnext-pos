@@ -3725,6 +3725,12 @@ def apply_offers(invoice_data, selected_offers=None):
         )
 
         from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+        from pos_next.pricing_rule_warehouse import (
+            filter_pricing_rule_names_by_warehouse,
+            resolve_transaction_warehouse,
+        )
+
+        transaction_warehouse = resolve_transaction_warehouse(profile, items)
 
         if selected_offer_names:
             selected_offer_names = {
@@ -3732,6 +3738,11 @@ def apply_offers(invoice_data, selected_offers=None):
                 for name in selected_offer_names
                 if is_pricing_rule_in_time_window(name, pricing_args)
             }
+            selected_offer_names = set(
+                filter_pricing_rule_names_by_warehouse(
+                    selected_offer_names, transaction_warehouse
+                )
+            )
 
         # Call ERPNext pricing engine - it handles all conflicts based on priority
         #

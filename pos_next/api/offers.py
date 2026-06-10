@@ -93,6 +93,7 @@ class Offer:
 	apply_time_window: int = 0
 	valid_time_from: Optional[str] = None
 	valid_time_to: Optional[str] = None
+	warehouse: Optional[str] = None
 
 	def to_dict(self) -> Dict:
 		"""Convert to dictionary for API response"""
@@ -310,6 +311,47 @@ class SlabFetcher:
 
 		return slabs_map
 
+	@staticmethod
+	def fetch_price_slabs_by_id(slab_names: List[str]) -> Dict[str, Dict]:
+		"""Fetch price discount slabs keyed by child row name (promotional_scheme_id)."""
+		if not slab_names:
+			return {}
+
+		results = frappe.db.sql(
+			"""
+			SELECT
+				name, parent, min_qty, max_qty, min_amount, max_amount,
+				rate_or_discount, rate, discount_amount, discount_percentage,
+				apply_multiple_pricing_rules
+			FROM `tabPromotional Scheme Price Discount`
+			WHERE name IN %s AND disable = 0
+			""",
+			[slab_names],
+			as_dict=1,
+		)
+		return {row["name"]: row for row in results}
+
+	@staticmethod
+	def fetch_product_slabs_by_id(slab_names: List[str]) -> Dict[str, Dict]:
+		"""Fetch product discount slabs keyed by child row name (promotional_scheme_id)."""
+		if not slab_names:
+			return {}
+
+		results = frappe.db.sql(
+			"""
+			SELECT
+				name, parent, min_qty, max_qty, min_amount, max_amount,
+				apply_multiple_pricing_rules,
+				free_item, free_qty, free_item_uom, same_item, is_recursive,
+				recurse_for, apply_recursion_over
+			FROM `tabPromotional Scheme Product Discount`
+			WHERE name IN %s AND disable = 0
+			""",
+			[slab_names],
+			as_dict=1,
+		)
+		return {row["name"]: row for row in results}
+
 
 # ============================================================================
 # Offer Builders
@@ -385,6 +427,7 @@ class OfferBuilder:
 			apply_time_window=aw,
 			valid_time_from=tf,
 			valid_time_to=tt,
+			warehouse=rule.get("warehouse") or None,
 		)
 
 	@staticmethod
@@ -447,6 +490,7 @@ class OfferBuilder:
 			apply_time_window=aw,
 			valid_time_from=tf,
 			valid_time_to=tt,
+			warehouse=rule.get("warehouse") or None,
 		)
 
 
@@ -471,24 +515,32 @@ def get_offers(pos_profile: str) -> List[Dict]:
 
 		offers = []
 
+		pos_warehouse = profile.warehouse
+
 		# Get offers from promotional schemes
-		scheme_offers = _get_promotional_scheme_offers(profile.company, date)
+		scheme_offers = _get_promotional_scheme_offers(profile.company, date, pos_warehouse)
 		offers.extend(scheme_offers)
 
 		# Get standalone pricing rule offers
-		standalone_offers = _get_standalone_pricing_rule_offers(profile.company, date)
+		standalone_offers = _get_standalone_pricing_rule_offers(
+			profile.company, date, pos_warehouse
+		)
 		offers.extend(standalone_offers)
 
 		from pos_next.pricing_rule_time_window import filter_offer_dicts_by_time_window
+		from pos_next.pricing_rule_warehouse import filter_offer_dicts_by_warehouse
 
-		return filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
+		offer_dicts = filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
+		return filter_offer_dicts_by_warehouse(offer_dicts, pos_warehouse)
 
 	except Exception as e:
 		frappe.log_error(f"Error fetching offers: {str(e)}", "Offers API")
 		return []
 
 
-def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
+def _get_promotional_scheme_offers(
+	company: str, date: str, pos_warehouse: Optional[str] = None
+) -> List[Offer]:
 	"""Fetch offers from promotional schemes"""
 
 	time_cols = _pricing_rule_time_sql_columns()
@@ -499,7 +551,7 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
 			price_or_product_discount, apply_discount_on, priority,
-			valid_from, valid_upto
+			warehouse, valid_from, valid_upto
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
@@ -515,36 +567,50 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 	if not pricing_rules:
 		return []
 
-	# Get unique scheme names
-	scheme_names = list({rule["promotional_scheme"] for rule in pricing_rules})
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
 
-	# Fetch all slabs and eligibility in batch
-	price_slabs = SlabFetcher.fetch_price_slabs(scheme_names)
-	product_slabs = SlabFetcher.fetch_product_slabs(scheme_names)
-	eligibility_map = EligibilityFetcher.fetch_all(scheme_names)
+	if pos_warehouse:
+		pricing_rules = [
+			r
+			for r in pricing_rules
+			if pricing_rule_matches_warehouse(r.get("warehouse"), pos_warehouse)
+		]
+
+	if not pricing_rules:
+		return []
+
+	slab_ids = list(
+		{r["promotional_scheme_id"] for r in pricing_rules if r.get("promotional_scheme_id")}
+	)
+	price_slabs = SlabFetcher.fetch_price_slabs_by_id(slab_ids)
+	product_slabs = SlabFetcher.fetch_product_slabs_by_id(slab_ids)
+	eligibility_map = EligibilityFetcher.fetch_all([r["name"] for r in pricing_rules])
 
 	# Build offers
 	offers = []
 	for rule in pricing_rules:
-		scheme_name = rule["promotional_scheme"]
+		slab_id = rule.get("promotional_scheme_id")
+		if not slab_id:
+			continue
 
-		# Get appropriate slab
 		if rule.get("price_or_product_discount") == DiscountType.PRICE:
-			slab = price_slabs.get(scheme_name)
+			slab = price_slabs.get(slab_id)
 		else:
-			slab = product_slabs.get(scheme_name)
+			slab = product_slabs.get(slab_id)
 
 		if not slab:
 			continue
 
-		eligibility = eligibility_map.get(scheme_name, OfferEligibility([], [], []))
+		eligibility = eligibility_map.get(rule["name"], OfferEligibility([], [], []))
 		offer = OfferBuilder.build_from_scheme_rule(rule, slab, eligibility)
 		offers.append(offer)
 
 	return offers
 
 
-def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
+def _get_standalone_pricing_rule_offers(
+	company: str, date: str, pos_warehouse: Optional[str] = None
+) -> List[Offer]:
 	"""Fetch offers from standalone pricing rules (price and product discounts)."""
 
 	time_cols = _pricing_rule_time_sql_columns()
@@ -559,7 +625,7 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 			min_qty, max_qty, min_amt, max_amt,
 			free_item, free_qty, free_item_uom, same_item, is_recursive,
 			recurse_for, apply_recursion_over,
-			priority, valid_from, valid_upto
+			priority, warehouse, valid_from, valid_upto
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
@@ -581,10 +647,19 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 	if not pricing_rules:
 		return []
 
-	# Get rule names
-	rule_names = [rule["name"] for rule in pricing_rules]
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
 
-	# Fetch eligibility in batch
+	if pos_warehouse:
+		pricing_rules = [
+			r
+			for r in pricing_rules
+			if pricing_rule_matches_warehouse(r.get("warehouse"), pos_warehouse)
+		]
+
+	if not pricing_rules:
+		return []
+
+	rule_names = [rule["name"] for rule in pricing_rules]
 	eligibility_map = EligibilityFetcher.fetch_all(rule_names)
 
 	# Build offers

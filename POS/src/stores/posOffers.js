@@ -10,6 +10,7 @@ const defaultSnapshot = () => ({
 	itemCodes: [],
 	itemGroups: [],
 	brands: [],
+	warehouse: null,
 	// Quantity maps for accurate min_qty/max_qty validation
 	itemQuantities: {},      // { item_code: qty }
 	itemGroupQuantities: {}, // { item_group: qty }
@@ -73,6 +74,7 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			? snapshot.itemGroups
 			: []
 		const brands = Array.isArray(snapshot.brands) ? snapshot.brands : []
+		const warehouse = snapshot.warehouse || null
 
 		// Quantity maps for accurate offer validation
 		const itemQuantities = snapshot.itemQuantities && typeof snapshot.itemQuantities === 'object'
@@ -91,6 +93,7 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			itemCodes,
 			itemGroups,
 			brands,
+			warehouse,
 			itemQuantities,
 			itemGroupQuantities,
 			brandQuantities,
@@ -173,6 +176,14 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			return {
 				eligible: false,
 				reason: "Cart is empty",
+			}
+		}
+
+		const txnWarehouse = cartSnapshot.value.warehouse
+		if (offer?.warehouse && txnWarehouse && offer.warehouse !== txnWarehouse) {
+			return {
+				eligible: false,
+				reason: __("Offer is not valid for this warehouse"),
 			}
 		}
 

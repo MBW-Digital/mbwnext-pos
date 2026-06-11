@@ -478,6 +478,77 @@
 					</button>
 				</template>
 			</div>
+
+			<!-- Promotion Campaigns (custom dropdown, names only — not a select) -->
+			<div
+				v-if="promotionCampaigns.length > 0"
+				ref="promotionCampaignDropdownRef"
+				class="px-2.5 pb-2 border-t border-gray-100 relative"
+				:class="items.length > 0 ? 'px-2' : ''"
+			>
+				<div class="flex items-center gap-1.5 mb-1">
+					<svg
+						class="w-3.5 h-3.5 text-amber-600 flex-shrink-0"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"
+						/>
+					</svg>
+					<span class="text-[9px] font-semibold text-gray-500 uppercase tracking-wide">
+						{{ __("Promotion Campaign") }}
+					</span>
+					<span
+						class="min-w-[18px] h-[18px] px-1 rounded-full bg-amber-100 text-amber-800 text-[9px] font-bold flex items-center justify-center normal-case"
+					>
+						{{ promotionCampaigns.length }}
+					</span>
+				</div>
+				<button
+					type="button"
+					class="w-full h-8 px-2 rounded-lg border border-amber-200 bg-amber-50 text-[11px] font-medium text-amber-900 flex items-center justify-between gap-2 touch-manipulation focus:outline-none focus:ring-2 focus:ring-amber-200 focus:border-amber-400"
+					:aria-expanded="promotionCampaignDropdownOpen"
+					:aria-label="__('Promotion Campaign')"
+					@click="togglePromotionCampaignDropdown"
+				>
+					<span class="truncate text-left">
+						<template v-if="promotionCampaigns.length === 1">
+							{{ promotionCampaigns[0].promotion_name || promotionCampaigns[0].name }}
+						</template>
+						<template v-else>
+							{{ __("{0} promotion campaigns", [promotionCampaigns.length]) }}
+						</template>
+					</span>
+					<svg
+						class="w-4 h-4 text-amber-600 flex-shrink-0 transition-transform duration-200"
+						:class="promotionCampaignDropdownOpen ? 'rotate-180' : ''"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+						stroke-width="2"
+					>
+						<path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+					</svg>
+				</button>
+				<div
+					v-show="promotionCampaignDropdownOpen"
+					class="absolute z-30 left-2.5 right-2.5 mt-1 rounded-lg border border-amber-200 bg-white shadow-lg max-h-32 overflow-y-auto"
+					:class="items.length > 0 ? 'left-2 right-2' : ''"
+				>
+					<div
+						v-for="campaign in promotionCampaigns"
+						:key="campaign.name"
+						class="px-2 py-1.5 text-[11px] font-medium text-amber-900 leading-snug break-words border-b border-amber-50 last:border-b-0"
+					>
+						{{ campaign.promotion_name || campaign.name }}
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<!-- Cart Items -->
@@ -1437,6 +1508,43 @@ if (props.posProfile) {
 	offersStore.ensureOffersFetched(props.posProfile);
 }
 
+const promotionCampaigns = ref([]);
+const promotionCampaignDropdownOpen = ref(false);
+const promotionCampaignDropdownRef = ref(null);
+
+function togglePromotionCampaignDropdown() {
+	promotionCampaignDropdownOpen.value = !promotionCampaignDropdownOpen.value;
+}
+
+const promotionCampaignsResource = createResource({
+	url: "pos_next.api.offers.get_promotion_campaigns_for_pos",
+	makeParams() {
+		return { pos_profile: props.posProfile };
+	},
+	auto: false,
+	onSuccess(data) {
+		promotionCampaigns.value = data?.message || data || [];
+		promotionCampaignDropdownOpen.value = false;
+	},
+	onError(error) {
+		log.warn("Failed to load promotion campaigns:", error);
+		promotionCampaigns.value = [];
+	},
+});
+
+watch(
+	() => props.posProfile,
+	(profile) => {
+		if (profile) {
+			promotionCampaignsResource.reload();
+		} else {
+			promotionCampaigns.value = [];
+			promotionCampaignDropdownOpen.value = false;
+		}
+	},
+	{ immediate: true },
+);
+
 /**
  * Gift Cards Resource
  *
@@ -2110,6 +2218,15 @@ function handleOutsideClick(event) {
 		if (!clickedInsideUomDropdown) {
 			openUomDropdown.value = null;
 		}
+	}
+
+	if (
+		promotionCampaignDropdownOpen.value &&
+		promotionCampaignDropdownRef.value &&
+		target instanceof Node &&
+		!promotionCampaignDropdownRef.value.contains(target)
+	) {
+		promotionCampaignDropdownOpen.value = false;
 	}
 }
 

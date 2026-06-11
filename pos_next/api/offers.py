@@ -538,6 +538,92 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		return []
 
 
+def _campaign_valid_on_date(campaign_name: str, date) -> bool:
+	"""Valid From <= date <= Valid Upto (blank date bounds are ignored)."""
+	if not campaign_name:
+		return False
+	if not frappe.db.exists("Promotion Campaign", campaign_name):
+		return False
+	meta = frappe.get_meta("Promotion Campaign")
+	check_date = getdate(date)
+	if meta.has_field("custom_valid_from"):
+		valid_from = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_from")
+		if valid_from and getdate(valid_from) > check_date:
+			return False
+	if meta.has_field("custom_valid_upto"):
+		valid_upto = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_upto")
+		if valid_upto and getdate(valid_upto) < check_date:
+			return False
+	return True
+
+
+def _campaign_matches_pos_warehouse(campaign_name: str, pos_warehouse: Optional[str]) -> bool:
+	"""Child table Promotional Scheme Warehouse must include a row matching POS warehouse."""
+	if not campaign_name or not pos_warehouse:
+		return False
+
+	meta = frappe.get_meta("Promotion Campaign")
+	child_field = "custom_promotional_scheme_warehouse"
+	if not meta.has_field(child_field):
+		return False
+
+	child_rows = frappe.get_all(
+		"Promotional Scheme Warehouse",
+		filters={
+			"parent": campaign_name,
+			"parenttype": "Promotion Campaign",
+			"parentfield": child_field,
+		},
+		fields=["warehouse"],
+		pluck="warehouse",
+	)
+	if not child_rows:
+		return False
+
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
+
+	return any(
+		pricing_rule_matches_warehouse(row_warehouse, pos_warehouse) for row_warehouse in child_rows
+	)
+
+
+@frappe.whitelist()
+def get_promotion_campaigns_for_pos(pos_profile: str) -> List[Dict]:
+	"""Promotion Campaign names for POS: valid today and warehouse matches POS Profile."""
+	if not pos_profile:
+		return []
+	if not frappe.db.exists("DocType", "Promotion Campaign"):
+		return []
+	if not frappe.db.exists("POS Profile", pos_profile):
+		return []
+
+	pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
+	if not pos_warehouse:
+		return []
+
+	date = getdate()
+	result = []
+
+	for row in frappe.get_all(
+		"Promotion Campaign",
+		fields=["name", "promotion_name"],
+		order_by="promotion_name asc",
+		limit_page_length=100,
+	):
+		if not _campaign_valid_on_date(row.name, date):
+			continue
+		if not _campaign_matches_pos_warehouse(row.name, pos_warehouse):
+			continue
+		result.append(
+			{
+				"name": row.name,
+				"promotion_name": row.promotion_name or row.name,
+			}
+		)
+
+	return result
+
+
 def _get_promotional_scheme_offers(
 	company: str, date: str, pos_warehouse: Optional[str] = None
 ) -> List[Offer]:

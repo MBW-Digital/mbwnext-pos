@@ -108,6 +108,8 @@ fixtures = [
 					"POS Profile-posa_cash_mode_of_payment",
 					"POS Profile-posa_allow_delete",
 					"POS Profile-posa_block_sale_beyond_available_qty",
+					"POS Profile-custom_print_in_duplicate",
+					"POS Profile-custom_pos_logo",
 					"Mode of Payment-is_wallet_payment",
 					"Pricing Rule-apply_time_window",
 					"Pricing Rule-valid_time_from",

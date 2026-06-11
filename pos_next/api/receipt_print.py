@@ -3,10 +3,14 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
+import os
 from typing import Any
+from urllib.parse import quote
 
 import frappe
-from frappe.utils import flt, fmt_money, format_datetime, getdate, now_datetime, today
+from frappe.utils import cint, flt, fmt_money, format_datetime, getdate, now_datetime, today
 
 
 def format_receipt_amount(value, precision: int = 0) -> str:
@@ -197,6 +201,11 @@ def enrich_invoice_dict_for_print(inv: dict[str, Any]) -> dict[str, Any]:
 		out["receipt_company_phone"] = ""
 	out["receipt_company_address"] = (inv.get("company_address_display") or "").strip()
 	pp = inv.get("pos_profile")
+	if pp and frappe.get_meta("POS Profile").has_field("custom_print_in_duplicate"):
+		out["print_in_duplicate"] = cint(
+			frappe.db.get_value("POS Profile", pp, "custom_print_in_duplicate")
+		)
+	out["is_reprint"] = bool(inv.get("posa_is_printed"))
 	wh = frappe.db.get_value("POS Profile", pp, "warehouse") if pp else None
 	out["receipt_branch_label"] = (
 		frappe.db.get_value("Warehouse", wh, "warehouse_name") if wh else (pp or "")
@@ -241,10 +250,91 @@ def _payment_totals_by_type(doc) -> dict[str, float]:
 def _pos_profile_store_fields(pos_profile: str | None) -> dict[str, Any]:
 	if not pos_profile:
 		return {}
-	fields = ["custom_shop_code", "custom_store_name_2", "custom_address", "custom_phone"]
-	if not frappe.db.has_column("POS Profile", fields[0]):
+	meta = frappe.get_meta("POS Profile")
+	fields = [
+		fname
+		for fname in (
+			"custom_shop_code",
+			"custom_store_name_2",
+			"custom_address",
+			"custom_phone",
+			"custom_pos_logo",
+		)
+		if meta.has_field(fname)
+	]
+	if not fields:
 		return {}
 	return frappe.db.get_value("POS Profile", pos_profile, fields, as_dict=True) or {}
+
+
+def attach_image_url_for_print(file_path: str | None) -> str:
+	"""Absolute URL cho Attach Image (fallback khi không embed base64)."""
+	if not file_path:
+		return ""
+	from frappe.utils import get_url
+
+	path = str(file_path).strip()
+	if path.startswith("http://") or path.startswith("https://"):
+		return path
+	if not path.startswith("/"):
+		path = f"/{path}"
+	encoded = "/" + "/".join(quote(part, safe="") for part in path.split("/") if part)
+	return get_url(encoded)
+
+
+def _resize_receipt_logo_bytes(raw: bytes, disk_path: str, max_px: int = 96) -> tuple[bytes, str]:
+	"""Thu nhỏ logo (ảnh dọc/ngang) trước khi embed — phiếu in gọn hơn."""
+	try:
+		import io
+
+		from PIL import Image
+
+		img = Image.open(io.BytesIO(raw))
+		if img.mode not in ("RGB", "L"):
+			img = img.convert("RGB")
+		img.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
+		out = io.BytesIO()
+		img.save(out, format="JPEG", quality=88, optimize=True)
+		return out.getvalue(), "image/jpeg"
+	except Exception:
+		mime = mimetypes.guess_type(disk_path)[0] or "image/png"
+		return raw, mime
+
+
+def attach_image_src_for_print(file_path: str | None, max_bytes: int = 2 * 1024 * 1024) -> str:
+	"""
+	Src cho <img> phiếu in: embed base64 (private file, tên có khoảng trắng).
+	Fallback URL nếu không đọc được file.
+	"""
+	if not file_path:
+		return ""
+
+	path = str(file_path).strip()
+	if path.startswith("http://") or path.startswith("https://"):
+		return path
+
+	try:
+		from frappe.utils.file_manager import get_file_path
+
+		disk_path = get_file_path(path)
+		if not disk_path or not os.path.isfile(disk_path):
+			return attach_image_url_for_print(path)
+
+		if os.path.getsize(disk_path) > max_bytes:
+			return attach_image_url_for_print(path)
+
+		with open(disk_path, "rb") as image_file:
+			raw = image_file.read()
+
+		raw, mime = _resize_receipt_logo_bytes(raw, disk_path)
+		b64 = base64.b64encode(raw).decode("ascii")
+		return f"data:{mime};base64,{b64}"
+	except Exception:
+		frappe.log_error(
+			title="POS receipt logo embed failed",
+			message=frappe.get_traceback(),
+		)
+		return attach_image_url_for_print(path)
 
 
 def item_barcode_for_receipt(item) -> str:
@@ -311,8 +401,11 @@ def ha_vang_receipt_meta_for_jinja(doc):
 		frappe.db.get_value("User", owner, "full_name") if owner else ""
 	) or owner
 
+	pos_logo_url = attach_image_src_for_print(profile.get("custom_pos_logo"))
+
 	return frappe._dict(
 		**base,
+		pos_logo_url=pos_logo_url,
 		shop_code=profile.get("custom_shop_code") or "",
 		store_display_name=profile.get("custom_store_name_2") or base.get("receipt_branch_label") or "",
 		store_address=profile.get("custom_address") or base.get("receipt_company_address") or "",
@@ -329,7 +422,6 @@ def ha_vang_receipt_meta_for_jinja(doc):
 		),
 		cash_paid=pay["cash_paid"],
 		bank_paid=pay["bank_paid"],
-		is_reprint=bool(inv.get("posa_is_printed")),
 		vip_label=inv.get("customer_category") or "",
 		store_hours="9h00 - 22h00",
 		salesperson=salesperson,

@@ -106,6 +106,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		remarks,
 		transactionPricingRule,
 		taxInclusive,
 		isSubmitting,
@@ -921,6 +922,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			appliedOffers: toRaw(appliedOffers.value || []),
 			appliedCoupon: toRaw(appliedCoupon.value || null),
 			additionalDiscount: additionalDiscount.value || 0,
+			remarks: remarks.value || "",
 			taxInclusive: !!taxInclusive.value,
 			targetDoctype: targetDoctype.value,
 			deliveryDate: deliveryDate.value || "",
@@ -947,6 +949,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		appliedOffers.value = snapshot.appliedOffers || []
 		appliedCoupon.value = snapshot.appliedCoupon || null
 		additionalDiscount.value = snapshot.additionalDiscount || 0
+		remarks.value = snapshot.remarks || ""
 		taxInclusive.value = !!snapshot.taxInclusive
 		targetDoctype.value = snapshot.targetDoctype || "Sales Invoice"
 		deliveryDate.value = snapshot.deliveryDate || ""
@@ -2936,6 +2939,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		remarks,
 		taxInclusive,
 		pendingItem,
 		pendingItemQty,

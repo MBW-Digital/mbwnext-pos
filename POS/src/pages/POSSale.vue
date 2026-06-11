@@ -483,6 +483,7 @@
 			:customer="cartStore.customer"
 			:company="shiftStore.profileCompany"
 			:additional-discount="cartStore.additionalDiscount"
+			:remarks="cartStore.remarks"
 			:items="cartStore.displayCartItems"
 			:tax-amount="cartStore.totalTax"
 			:discount-amount="cartStore.totalDiscount"
@@ -490,6 +491,7 @@
 			:is-submitting="cartStore.isSubmitting"
 			@payment-completed="handlePaymentCompleted"
 			@update-additional-discount="handleAdditionalDiscountUpdate"
+			@update:remarks="handleRemarksUpdate"
 		/>
 
 			<!-- Customer Selection Dialog -->
@@ -1049,7 +1051,7 @@ import { getSetting } from "@/utils/offline/db";
 import { getCachedItemByCodeOrName, cacheItems } from "@/utils/offline/items";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
-import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
+import { printInvoiceByName } from "@/utils/printInvoice";
 import { Button, Dialog, createResource } from "frappe-ui";
 import { call } from "@/utils/apiWrapper";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
@@ -2209,6 +2211,10 @@ function handleAdditionalDiscountUpdate(discountAmount) {
 	cartStore.rebuildIncrementalCache();
 }
 
+function handleRemarksUpdate(value) {
+	cartStore.remarks = value || "";
+}
+
 function handleCustomerSelected(selectedCustomer) {
 	if (selectedCustomer) {
 		cartStore.setCustomer(selectedCustomer);
@@ -3247,14 +3253,14 @@ function handleViewInvoice(invoice) {
 // Centralized print handler - uses printInvoice.js utilities
 async function handlePrintInvoice(invoiceData) {
 	try {
-		// If invoiceData is a full document with items, use printInvoice directly
-		if (invoiceData.items && Array.isArray(invoiceData.items)) {
-			await printInvoice(invoiceData);
-		} else {
-			// If it's just an invoice object with name, fetch and print
-			// printInvoiceByName will automatically fetch the print format from the invoice's POS Profile
-			await printInvoiceByName(invoiceData.name);
+		if (!invoiceData?.name) {
+			throw new Error("Invoice name is required");
 		}
+		// Luôn in qua printInvoiceByName: lấy đủ dữ liệu phiếu, Print Format
+		// từ POS Profile (vd. POS Ha Vang Receipt), 2 liên, IN LẠI khi in lại.
+		// Không dùng printInvoice(invoiceData) khi object có items từ get_invoices —
+		// đó chỉ là summary list, không phải full doc, và sẽ rơi vào mẫu mặc định POS Next Receipt.
+		await printInvoiceByName(invoiceData.name);
 	} catch (error) {
 		log.error("Error printing invoice:", error);
 		window.frappe?.msgprint({

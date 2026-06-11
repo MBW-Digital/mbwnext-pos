@@ -1655,6 +1655,26 @@ def get_invoice(invoice_name):
 
 
 @frappe.whitelist()
+def mark_invoice_printed(invoice_name):
+	"""Đánh dấu hóa đơn đã in — lần in sau hiển thị IN LẠI trên phiếu."""
+	if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
+		frappe.throw(_("Sales Invoice {0} not found").format(invoice_name))
+	if not frappe.get_meta("Sales Invoice").has_field("posa_is_printed"):
+		return {"ok": True, "skipped": True}
+	if cint(frappe.db.get_value("Sales Invoice", invoice_name, "posa_is_printed")):
+		return {"ok": True, "already_printed": True}
+	frappe.db.set_value(
+		"Sales Invoice",
+		invoice_name,
+		"posa_is_printed",
+		1,
+		update_modified=False,
+	)
+	frappe.db.commit()
+	return {"ok": True}
+
+
+@frappe.whitelist()
 def get_print_receipt_data(invoice_name, include_vnpost_qr=True, include_sepay_qr=None):
 	"""
 	Receipt for thermal print, optional VNPost Pay VietQR / QR image URL.

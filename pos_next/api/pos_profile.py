@@ -84,6 +84,7 @@ def get_pos_profile_data(pos_profile):
 			"auto_print": profile_doc.get("print_receipt_on_order_complete", 0),
 			"print_format": profile_doc.get("print_format"),
 			"letter_head": profile_doc.get("letter_head"),
+			"print_in_duplicate": profile_doc.get("custom_print_in_duplicate") or 0,
 		}
 	}
 

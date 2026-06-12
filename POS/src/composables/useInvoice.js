@@ -1251,15 +1251,15 @@ export function useInvoice() {
 	}
 
 	/**
-	 * Create invoice for VNPost Pay: submit with cash/other payments (Partly Paid if partial),
-	 * then VNPost callback/confirm records the bank transfer.
+	 * Create draft invoice for SePay bank transfer (no submit).
+	 * Webhook submits when payment is received. Supports mixed payments.
 	 *
 	 * @param {string} targetDoctype - Sales Invoice or Sales Order
 	 * @param {string|null} deliveryDate - For Sales Order
 	 * @param {Array} existingPayments - Payments already made (e.g. cash) - [{mode_of_payment, amount, type}]
-	 * @returns {Promise<{name: string, grand_total: number, vnpost_amount: number}>}
+	 * @returns {Promise<{name: string, grand_total: number, sepay_amount: number}>}
 	 */
-	async function createDraftForVnpostPay(
+	async function createDraftForSePay(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		existingPayments = [],
@@ -1284,19 +1284,18 @@ export function useInvoice() {
 				freeGiftItems: extras.freeGiftItems || [],
 				warehouse: extras.warehouse || null,
 			}),
-		payments: paymentsForInvoice,
-		discount_amount: additionalDiscount.value || 0,
-		additional_discount_percentage: additionalDiscountPercentage.value || 0,
-		apply_discount_on: transactionApplyDiscountOn.value || undefined,
-		coupon_code: couponCode.value,
-		is_pos: 1,
-		update_stock: 1,
-		submit_for_vnpost: targetDoctype === "Sales Invoice" ? 1 : 0,
-	}
+			payments: paymentsForInvoice,
+			discount_amount: additionalDiscount.value || 0,
+			additional_discount_percentage: additionalDiscountPercentage.value || 0,
+			apply_discount_on: transactionApplyDiscountOn.value || undefined,
+			coupon_code: couponCode.value,
+			is_pos: 1,
+			update_stock: 1,
+		}
 
-	if (targetDoctype === "Sales Order" && deliveryDate) {
-		invoiceData.delivery_date = deliveryDate
-	}
+		if (targetDoctype === "Sales Order" && deliveryDate) {
+			invoiceData.delivery_date = deliveryDate
+		}
 
 		if (rawSalesTeam && rawSalesTeam.length > 0) {
 			invoiceData.sales_team = rawSalesTeam.map((member) => ({
@@ -1315,10 +1314,9 @@ export function useInvoice() {
 			throw new Error("Failed to create draft invoice for bank transfer")
 		}
 
-		// Dùng grand_total từ backend (đã tính đúng với thuế + discount/pricing rule).
 		const invoiceGrandTotal = invoiceDoc.grand_total
 		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
-		const vnpostAmount =
+		const sepayAmount =
 			invoiceDoc.outstanding_amount != null
 				? invoiceDoc.outstanding_amount
 				: invoiceGrandTotal - paidAmount
@@ -1326,7 +1324,7 @@ export function useInvoice() {
 		return {
 			name: invoiceDoc.name,
 			grand_total: invoiceGrandTotal,
-			vnpost_amount: vnpostAmount,
+			sepay_amount: sepayAmount,
 		}
 	}
 
@@ -1524,7 +1522,7 @@ export function useInvoice() {
 		validateStock,
 		saveDraft,
 		submitInvoice,
-		createDraftForVnpostPay,
+		createDraftForSePay,
 		resetInvoice,
 		clearCart,
 		setDefaultCustomer,

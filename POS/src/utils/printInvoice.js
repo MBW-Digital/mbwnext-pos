@@ -107,7 +107,7 @@ async function enrichReceiptData(invoiceData) {
 	try {
 		const enriched = await call("pos_next.api.invoices.get_print_receipt_data", {
 			invoice_name: invoiceData.name,
-			include_vnpost_qr: 0,
+			include_sepay_qr: 0,
 		})
 		return enriched ? { ...invoiceData, ...enriched } : invoiceData
 	} catch (error) {
@@ -673,8 +673,8 @@ function formatCurrency(amount) {
 
 /**
  * Print invoice by name, fetching print format from POS Profile.
- * Uses get_print_receipt_data to include VNPost data when applicable.
- * For receipts with VNPost QR, uses custom thermal layout (58mm/80mm).
+ * Uses get_print_receipt_data to include SePay data when applicable.
+ * For receipts with SePay QR, uses custom thermal layout (58mm/80mm).
  *
  * @param {string} invoiceName - The name of the invoice to print
  * @param {string} printFormat - Optional print format override
@@ -690,7 +690,7 @@ export async function printInvoiceByName(
 	try {
 		const invoiceDoc = await call("pos_next.api.invoices.get_print_receipt_data", {
 			invoice_name: invoiceName,
-			include_vnpost_qr: 0,
+			include_sepay_qr: 0,
 		})
 
 		if (!invoiceDoc) {

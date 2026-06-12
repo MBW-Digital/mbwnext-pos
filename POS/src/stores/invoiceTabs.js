@@ -1,13 +1,13 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
-/** Per-tab payment / VNPost UI so dialogs follow the active invoice tab. */
+/** Per-tab payment / SePay UI so dialogs follow the active invoice tab. */
 export function resetTabPaymentUi(tab) {
 	if (!tab) return
 	tab.showPaymentDialog = false
-	tab.showVnpostPayDialog = false
-	tab.vnpostPayInvoiceName = ""
-	tab.vnpostPayInvoiceAmount = 0
+	tab.showSePayDialog = false
+	tab.sePayInvoiceName = ""
+	tab.sePayInvoiceAmount = 0
 	tab.pendingPaymentAfterCustomer = false
 }
 
@@ -17,9 +17,9 @@ function createTab(id, label) {
 		label,
 		snapshot: null,
 		showPaymentDialog: false,
-		showVnpostPayDialog: false,
-		vnpostPayInvoiceName: "",
-		vnpostPayInvoiceAmount: 0,
+		showSePayDialog: false,
+		sePayInvoiceName: "",
+		sePayInvoiceAmount: 0,
 		pendingPaymentAfterCustomer: false,
 	}
 }

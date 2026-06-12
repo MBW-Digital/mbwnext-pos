@@ -644,6 +644,11 @@
 "Paid Amount:","Số tiền đã trả:",""
 "Outstanding:","Còn phải thu:",""
 "Remarks","Ghi chú",""
+"Note for this invoice...","Ghi chú cho hóa đơn...",""
+"Promotion Campaign","Chiến dịch khuyến mãi
+"Show all ({0})","Xem tất cả ({0})",""
+"Select promotion campaign ({0})","Chọn chương trình KM ({0})",""
+"{0} promotion campaigns","{0} chương trình khuyến mãi",""
 "Failed to load invoice details","Tải chi tiết hoá đơn thất bại",""
 "Warehouse Availability","Tồn kho theo kho",""
 "Close dialog","Đóng hộp thoại",""

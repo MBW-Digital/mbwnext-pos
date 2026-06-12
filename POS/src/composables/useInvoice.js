@@ -30,6 +30,7 @@ export function useInvoice() {
 	const additionalDiscount = ref(0)
 	// Discount từ Pricing Rule ở cấp invoice (additional_discount_percentage, %)
 	const additionalDiscountPercentage = ref(0)
+	const remarks = ref("")
 	// ERPNext preview totals after transaction-level pricing rule (tax + discount recalc)
 	const transactionPreviewTotals = ref(null)
 	const transactionApplyDiscountOn = ref(null)
@@ -1063,6 +1064,7 @@ export function useInvoice() {
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
 		apply_discount_on: transactionApplyDiscountOn.value || undefined,
 		coupon_code: couponCode.value,
+		remarks: (remarks.value || "").trim(),
 		is_pos: 1,
 		update_stock: 1,
 	}
@@ -1134,6 +1136,7 @@ export function useInvoice() {
 				additional_discount_percentage: additionalDiscountPercentage.value || 0,
 				posa_transaction_pricing_rule: transactionPricingRule.value || "",
 				coupon_code: couponCode.value,
+				remarks: (remarks.value || "").trim(),
 				is_pos: 1,
 				update_stock: 1, // Critical: Ensures stock is updated
 			}
@@ -1288,6 +1291,7 @@ export function useInvoice() {
 			discount_amount: additionalDiscount.value || 0,
 			additional_discount_percentage: additionalDiscountPercentage.value || 0,
 			apply_discount_on: transactionApplyDiscountOn.value || undefined,
+      remarks: (remarks.value || "").trim(),
 			coupon_code: couponCode.value,
 			is_pos: 1,
 			update_stock: 1,
@@ -1371,6 +1375,7 @@ export function useInvoice() {
 		payments.value = []
 		additionalDiscount.value = 0
 		additionalDiscountPercentage.value = 0
+		remarks.value = ""
 		couponCode.value = null
 
 		// Reset incremental cache
@@ -1399,6 +1404,7 @@ export function useInvoice() {
 		payments.value = []
 		additionalDiscount.value = 0
 		additionalDiscountPercentage.value = 0
+		remarks.value = ""
 		couponCode.value = null
 
 		// Reset incremental cache
@@ -1490,6 +1496,7 @@ export function useInvoice() {
 		posOpeningShift,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		remarks,
 		transactionApplyDiscountOn,
 		transactionPricingRule,
 		couponCode,

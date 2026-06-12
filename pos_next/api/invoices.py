@@ -1691,6 +1691,25 @@ def get_print_receipt_data(invoice_name, include_sepay_qr=True):
 		pass
 	return data
 
+@frappe.whitelist()
+def mark_invoice_printed(invoice_name):
+	"""Đánh dấu hóa đơn đã in — lần in sau hiển thị IN LẠI trên phiếu."""
+	if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
+		frappe.throw(_("Sales Invoice {0} not found").format(invoice_name))
+	if not frappe.get_meta("Sales Invoice").has_field("posa_is_printed"):
+		return {"ok": True, "skipped": True}
+	if cint(frappe.db.get_value("Sales Invoice", invoice_name, "posa_is_printed")):
+		return {"ok": True, "already_printed": True}
+	frappe.db.set_value(
+		"Sales Invoice",
+		invoice_name,
+		"posa_is_printed",
+		1,
+		update_modified=False,
+	)
+	frappe.db.commit()
+	return {"ok": True}
+
 
 @frappe.whitelist()
 def get_invoices(pos_profile, limit=100):
@@ -3716,6 +3735,12 @@ def apply_offers(invoice_data, selected_offers=None):
         )
 
         from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+        from pos_next.pricing_rule_warehouse import (
+            filter_pricing_rule_names_by_warehouse,
+            resolve_transaction_warehouse,
+        )
+
+        transaction_warehouse = resolve_transaction_warehouse(profile, items)
 
         if selected_offer_names:
             selected_offer_names = {
@@ -3723,6 +3748,11 @@ def apply_offers(invoice_data, selected_offers=None):
                 for name in selected_offer_names
                 if is_pricing_rule_in_time_window(name, pricing_args)
             }
+            selected_offer_names = set(
+                filter_pricing_rule_names_by_warehouse(
+                    selected_offer_names, transaction_warehouse
+                )
+            )
 
         # Call ERPNext pricing engine - it handles all conflicts based on priority
         #

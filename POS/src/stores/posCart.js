@@ -106,6 +106,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		remarks,
 		transactionPricingRule,
 		taxInclusive,
 		isSubmitting,
@@ -921,6 +922,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			appliedOffers: toRaw(appliedOffers.value || []),
 			appliedCoupon: toRaw(appliedCoupon.value || null),
 			additionalDiscount: additionalDiscount.value || 0,
+			remarks: remarks.value || "",
 			taxInclusive: !!taxInclusive.value,
 			targetDoctype: targetDoctype.value,
 			deliveryDate: deliveryDate.value || "",
@@ -947,6 +949,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		appliedOffers.value = snapshot.appliedOffers || []
 		appliedCoupon.value = snapshot.appliedCoupon || null
 		additionalDiscount.value = snapshot.additionalDiscount || 0
+		remarks.value = snapshot.remarks || ""
 		taxInclusive.value = !!snapshot.taxInclusive
 		targetDoctype.value = snapshot.targetDoctype || "Sales Invoice"
 		deliveryDate.value = snapshot.deliveryDate || ""
@@ -2412,12 +2415,18 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
+		const warehouse =
+			shiftStore.profileWarehouse ||
+			items.find((item) => item.warehouse)?.warehouse ||
+			null
+
 		return {
 			subtotal: subtotal.value,
 			itemCount: totalQty,
 			itemCodes: [...new Set(itemCodes)],
 			itemGroups: [...new Set(itemGroups)],
 			brands: [...new Set(brands)],
+			warehouse,
 			// New: quantity maps for accurate min_qty/max_qty validation
 			itemQuantities,
 			itemGroupQuantities,
@@ -2930,6 +2939,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		remarks,
 		taxInclusive,
 		pendingItem,
 		pendingItemQty,

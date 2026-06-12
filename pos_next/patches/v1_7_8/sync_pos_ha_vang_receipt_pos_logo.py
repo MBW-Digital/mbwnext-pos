@@ -1,4 +1,4 @@
-"""Install / update POS HA Vang Receipt print format."""
+"""POS HA Vang Receipt — logo từ POS Profile custom_pos_logo."""
 
 from __future__ import annotations
 

@@ -6,7 +6,31 @@ import { getReceiptPaymentSummary } from "@/utils/receiptPayments"
 
 const log = logger.create('PrintInvoice')
 
+const USB_DUPLICATE_PRINT_DELAY_MS = 600
+
 const RECEIPT_LOGO_URL = "/assets/pos_next/images/bhbuudien-logo.png"
+
+/** Số liên in qua WebUSB (máy in nhiệt không dùng mẫu Jinja). */
+function getUsbPhysicalCopies(doc) {
+	return Number(doc?.print_in_duplicate || doc?.custom_print_in_duplicate) ? 2 : 1
+}
+
+function delay(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function markInvoicePrintedIfNeeded(invoiceName, doc) {
+	if (!invoiceName || doc?.posa_is_printed || doc?.is_reprint) {
+		return
+	}
+	try {
+		await call("pos_next.api.invoices.mark_invoice_printed", {
+			invoice_name: invoiceName,
+		})
+	} catch (error) {
+		log.warn("Could not mark invoice as printed:", error)
+	}
+}
 
 function receiptLogoUrl() {
 	if (typeof window !== "undefined" && window.location?.origin) {
@@ -117,6 +141,74 @@ async function enrichReceiptData(invoiceData) {
 }
 
 /**
+ * Print one receipt copy (Frappe printview / WebUSB ESC/POS).
+ * @param {Object} options.kickCashDrawer - Open cash drawer after WebUSB print (default true)
+ */
+async function printInvoiceOnce(doc, printFormat = null, letterhead = null, options = {}) {
+	const { kickCashDrawer = true } = options
+
+	// WebUSB paired device — await reconnect before check (cold start races with async reconnect)
+	const usb = useWebUSBPrinter()
+	if ("usb" in navigator) {
+		await usb.reconnect()
+	}
+	if (usb.isReady.value) {
+		log.info("Printing via WebUSB ESC/POS")
+		const physicalCopies = getUsbPhysicalCopies(doc)
+		for (let i = 0; i < physicalCopies; i++) {
+			await usb.printInvoice(doc, {
+				paperWidthMm: usb.paperWidth.value,
+				openCashDrawer:
+					kickCashDrawer &&
+					i === 0 &&
+					usb.cashDrawerKickEnabled.value,
+			})
+			if (i < physicalCopies - 1) {
+				await delay(USB_DUPLICATE_PRINT_DELAY_MS)
+			}
+		}
+		if (kickCashDrawer && usb.cashDrawerKickEnabled.value && doc.pos_profile) {
+			await logCashDrawerPrintBill(doc.pos_profile, doc.name)
+		}
+		return true
+	}
+
+	const doctype = doc.doctype || "Sales Invoice"
+	const format = printFormat || "POS Next Receipt"
+
+	const params = new URLSearchParams({
+		doctype: doctype,
+		name: doc.name,
+		format: format,
+		no_letterhead: letterhead ? 0 : 1,
+		_lang: "en",
+		trigger_print: 1,
+		_t: Date.now(),
+	})
+
+	if (letterhead) {
+		params.append("letterhead", letterhead)
+	}
+
+	const printUrl = `/printview?${params.toString()}`
+
+	// In standalone PWA, window.open() is blocked — use iframe instead.
+	// On regular web, use window.open() so that Frappe's configured @page CSS
+	// (e.g. size: 80mm auto) is respected by Chrome's print dialog.
+	if (isStandalonePWA()) {
+		await printUrlViaIframe(printUrl)
+		return true
+	}
+
+	const printWindow = window.open(printUrl, "_blank", "width=800,height=600")
+	if (!printWindow) {
+		// Popup blocked — fall back to iframe
+		await printUrlViaIframe(printUrl)
+	}
+	return true
+}
+
+/**
  * Print invoice using Frappe's print format system
  * @param {Object} invoiceData - The invoice document data
  * @param {string} printFormat - The print format name (optional)
@@ -128,64 +220,21 @@ export async function printInvoice(
 	printFormat = null,
 	letterhead = null,
 ) {
+	if (!invoiceData || !invoiceData.name) {
+		throw new Error("Invalid invoice data")
+	}
+
+	const doc = await enrichReceiptData(invoiceData)
+
 	try {
-		if (!invoiceData || !invoiceData.name) {
-			throw new Error("Invalid invoice data")
-		}
-
-		const doc = await enrichReceiptData(invoiceData)
-
-		// WebUSB paired device — await reconnect before check (cold start races with async reconnect)
-		const usb = useWebUSBPrinter()
-		if ("usb" in navigator) {
-			await usb.reconnect()
-		}
-		if (usb.isReady.value) {
-			log.info("Printing via WebUSB ESC/POS")
-			await usb.printInvoice(doc, { paperWidthMm: usb.paperWidth.value })
-			if (usb.cashDrawerKickEnabled.value && doc.pos_profile) {
-				await logCashDrawerPrintBill(doc.pos_profile, doc.name)
-			}
-			return true
-		}
-
-		const doctype = doc.doctype || "Sales Invoice"
-		const format = printFormat || "POS Next Receipt"
-
-		const params = new URLSearchParams({
-			doctype: doctype,
-			name: doc.name,
-			format: format,
-			no_letterhead: letterhead ? 0 : 1,
-			_lang: "en",
-			trigger_print: 1,
-			_t: Date.now(),
-		})
-
-		if (letterhead) {
-			params.append("letterhead", letterhead)
-		}
-
-		const printUrl = `/printview?${params.toString()}`
-
-		// In standalone PWA, window.open() is blocked — use iframe instead.
-		// On regular web, use window.open() so that Frappe's configured @page CSS
-		// (e.g. size: 80mm auto) is respected by Chrome's print dialog.
-		if (isStandalonePWA()) {
-			await printUrlViaIframe(printUrl)
-			return true
-		}
-
-		const printWindow = window.open(printUrl, "_blank", "width=800,height=600")
-		if (!printWindow) {
-			// Popup blocked — fall back to iframe
-			await printUrlViaIframe(printUrl)
-		}
+		await printInvoiceOnce(doc, printFormat, letterhead)
+		await markInvoicePrintedIfNeeded(doc.name, doc)
 		return true
 	} catch (error) {
 		log.error("Error printing with Frappe print format:", error)
-		const doc = await enrichReceiptData(invoiceData)
-		return printInvoiceCustom(doc, { paperWidth: 58 })
+		await printInvoiceCustom(doc, { paperWidth: 58 })
+		await markInvoicePrintedIfNeeded(doc.name, doc)
+		return true
 	}
 }
 
@@ -705,19 +754,33 @@ export async function printInvoiceByName(
 				await usb.reconnect()
 			}
 			if (usb.isReady.value) {
-				await usb.printInvoice(invoiceDoc, {
-					paperWidthMm:  usb.paperWidth.value,
-					einvoiceQr:    invoiceDoc.einvoice_self_service_qr || null,
-				})
-				if (usb.cashDrawerKickEnabled.value && invoiceDoc.pos_profile) {
-					await logCashDrawerPrintBill(invoiceDoc.pos_profile, invoiceDoc.name)
+				const physicalCopies = getUsbPhysicalCopies(invoiceDoc)
+				for (let i = 0; i < physicalCopies; i++) {
+					await usb.printInvoice(invoiceDoc, {
+						paperWidthMm: usb.paperWidth.value,
+						einvoiceQr: invoiceDoc.einvoice_self_service_qr || null,
+						openCashDrawer:
+							i === 0 && usb.cashDrawerKickEnabled.value,
+					})
+					if (i < physicalCopies - 1) {
+						await delay(USB_DUPLICATE_PRINT_DELAY_MS)
+					}
 				}
+				if (usb.cashDrawerKickEnabled.value && invoiceDoc.pos_profile) {
+					await logCashDrawerPrintBill(
+						invoiceDoc.pos_profile,
+						invoiceDoc.name,
+					)
+				}
+				await markInvoicePrintedIfNeeded(invoiceDoc.name, invoiceDoc)
 				return true
 			}
-			return printInvoiceCustom(invoiceDoc, {
+			await printInvoiceCustom(invoiceDoc, {
 				einvoiceSelfServiceQr: invoiceDoc.einvoice_self_service_qr,
 				paperWidth: paperWidth || 58,
 			})
+			await markInvoicePrintedIfNeeded(invoiceDoc.name, invoiceDoc)
+			return true
 		}
 
 		// If no print format specified and invoice has a POS Profile, fetch its print settings

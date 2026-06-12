@@ -408,6 +408,27 @@
 							</div>
 						</div>
 
+						<!-- Remarks -->
+						<div class="border-t border-gray-200 px-3 py-2 bg-white">
+							<label
+								for="pos-payment-remarks"
+								class="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1.5"
+							>
+								<svg class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 6a2 2 0 012-2h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6z"/>
+								</svg>
+								<span>{{ __('Remarks') }}</span>
+							</label>
+							<textarea
+								id="pos-payment-remarks"
+								v-model="localRemarks"
+								rows="2"
+								:placeholder="__('Note for this invoice...')"
+								class="w-full rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 resize-none"
+								@input="handleRemarksChange"
+							/>
+						</div>
+
 						<!-- Payment Status - Two Equal Halves -->
 						<div class="border-t border-gray-200">
 							<div class="grid grid-cols-2 divide-x divide-gray-200">
@@ -1054,6 +1075,10 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	remarks: {
+		type: String,
+		default: "",
+	},
 	targetDoctype: {
 		type: String,
 		default: "Sales Invoice",
@@ -1076,6 +1101,7 @@ const emit = defineEmits([
 	"update:modelValue",
 	"payment-completed",
 	"update-additional-discount",
+	"update:remarks",
 ])
 
 const show = computed({
@@ -1203,6 +1229,7 @@ function numpadAddPayment() {
 
 // Additional discount state
 const localAdditionalDiscount = ref(0)
+const localRemarks = ref("")
 // Initialize discount type from settings (default to percentage if enabled, otherwise amount)
 const additionalDiscountType = ref(
 	settingsStore.usePercentageDiscount ? "percentage" : "amount",
@@ -2505,6 +2532,10 @@ function decrementDiscount() {
 	handleAdditionalDiscountChange()
 }
 
+function handleRemarksChange() {
+	emit("update:remarks", localRemarks.value || "")
+}
+
 // Watch for dialog open to sync additional discount from parent
 watch(
 	() => props.modelValue,
@@ -2512,6 +2543,7 @@ watch(
 		if (isOpen) {
 			// Only sync when dialog opens, not continuously
 			localAdditionalDiscount.value = props.additionalDiscount || 0
+			localRemarks.value = props.remarks || ""
 		}
 	},
 )

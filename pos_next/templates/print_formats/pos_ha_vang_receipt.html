@@ -18,7 +18,7 @@
 	.store { font-size: 11px; font-weight: bold; margin-top: 2px; }
 	.addr, .phone { font-size: 9px; line-height: 1.35; }
 	.title { font-size: 11px; font-weight: bold; margin: 8px 0 2px; letter-spacing: 0.03em; }
-	.copy-line { font-size: 9px; }
+	.copy-line { font-size: 9px; font-weight: bold; }
 	.reprint { font-size: 10px; font-weight: bold; margin-top: 2px; }
 	.meta { display: table; width: 100%; font-size: 9px; margin: 6px 0; }
 	.meta > div { display: table-cell; width: 50%; vertical-align: top; }
@@ -38,19 +38,98 @@
 	.footer { font-size: 9px; line-height: 1.4; margin-top: 6px; }
 	.policy { font-size: 8px; line-height: 1.35; margin-top: 6px; text-align: justify; }
 	.stars { text-align: center; font-size: 8px; letter-spacing: 1px; margin-top: 6px; }
+	.receipt-copy { page-break-inside: avoid; }
+	.receipt-header {
+		display: flex;
+		align-items: center;
+		gap: 2.5mm;
+		margin-bottom: 5px;
+		padding-bottom: 4px;
+		border-bottom: 1px dotted #999;
+	}
+	.header-logo {
+		flex: 0 0 13mm;
+		width: 13mm;
+		height: 11mm;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		overflow: hidden;
+	}
+	.header-logo img {
+		display: block;
+		max-width: 100%;
+		max-height: 100%;
+		width: auto;
+		height: auto;
+		object-fit: contain;
+		object-position: center center;
+	}
+	.header-text {
+		flex: 1;
+		min-width: 0;
+		text-align: left;
+		line-height: 1.28;
+	}
+	.header-text .store {
+		font-size: 10px;
+		font-weight: bold;
+		margin: 0 0 1px;
+		line-height: 1.2;
+	}
+	.header-text .company {
+		font-size: 8px;
+		font-weight: bold;
+		margin: 0 0 2px;
+		line-height: 1.25;
+	}
+	.header-text .addr {
+		font-size: 7.5px;
+		line-height: 1.3;
+		color: #222;
+		margin-top: 1px;
+	}
+	.header-text .phone {
+		font-size: 7.5px;
+		margin-top: 2px;
+	}
+	.reprint-badge {
+		display: inline-block;
+		margin-top: 4px;
+		padding: 1px 6px;
+		border: 1px solid #000;
+		font-size: 9px;
+		font-weight: bold;
+	}
 	@media print {
 		body { width: 80mm; max-width: 80mm; padding: 4mm 4mm 5mm; }
 	}
 </style>
 
-<div class="center company">{{ R.receipt_company_display_name }}</div>
-<div class="center store">{{ R.store_display_name }}</div>
+{%- macro ha_vang_receipt_copy(copy_label) -%}
+<div class="receipt-copy">
+{% if R.pos_logo_url %}
+<div class="receipt-header">
+	<div class="header-logo">
+		<img src="{{ R.pos_logo_url }}" alt="" />
+	</div>
+	<div class="header-text">
+		{% if R.receipt_company_display_name %}<div class="company">{{ R.receipt_company_display_name }}</div>{% endif %}
+		{% if R.store_display_name %}<div class="store">{{ R.store_display_name }}</div>{% endif %}
+		{% if R.store_address %}<div class="addr">{{ R.store_address }}</div>{% endif %}
+		{% if R.store_phone %}<div class="phone">ĐT: {{ R.store_phone }}</div>{% endif %}
+	</div>
+</div>
+{% else %}
+{% if R.receipt_company_display_name %}<div class="center company">{{ R.receipt_company_display_name }}</div>{% endif %}
+{% if R.store_display_name %}<div class="center store">{{ R.store_display_name }}</div>{% endif %}
 {% if R.store_address %}<div class="center addr">{{ R.store_address }}</div>{% endif %}
-{% if R.store_phone %}<div class="center phone">Điện thoại: {{ R.store_phone }}</div>{% endif %}
+{% if R.store_phone %}<div class="center phone">ĐT: {{ R.store_phone }}</div>{% endif %}
+{% endif %}
 
-<div class="center title">HÓA ĐƠN BÁN LẺ X</div>
-<div class="center copy-line">Liên 1: Lưu hồ sơ</div>
-{% if R.is_reprint %}<div class="center reprint">IN LẠI</div>{% endif %}
+<div class="center title">HÓA ĐƠN BÁN LẺ</div>
+{% if copy_label %}<div class="center copy-line">{{ copy_label }}</div>{% endif %}
+{% if R.is_reprint %}<div class="center"><span class="reprint-badge">IN LẠI</span></div>{% endif %}
 
 <div class="meta">
 	<div>
@@ -118,3 +197,12 @@
 	The purchased items are non-returnable, please refer to the in-store warranty policy for more details.
 </div>
 <div class="stars">****************************************************</div>
+</div>
+{%- endmacro -%}
+
+{% if R.print_in_duplicate %}
+{{ ha_vang_receipt_copy("Liên 1: Khách hàng") }}
+{{ ha_vang_receipt_copy("Liên 2: Lưu hồ sơ") }}
+{% else %}
+{{ ha_vang_receipt_copy("") }}
+{% endif %}

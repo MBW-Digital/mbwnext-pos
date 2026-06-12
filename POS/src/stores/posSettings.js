@@ -64,7 +64,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		allow_manual_cash_drawer: 0,
 		// Sales Persons
 		enable_sales_persons: "Disabled",
-		enable_vnpost_pay: 0,
+		enable_bank_transfer_check: 0,
 	})
 
 	const isLoading = ref(false)
@@ -217,7 +217,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		settings.value.enable_sales_persons !== "Disabled"
 	)
 
-	const enableVnpostPay = computed(() => Boolean(settings.value.enable_vnpost_pay))
+	const enableBankTransfer = computed(() => Boolean(settings.value.enable_bank_transfer_check))
 	const salesPersonsMode = computed(() =>
 		settings.value.enable_sales_persons || "Disabled"
 	)
@@ -325,7 +325,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			input_qty: 0,
 			allow_negative_stock: 0,
 			enable_sales_persons: "Disabled",
-			enable_vnpost_pay: 0,
+			enable_bank_transfer_check: 0,
 		}
 		isLoaded.value = false
 	}
@@ -468,7 +468,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		isSingleSalesPerson,
 		isMultipleSalesPersons,
 
-		enableVnpostPay,
+		enableBankTransfer,
 
 		// Actions
 		loadSettings,

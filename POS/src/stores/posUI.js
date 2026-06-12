@@ -32,11 +32,11 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	const isLoading = ref(true)
 
 	// Dialog states using the dialog composable
-	// Payment & VNPost: plain refs registered globally — POSSale syncs them per invoice tab
+	// Payment & SePay: plain refs registered globally — POSSale syncs them per invoice tab
 	const showPaymentDialog = ref(false)
-	const showVnpostPayDialog = ref(false)
+	const showSePayDialog = ref(false)
 	registerDialog(showPaymentDialog, "payment")
-	registerDialog(showVnpostPayDialog, "vnpost")
+	registerDialog(showSePayDialog, "sepay")
 	const { isOpen: showCustomerDialog } = useDialog("customer")
 	const { isOpen: showSuccessDialog } = useDialog("success")
 	const { isOpen: showOpenShiftDialog } = useDialog("openShift")
@@ -188,7 +188,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showOpenShiftDialog.value = false
 		showCloseShiftDialog.value = false
 		showDraftDialog.value = false
-		showVnpostPayDialog.value = false
+		showSePayDialog.value = false
 		showReturnDialog.value = false
 		showCouponDialog.value = false
 		showOffersDialog.value = false
@@ -213,7 +213,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showOpenShiftDialog,
 		showCloseShiftDialog,
 		showDraftDialog,
-		showVnpostPayDialog,
+		showSePayDialog,
 		showReturnDialog,
 		showCouponDialog,
 		showOffersDialog,

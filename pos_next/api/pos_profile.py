@@ -159,12 +159,12 @@ def get_payment_methods(pos_profile):
 
 		payment_methods = query.run(as_dict=True)
 
-		from pos_next.api.vnpost_pay import _get_vnpost_settings
-		if _get_vnpost_settings(pos_profile):
+		from pos_next.api.sepay import _get_sepay_settings
+		if _get_sepay_settings(pos_profile):
 			for m in payment_methods:
 				name = (m.mode_of_payment or "").lower()
 				if name in ("bank draft", "chuyển khoản", "bank transfer", "wire transfer") or "transfer" in name or "chuyển" in name:
-					m["is_vnpost"] = True
+					m["is_sepay"] = True
 
 		return payment_methods
 	except Exception as e:

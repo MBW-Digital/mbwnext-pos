@@ -122,8 +122,8 @@ def get_pos_settings(pos_profile):
 		frappe.db.get_single_value("Stock Settings", "allow_negative_stock") or 0
 	)
 
-	from pos_next.api.vnpost_pay import _get_vnpost_settings
-	settings["enable_vnpost_pay"] = 1 if _get_vnpost_settings(pos_profile) else 0
+	from pos_next.api.sepay import _get_sepay_settings
+	settings["enable_bank_transfer_check"] = 1 if _get_sepay_settings(pos_profile) else 0
 
 	return settings
 

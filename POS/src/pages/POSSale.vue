@@ -536,13 +536,13 @@
 				</template>
 			</Dialog>
 
-			<VNPostPayBankTransferDialog
-				v-model="activeTabVnpostDialogModel"
-				:invoice-name="invoiceTabsStore.activeTab?.vnpostPayInvoiceName ?? ''"
-				:invoice-amount="invoiceTabsStore.activeTab?.vnpostPayInvoiceAmount ?? 0"
+			<SePayBankTransferDialog
+				v-model="activeTabSePayDialogModel"
+				:invoice-name="invoiceTabsStore.activeTab?.sePayInvoiceName ?? ''"
+				:invoice-amount="invoiceTabsStore.activeTab?.sePayInvoiceAmount ?? 0"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
-				@payment-received="handleVnpostPayPaymentReceived"
+				@payment-received="handleSePayPaymentReceived"
 			/>
 
 			<!-- Draft Invoices Dialog -->
@@ -1034,7 +1034,7 @@ import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
 import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
-import VNPostPayBankTransferDialog from "@/components/sale/VNPostPayBankTransferDialog.vue";
+import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";
 import InvoiceManagement from "@/components/invoices/InvoiceManagement.vue";
@@ -1085,7 +1085,7 @@ const customerSearchStore = useCustomerSearchStore();
 // Note: settingsStore is an alias to posSettingsStore (same Pinia store singleton)
 const settingsStore = posSettingsStore;
 
-// Payment / VNPost: v-model binds to active tab (computed below). Mirror into uiStore for divider / registerDialog.
+// Payment / SePay: v-model binds to active tab (computed below). Mirror into uiStore for divider / registerDialog.
 const activeTabPaymentDialogModel = computed({
 	get() {
 		return invoiceTabsStore.activeTab?.showPaymentDialog ?? false;
@@ -1096,13 +1096,13 @@ const activeTabPaymentDialogModel = computed({
 	},
 });
 
-const activeTabVnpostDialogModel = computed({
+const activeTabSePayDialogModel = computed({
 	get() {
-		return invoiceTabsStore.activeTab?.showVnpostPayDialog ?? false;
+		return invoiceTabsStore.activeTab?.showSePayDialog ?? false;
 	},
 	set(v) {
 		const t = invoiceTabsStore.activeTab;
-		if (t) t.showVnpostPayDialog = v;
+		if (t) t.showSePayDialog = v;
 	},
 });
 
@@ -1110,12 +1110,12 @@ watch(
 	() => [
 		invoiceTabsStore.activeTabId,
 		invoiceTabsStore.activeTab?.showPaymentDialog,
-		invoiceTabsStore.activeTab?.showVnpostPayDialog,
+		invoiceTabsStore.activeTab?.showSePayDialog,
 	],
 	() => {
 		const t = invoiceTabsStore.activeTab;
 		uiStore.showPaymentDialog = t?.showPaymentDialog ?? false;
-		uiStore.showVnpostPayDialog = t?.showVnpostPayDialog ?? false;
+		uiStore.showSePayDialog = t?.showSePayDialog ?? false;
 	},
 	{ immediate: true },
 );
@@ -1125,9 +1125,9 @@ function setActiveTabPaymentDialog(open) {
 	if (t) t.showPaymentDialog = !!open;
 }
 
-function setActiveTabVnpostDialog(open) {
+function setActiveTabSePayDialog(open) {
 	const t = invoiceTabsStore.activeTab;
-	if (t) t.showVnpostPayDialog = !!open;
+	if (t) t.showSePayDialog = !!open;
 }
 
 // Real-time stock updates
@@ -2298,21 +2298,21 @@ async function handlePaymentCompleted(paymentData) {
 			return;
 		}
 
-		if (paymentData.is_vnpost_pending) {
+		if (paymentData.is_sepay_pending) {
 			if (paymentData.sales_team?.length) cartStore.salesTeam = paymentData.sales_team;
 			if (paymentData.delivery_date) cartStore.setDeliveryDate(paymentData.delivery_date);
 
-			const draft = await cartStore.createDraftForVnpostPay(
+			const draft = await cartStore.createDraftForSePay(
 				cartStore.targetDoctype,
 				paymentData.delivery_date || cartStore.deliveryDate,
 				paymentData.payments || []
 			);
 			const tab = invoiceTabsStore.activeTab;
 			if (tab) {
-				tab.vnpostPayInvoiceName = draft.name;
-				tab.vnpostPayInvoiceAmount = draft.vnpost_amount ?? draft.grand_total;
+				tab.sePayInvoiceName = draft.name;
+				tab.sePayInvoiceAmount = draft.sepay_amount ?? draft.grand_total;
 			}
-			setActiveTabVnpostDialog(true);
+			setActiveTabSePayDialog(true);
 			return;
 		}
 
@@ -2448,18 +2448,18 @@ async function handlePaymentCompleted(paymentData) {
 	}
 }
 
-async function handleVnpostPayPaymentReceived() {
+async function handleSePayPaymentReceived() {
 	const tab = invoiceTabsStore.activeTab;
-	const invoiceName = tab?.vnpostPayInvoiceName ?? "";
-	const invoiceAmount = tab?.vnpostPayInvoiceAmount ?? 0;
+	const invoiceName = tab?.sePayInvoiceName ?? "";
+	const invoiceAmount = tab?.sePayInvoiceAmount ?? 0;
 	const soldItemCodes = cartStore.invoiceItems.map((item) => item.item_code);
 
-	setActiveTabVnpostDialog(false);
+	setActiveTabSePayDialog(false);
 	cartStore.clearCart();
 	previousCartHash = "";
 	if (tab) {
-		tab.vnpostPayInvoiceName = "";
-		tab.vnpostPayInvoiceAmount = 0;
+		tab.sePayInvoiceName = "";
+		tab.sePayInvoiceAmount = 0;
 	}
 
 	if (cartStore.currentDraftId) {
@@ -2618,14 +2618,14 @@ function _closeActiveTabDialogs() {
 	const t = invoiceTabsStore.activeTab;
 	if (!t) return;
 	t.showPaymentDialog = false;
-	t.showVnpostPayDialog = false;
+	t.showSePayDialog = false;
 	t.pendingPaymentAfterCustomer = false;
 }
 
-/** Sau khi switch sang tab mới, mở lại VNPost dialog nếu tab đó có giao dịch đang chờ. */
-function _maybeReopenVnpostOnTab(tab) {
-	if (tab?.vnpostPayInvoiceName) {
-		nextTick(() => setActiveTabVnpostDialog(true));
+/** Sau khi switch sang tab mới, mở lại SePay dialog nếu tab đó có giao dịch đang chờ. */
+function _maybeReopenSePayOnTab(tab) {
+	if (tab?.sePayInvoiceName) {
+		nextTick(() => setActiveTabSePayDialog(true));
 	}
 }
 
@@ -2715,8 +2715,8 @@ function handleInvoiceTabClick(tabId) {
 	saveActiveTabSnapshot();
 	restoreTabSnapshot(tabId);
 	invoiceTabsStore.setActiveTab(tabId);
-	// Mở lại VNPost dialog nếu tab đích đang có giao dịch chờ QR
-	_maybeReopenVnpostOnTab(invoiceTabsStore.activeTab);
+	// Mở lại SePay dialog nếu tab đích đang có giao dịch chờ QR
+	_maybeReopenSePayOnTab(invoiceTabsStore.activeTab);
 }
 
 function handleCloseInvoiceTab(tabId) {
@@ -2728,7 +2728,7 @@ function handleCloseInvoiceTab(tabId) {
 	const nextActiveId = invoiceTabsStore.closeTab(tabId);
 	if (isActive) {
 		restoreTabSnapshot(nextActiveId);
-		_maybeReopenVnpostOnTab(invoiceTabsStore.activeTab);
+		_maybeReopenSePayOnTab(invoiceTabsStore.activeTab);
 	}
 }
 

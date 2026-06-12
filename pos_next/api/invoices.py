@@ -1047,11 +1047,6 @@ def update_invoice(data):
         invoice_doc.docstatus = 0
         invoice_doc.save()
 
-        # VNPost: submit with cash/other payments now → Partly Paid; bank transfer added on callback/confirm
-        if cint(data.get("submit_for_vnpost")) and doctype == "Sales Invoice":
-            submit_pos_invoice_for_bank_transfer(invoice_doc.name)
-            invoice_doc = frappe.get_doc("Sales Invoice", invoice_doc.name)
-
         return invoice_doc.as_dict()
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Update Invoice Error")
@@ -1655,6 +1650,48 @@ def get_invoice(invoice_name):
 
 
 @frappe.whitelist()
+def get_print_receipt_data(invoice_name, include_sepay_qr=True):
+	"""
+	Receipt for thermal print, optional SePay VietQR for bank transfer.
+	"""
+	data = get_invoice(invoice_name)
+	from pos_next.api.receipt_print import enrich_invoice_dict_for_print
+
+	data.update(enrich_invoice_dict_for_print(data))
+
+	try:
+		from pos_next.api.einvoice_self_service import get_self_service_qr_payload
+
+		es = get_self_service_qr_payload(invoice_name)
+		if es:
+			data["einvoice_self_service_qr"] = es
+	except Exception:
+		pass
+
+	if not cint(include_sepay_qr) or not data.get("pos_profile"):
+		return data
+
+	outstanding = flt(data.get("outstanding_amount"))
+	if outstanding <= 0:
+		return data
+
+	amount = outstanding
+
+	try:
+		from pos_next.api.sepay import get_vietqr_url
+		qr = get_vietqr_url(
+			pos_profile=data["pos_profile"],
+			amount=amount,
+			invoice_id=data["name"],
+			template="compact",
+		)
+		if qr and qr.get("enabled") and qr.get("qr_url"):
+			data["sepay_qr"] = qr
+	except Exception:
+		pass
+	return data
+
+@frappe.whitelist()
 def mark_invoice_printed(invoice_name):
 	"""Đánh dấu hóa đơn đã in — lần in sau hiển thị IN LẠI trên phiếu."""
 	if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
@@ -1672,53 +1709,6 @@ def mark_invoice_printed(invoice_name):
 	)
 	frappe.db.commit()
 	return {"ok": True}
-
-
-@frappe.whitelist()
-def get_print_receipt_data(invoice_name, include_vnpost_qr=True, include_sepay_qr=None):
-	"""
-	Receipt for thermal print, optional VNPost Pay VietQR / QR image URL.
-	`include_sepay_qr` is deprecated: same as include_vnpost_qr.
-	"""
-	if include_sepay_qr is not None:
-		include_vnpost_qr = include_sepay_qr
-	data = get_invoice(invoice_name)
-	from pos_next.api.receipt_print import enrich_invoice_dict_for_print
-
-	data.update(enrich_invoice_dict_for_print(data))
-
-	try:
-		from pos_next.api.einvoice_self_service import get_self_service_qr_payload
-
-		es = get_self_service_qr_payload(invoice_name)
-		if es:
-			data["einvoice_self_service_qr"] = es
-	except Exception:
-		pass
-
-	if not cint(include_vnpost_qr) or not data.get("pos_profile"):
-		return data
-
-	# VietQR on receipt only when invoice still has balance due (not fully paid).
-	outstanding = flt(data.get("outstanding_amount"))
-	if outstanding <= 0:
-		return data
-
-	amount = outstanding
-
-	try:
-		from pos_next.api.vnpost_pay import get_vietqr_url
-		qr = get_vietqr_url(
-			pos_profile=data["pos_profile"],
-			amount=amount,
-			invoice_id=data["name"],
-			template="compact",
-		)
-		if qr and qr.get("enabled") and (qr.get("qr_url") or (qr.get("sdk") or {}).get("baseUrl")):
-			data["vnpost_qr"] = qr
-	except Exception:
-		pass
-	return data
 
 
 @frappe.whitelist()

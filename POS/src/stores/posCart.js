@@ -114,7 +114,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		removeItem,
 		updateItemQuantity,
 		submitInvoice: baseSubmitInvoice,
-		createDraftForVnpostPay: baseCreateDraftForVnpostPay,
+		createDraftForSePay: baseCreateDraftForSePay,
 		clearCart: clearInvoiceCart,
 		loadTaxRules,
 		setTaxInclusive,
@@ -992,12 +992,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		return result
 	}
 
-	async function createDraftForVnpostPayWithGifts(
+	async function createDraftForSePayWithGifts(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		existingPayments = [],
 	) {
-		return baseCreateDraftForVnpostPay(
+		return baseCreateDraftForSePay(
 			targetDoctype,
 			deliveryDate,
 			existingPayments,
@@ -2974,7 +2974,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		loadTaxRules,
 		setTaxInclusive,
 		submitInvoice,
-		createDraftForVnpostPay: createDraftForVnpostPayWithGifts,
+		createDraftForSePay: createDraftForSePayWithGifts,
 		applyDiscountToCart,
 		removeDiscountFromCart,
 		applyOffer,

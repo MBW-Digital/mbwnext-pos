@@ -77,7 +77,7 @@
                       {{ method.mode_of_payment }}
                     </label>
                   </div>
-                  <div v-if="!isCashMethod(method.mode_of_payment)" class="w-32">
+                  <div v-if="!isCashMethod(method.mode_of_payment) || !useDenominationCounting" class="w-32">
                     <Input
                       v-model="openingBalances[method.mode_of_payment]"
                       type="number"
@@ -94,7 +94,7 @@
                   </div>
                 </div>
 
-                <div v-if="isCashMethod(method.mode_of_payment)" class="mt-3">
+                <div v-if="isCashMethod(method.mode_of_payment) && useDenominationCounting" class="mt-3">
                   <CashDenominationCounter
                     :input-id-prefix="`opening-${method.mode_of_payment}`"
                     v-model="openingBalances[method.mode_of_payment]"
@@ -216,6 +216,7 @@ import CashDenominationCounter from "./common/CashDenominationCounter.vue"
 import ShiftClosingDialog from "./ShiftClosingDialog.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
 import { isCashPaymentMethod } from "../composables/useCashDenominations"
+import { usePOSSettingsStore } from "../stores/posSettings"
 
 const props = defineProps({
 	modelValue: Boolean,
@@ -231,6 +232,10 @@ const open = computed({
 const { createOpeningShift, getOpeningDialogData, checkOpeningShift } =
 	useShift()
 const { formatDateTime, formatCurrency } = useFormatters()
+const posSettingsStore = usePOSSettingsStore()
+const useDenominationCounting = computed(
+	() => posSettingsStore.useDenominationCounting,
+)
 
 function isCashMethod(methodName) {
 	return isCashPaymentMethod(methodName)

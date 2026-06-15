@@ -38,6 +38,7 @@
   "allow_sales_order",
   "allow_select_sales_order",
   "create_only_sales_order",
+  "opening_closing_cash_configuration",
   "column_break_operations",
   "allow_return_without_invoice",
   "return_validity_days",
@@ -68,6 +69,7 @@
   "section_break_misc",
   "input_qty",
   "allow_negative_stock",
+  "opening_closing_cash_configuration",
   "barcode_tab",
   "barcode_rules"
  ],
@@ -507,6 +509,13 @@
    "label": "Allow Negative Stock"
   },
   {
+   "default": "0",
+   "description": "When enabled, cashiers must enter cash counts by denomination when opening/closing a shift. When disabled, only the total cash amount is required.",
+   "fieldname": "opening_closing_cash_configuration",
+   "fieldtype": "Check",
+   "label": "Count Cash By Denomination"
+  },
+  {
    "fieldname": "barcode_tab",
    "fieldtype": "Tab Break",
    "label": "Barcode"
@@ -520,8 +529,8 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-05 08:57:44.871343",
- "modified_by": "Administrator",
+ "modified": "2026-06-15 11:33:51.421373",
+ "modified_by": "dovietthang.btm@gmail.com",
  "module": "POS Next",
  "name": "POS Settings",
  "naming_rule": "By fieldname",

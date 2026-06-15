@@ -295,7 +295,7 @@
                         {{ __('Actual Amount *') }}
                       </label>
                       <Input
-                        v-if="!isCashMethod(payment.mode_of_payment)"
+                        v-if="!isCashMethod(payment.mode_of_payment) || !useDenominationCounting"
                         :modelValue="payment.closing_amount"
                         @update:modelValue="(value) => updateClosingAmount(payment, value)"
                         type="number"
@@ -316,7 +316,7 @@
                   </div>
 
                   <div
-                    v-if="isCashMethod(payment.mode_of_payment) && !showSuccessReport"
+                    v-if="isCashMethod(payment.mode_of_payment) && !showSuccessReport && useDenominationCounting"
                     class="mt-3"
                   >
                     <CashDenominationCounter
@@ -491,6 +491,7 @@ import { useFormatters } from "../composables/useFormatters"
 import CashDenominationCounter from "./common/CashDenominationCounter.vue"
 import TranslatedHTML from "./common/TranslatedHTML.vue"
 import { isCashPaymentMethod, isBankTransferPaymentMethod } from "../composables/useCashDenominations"
+import { usePOSSettingsStore } from "../stores/posSettings"
 
 const props = defineProps({
 	modelValue: {
@@ -513,6 +514,10 @@ const open = computed({
 
 const { getClosingShiftData, submitClosingShift } = useShift()
 const { formatCurrency, formatQuantity, formatDateTime, formatTime } = useFormatters()
+const posSettingsStore = usePOSSettingsStore()
+const useDenominationCounting = computed(
+	() => posSettingsStore.useDenominationCounting,
+)
 
 const closingData = ref(null)
 const closingDataResource = getClosingShiftData

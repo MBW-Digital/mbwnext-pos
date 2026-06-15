@@ -8,7 +8,6 @@ Event handlers for Sales Invoice document events
 
 import frappe
 from frappe import _
-from frappe.utils import cint
 
 
 def validate(doc, method=None):
@@ -74,48 +73,37 @@ def apply_tax_inclusive(doc):
 
 def auto_assign_loyalty_program_on_invoice(doc):
 	"""
-	Auto-assign loyalty program to customer if loyalty is enabled in POS Settings
-	but customer doesn't have a loyalty program yet.
+	Auto-assign loyalty program to customer if they qualify for one but
+	don't have a loyalty program yet.
 
-	This ensures customers created before loyalty was enabled can still earn points.
+	Matches the customer against Loyalty Programs with auto_opt_in enabled,
+	respecting each program's Customer Group / Customer Territory restrictions
+	(same matching rules as erpnext.selling.doctype.customer.customer.set_loyalty_program).
+	This ensures customers created before loyalty was enabled (or before they
+	matched a program's conditions) can still be opted in at the point of sale.
 
 	Args:
 		doc: Sales Invoice document
 	"""
-	if not doc.is_pos or not doc.pos_profile or not doc.customer:
+	if not doc.is_pos or not doc.customer:
 		return
 
-	# Check if customer already has a loyalty program
-	customer_loyalty = frappe.db.get_value("Customer", doc.customer, "loyalty_program")
-	if customer_loyalty:
+	customer = frappe.get_cached_doc("Customer", doc.customer)
+	if customer.loyalty_program:
 		return
 
-	# Get POS Settings
-	pos_settings = frappe.db.get_value(
-		"POS Settings",
-		{"pos_profile": doc.pos_profile},
-		["enable_loyalty_program", "default_loyalty_program"],
-		as_dict=True
-	)
+	from erpnext.selling.doctype.customer.customer import get_loyalty_programs
 
-	if not pos_settings:
-		return
+	loyalty_programs = get_loyalty_programs(customer)
 
-	if not cint(pos_settings.get("enable_loyalty_program")):
-		return
-
-	loyalty_program = pos_settings.get("default_loyalty_program")
-	if not loyalty_program:
-		return
-
-	# Assign loyalty program to customer
-	frappe.db.set_value(
-		"Customer",
-		doc.customer,
-		"loyalty_program",
-		loyalty_program,
-		update_modified=False
-	)
+	if len(loyalty_programs) == 1:
+		frappe.db.set_value(
+			"Customer",
+			doc.customer,
+			"loyalty_program",
+			loyalty_programs[0],
+			update_modified=False
+		)
 
 
 def before_cancel(doc, method=None):

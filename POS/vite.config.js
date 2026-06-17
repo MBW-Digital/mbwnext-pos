@@ -70,6 +70,7 @@ export default defineConfig({
 		VitePWA({
 			registerType: "autoUpdate",
 			injectRegister: null,
+			manifestFilename: "manifest.json",
 			includeAssets: [
 				"favicon.png",
 				"icon.svg",

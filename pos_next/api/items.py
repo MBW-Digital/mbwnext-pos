@@ -9,7 +9,7 @@ from erpnext.stock.doctype.batch.batch import get_batch_qty
 from erpnext.stock.get_item_details import get_item_details as erpnext_get_item_details
 from frappe import _
 from frappe.query_builder import DocType, functions as fn
-from frappe.utils import flt, nowdate, nowtime
+from frappe.utils import cint, flt, nowdate, nowtime
 
 ITEM_RESULT_FIELDS = [
 	"name as item_code",
@@ -610,6 +610,13 @@ def get_item_variants(template_item, pos_profile):
 				fn.Coalesce(Item.custom_company, "").isin([pos_profile_doc.company, ""])
 			)
 
+		# Brand whitelist from POS Profile
+		brand_rows = getattr(pos_profile_doc, "custom_brand_groups", None) or []
+		if brand_rows:
+			allowed_brands = [row.brand for row in brand_rows if row.brand]
+			if allowed_brands:
+				query = query.where(fn.Coalesce(Item.brand, "").isin(allowed_brands))
+
 		variants = query.run(as_dict=True)
 
 		# If no variants found, return empty with helpful message
@@ -726,7 +733,7 @@ def get_item_variants(template_item, pos_profile):
 		frappe.throw(_("Error fetching item variants: {0}").format(str(e)))
 
 
-def _build_item_base_conditions(pos_profile_doc, item_group=None):
+def _build_item_base_conditions(pos_profile_doc, item_group=None, brand_list=None):
 	"""Build reusable SQL conditions for POS item search."""
 	conditions = [
 		"i.disabled = 0",
@@ -742,6 +749,11 @@ def _build_item_base_conditions(pos_profile_doc, item_group=None):
 	if item_group:
 		conditions.append("item_group = %s")
 		params.append(item_group)
+
+	if brand_list:
+		placeholders = ", ".join(["%s"] * len(brand_list))
+		conditions.append(f"IFNULL(i.brand, '') IN ({placeholders})")
+		params.extend(brand_list)
 
 	return conditions, params
 
@@ -1097,8 +1109,32 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 		# Add company filter - show items for specific company + global items (empty company)
 		# Global items (custom_company is empty) are available to all companies
 
+		# Check if out-of-stock items should be hidden
+		hide_out_of_stock = False
+		bin_join = ""
+		join_params = []
+		if pos_profile_doc.warehouse:
+			hide_out_of_stock = cint(frappe.db.get_value(
+				"POS Settings",
+				{"pos_profile": pos_profile},
+				"hide_out_of_stock_items"
+			))
+
+		# Brand whitelist from POS Profile
+		brand_list = None
+		brand_rows = getattr(pos_profile_doc, "custom_brand_groups", None) or []
+		if brand_rows:
+			brand_list = [row.brand for row in brand_rows if row.brand]
+
 		# Build base conditions
-		conditions, params = _build_item_base_conditions(pos_profile_doc, item_group)
+		conditions, params = _build_item_base_conditions(pos_profile_doc, item_group, brand_list)
+
+		if hide_out_of_stock:
+			bin_join = "LEFT JOIN `tabBin` bin ON bin.item_code = i.name AND bin.warehouse = %s"
+			join_params.append(pos_profile_doc.warehouse)
+			conditions.append(
+				"(i.is_stock_item = 0 OR i.has_variants = 1 OR COALESCE(bin.actual_qty, 0) > 0)"
+			)
 
 		# Build column list with table alias
 		item_columns = ",\n\t".join([f"i.{col}" for col in ITEM_RESULT_FIELDS])
@@ -1153,15 +1189,15 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 				GROUP_CONCAT(DISTINCT ib.uom) as barcode_uoms
 			FROM `tabItem` i
 			LEFT JOIN `tabItem Barcode` ib ON ib.parent = i.name
+			{bin_join}
 			WHERE {where_clause}
 			GROUP BY {group_by_columns}
 			ORDER BY {order_by}
 			LIMIT %s OFFSET %s
 		"""
 
-		params.extend(score_params)
-		params.extend([limit, start])
-		items = frappe.db.sql(query, tuple(params), as_dict=1)
+		all_params = join_params + params + score_params + [limit, start]
+		items = frappe.db.sql(query, tuple(all_params), as_dict=1)
 
 		# Prepare maps for enrichment
 		item_codes = [item["item_code"] for item in items]

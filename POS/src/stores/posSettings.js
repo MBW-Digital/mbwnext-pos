@@ -61,6 +61,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Miscellaneous
 		input_qty: 0,
 		allow_negative_stock: 0,
+		hide_out_of_stock_items: 0,
 		allow_manual_cash_drawer: 0,
 		// Sales Persons
 		enable_sales_persons: "Disabled",
@@ -213,6 +214,9 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	const allowNegativeStock = computed(() =>
 		Boolean(settings.value.allow_negative_stock),
 	)
+	const hideOutOfStockItems = computed(() =>
+		Boolean(settings.value.hide_out_of_stock_items),
+	)
 
 	// Computed - Opening/Closing Cash
 	const useDenominationCounting = computed(() =>
@@ -331,6 +335,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			allow_change_posting_date: 0,
 			input_qty: 0,
 			allow_negative_stock: 0,
+			hide_out_of_stock_items: 0,
 			enable_sales_persons: "Disabled",
 			enable_bank_transfer_check: 0,
 			opening_closing_cash_configuration: 0,
@@ -469,6 +474,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		// Computed - Miscellaneous
 		inputQty,
 		allowNegativeStock,
+		hideOutOfStockItems,
 
 		// Computed - Opening/Closing Cash
 		useDenominationCounting,

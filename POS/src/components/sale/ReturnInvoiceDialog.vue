@@ -383,11 +383,11 @@
 								<!-- Rate & Amount -->
 								<div class="text-center min-w-[100px]">
 									<p class="text-sm font-bold text-gray-900">
-										{{ formatCurrency((item.rate_with_tax || item.rate) * item.return_qty) }}
+										{{ formatCurrency(lineReturnDisplayAmount(item)) }}
 									</p>
 									<p class="text-xs text-gray-500 mt-0.5 flex items-center gap-1 flex-wrap justify-center">
 										<span>@ {{ formatCurrency(item.price_list_rate || item.rate) }}/{{ item.uom }}</span>
-										<span v-if="item.discount_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(item.discount_per_unit) }}</span>
+										<span v-if="lineDiscountDisplay(item) > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(lineDiscountDisplay(item)) }}</span>
 										<span v-if="item.tax_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">+{{ formatCurrency(item.tax_per_unit) }}</span>
 									</p>
 								</div>
@@ -470,11 +470,11 @@
 									<span class="text-xs text-gray-600 text-start">{{ __('Amount:') }}</span>
 									<div class="text-end">
 										<p class="text-base font-bold text-gray-900">
-											{{ formatCurrency((item.rate_with_tax || item.rate) * item.return_qty) }}
+											{{ formatCurrency(lineReturnDisplayAmount(item)) }}
 										</p>
 										<p class="text-xs text-gray-500 flex items-center gap-1 flex-wrap justify-end">
 											<span>@ {{ formatCurrency(item.price_list_rate || item.rate) }}/{{ item.uom }}</span>
-											<span v-if="item.discount_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(item.discount_per_unit) }}</span>
+											<span v-if="lineDiscountDisplay(item) > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(lineDiscountDisplay(item)) }}</span>
 											<span v-if="item.tax_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">+{{ formatCurrency(item.tax_per_unit) }}</span>
 										</p>
 									</div>
@@ -1160,7 +1160,10 @@ const createReturnResource = createResource({
 				item_code: item.item_code,
 				item_name: item.item_name,
 				qty: -Math.abs(item.return_qty),
-				rate: item.rate,
+				rate:
+					shouldUseListPriceRefund.value && !item.is_free_item
+						? item.price_list_rate || item.rate
+						: item.rate,
 				warehouse: item.warehouse,
 				uom: item.uom,
 				conversion_factor: item.conversion_factor || 1,
@@ -1326,6 +1329,24 @@ function lineReturnAtListPrice(item) {
 	return roundCurrency(qty * (priceListRate + taxOnList))
 }
 
+function lineReturnDisplayAmount(item) {
+	if (item.is_free_item) return 0
+	if (shouldUseListPriceRefund.value) return lineReturnAtListPrice(item)
+	const qty = Number(item.return_qty) || 0
+	return roundCurrency(qty * (item.rate_with_tax || item.rate))
+}
+
+function lineDiscountDisplay(item) {
+	if (
+		shouldUseListPriceRefund.value &&
+		!needsKmReclaim.value &&
+		!kmReclaimConfirmed.value
+	) {
+		return 0
+	}
+	return Number(item.discount_per_unit) || 0
+}
+
 // Giá trị còn lại để so với min_amt — cùng cơ sở với POS lúc bán (price_list_rate × qty, trước CK dòng/bill)
 const remainingOrderValue = computed(() => {
 	if (!transactionRuleData.value) return 0
@@ -1354,6 +1375,16 @@ const needsKmReclaim = computed(() => {
 	if (threshold <= 0) return false
 
 	return remainingOrderValue.value < threshold
+})
+
+// Trả một phần có CK bill-level: hoàn theo giá list (+ thuế), không phân bổ CK lên dòng trả
+const shouldUseListPriceRefund = computed(() => {
+	if (!transactionRuleData.value || !selectedItems.value.length) return false
+	const headerDiscount =
+		Number(transactionRuleData.value.header_discount_amount) || 0
+	if (headerDiscount <= 0) return false
+	if (isFullReturn.value || allPaidItemsFullyReturned.value) return false
+	return true
 })
 
 // Map: item.name (= sales_invoice_item row ID) → item for O(1) linkage lookup
@@ -1403,16 +1434,23 @@ const returnTotalAtListPrice = computed(() =>
 )
 
 // Số tiền thực hoàn cho khách
+const partialRefundBase = computed(() => {
+	if (shouldUseListPriceRefund.value) {
+		if (needsKmReclaim.value || kmReclaimConfirmed.value) {
+			return roundCurrency(
+				Math.max(0, returnTotalAtListPrice.value - kmReclaimDeduction.value),
+			)
+		}
+		return returnTotalAtListPrice.value
+	}
+	return returnTotal.value
+})
+
 const effectiveRefundAmount = computed(() => {
 	if (showPartialBreakdown.value) {
 		return maxRefundableAmount.value
 	}
-	if (needsKmReclaim.value || kmReclaimConfirmed.value) {
-		return roundCurrency(
-			Math.max(0, returnTotalAtListPrice.value - kmReclaimDeduction.value),
-		)
-	}
-	return returnTotal.value
+	return partialRefundBase.value
 })
 
 const totalPaymentAmount = computed(() =>
@@ -1426,20 +1464,20 @@ const totalPaymentAmount = computed(() =>
 
 const maxRefundableAmount = computed(() => {
 	if (!originalInvoice.value) return 0
-	if (!isPartiallyPaid.value && !isOriginalCreditSale.value)
-		return returnTotal.value
+	const refundBase = partialRefundBase.value
+	if (!isPartiallyPaid.value && !isOriginalCreditSale.value) return refundBase
 
 	const grandTotal = Math.abs(originalInvoice.value.grand_total) || 1
-	const returnRatio = returnTotal.value / grandTotal
+	const returnRatio = refundBase / grandTotal
 	return roundCurrency(
-		Math.min(returnTotal.value, originalPaidAmount.value * returnRatio),
+		Math.min(refundBase, originalPaidAmount.value * returnRatio),
 	)
 })
 
 // Amount that goes toward credit balance (for partially paid invoices)
 const creditAdjustmentAmount = computed(() =>
 	isPartiallyPaid.value
-		? roundCurrency(Math.max(0, returnTotal.value - maxRefundableAmount.value))
+		? roundCurrency(Math.max(0, partialRefundBase.value - maxRefundableAmount.value))
 		: 0,
 )
 

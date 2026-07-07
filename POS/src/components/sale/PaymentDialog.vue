@@ -323,11 +323,17 @@
 								<!-- Grid: 1/2 Counter Input, 1/4 Percentage, 1/4 Amount -->
 								<div class="grid grid-cols-4 gap-1.5">
 									<!-- Counter Input (2/4 = 1/2) -->
-									<div class="col-span-2 flex items-center border border-orange-300 rounded-lg bg-white overflow-hidden">
+									<!-- While a coupon is applied, this shows the formatted amount as
+									     read-only text instead of a raw editable number — a bare
+									     "195650.1" with no currency formatting looked unexplained. -->
+									<div
+										class="col-span-2 flex items-center border rounded-lg overflow-hidden"
+										:class="hasCoupon ? 'border-gray-200 bg-gray-50' : 'border-orange-300 bg-white'"
+									>
 										<!-- Decrement Button -->
 										<button
 											@click="decrementDiscount"
-											:disabled="localAdditionalDiscount <= 0"
+											:disabled="hasCoupon || localAdditionalDiscount <= 0"
 											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 disabled:text-gray-300 disabled:hover:bg-transparent transition-colors flex-shrink-0"
 										>
 											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -335,7 +341,11 @@
 											</svg>
 										</button>
 										<!-- Input -->
+										<div v-if="hasCoupon" class="flex-1 h-9 px-1 text-sm font-semibold text-center flex items-center justify-center text-gray-600">
+											{{ formatCurrency(calculatedAdditionalDiscount) }}
+										</div>
 										<input
+											v-else
 											type="number"
 											v-model.number="localAdditionalDiscount"
 											@input="handleAdditionalDiscountChange"
@@ -348,7 +358,8 @@
 										<!-- Increment Button -->
 										<button
 											@click="incrementDiscount"
-											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 transition-colors flex-shrink-0"
+											:disabled="hasCoupon"
+											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 disabled:text-gray-300 disabled:hover:bg-transparent transition-colors flex-shrink-0"
 										>
 											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -356,13 +367,20 @@
 										</button>
 									</div>
 									<!-- Percentage Button (1/4) -->
+									<!-- Disabled while a coupon is applied: the value is a currency
+									     amount computed from the coupon, not a percentage — switching
+									     to "%" would reinterpret e.g. 195650 as 195650% of subtotal. -->
 									<button
-										@click="additionalDiscountType = 'percentage'; handleAdditionalDiscountTypeChange()"
+										@click="!hasCoupon && (additionalDiscountType = 'percentage', handleAdditionalDiscountTypeChange())"
+										:disabled="hasCoupon"
+										:title="hasCoupon ? __('Not available while a coupon is applied') : ''"
 										:class="[
 											'h-9 rounded-lg text-sm font-bold transition-colors',
 											additionalDiscountType === 'percentage'
 												? 'bg-orange-500 text-white'
-												: 'bg-white text-orange-600 border border-orange-300 hover:bg-orange-50'
+												: hasCoupon
+													? 'bg-gray-100 text-gray-300 border border-gray-200 cursor-not-allowed'
+													: 'bg-white text-orange-600 border border-orange-300 hover:bg-orange-50'
 										]"
 									>
 										%
@@ -391,15 +409,20 @@
 								<span class="text-gray-600 text-start">{{ __('Tax') }}</span>
 								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(taxAmount) }}</span>
 							</div>
-						<!-- Discount (shows the calculated additional discount amount) -->
-						<div v-if="discountAmount > 0" class="flex items-center justify-between text-sm">
-							<span class="text-gray-600 text-start">{{ __('Discount') }}</span>
-							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(discountAmount) }}</span>
+						<!-- Pricing Rule / Promotional Scheme discount (per-item) -->
+						<div v-if="itemLevelDiscountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Pricing Rule Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(itemLevelDiscountAmount) }}</span>
 						</div>
-						<!-- Pricing Rule invoice-level discount -->
-						<div v-if="pricingRuleDiscountAmount > 0" class="flex items-center justify-between text-sm">
-							<span class="text-gray-600 text-start">{{ __('Additional Discount') }}</span>
-							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(pricingRuleDiscountAmount) }}</span>
+						<!-- Coupon discount (additional discount on top of item-level pricing) -->
+						<div v-if="additionalDiscount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Coupon Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(additionalDiscount) }}</span>
+						</div>
+						<!-- Residual/unreconciled invoice-level discount, normally 0 -->
+						<div v-if="otherInvoiceDiscountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Other Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(otherInvoiceDiscountAmount) }}</span>
 						</div>
 						<!-- Grand Total -->
 							<div class="flex items-center justify-between pt-2 mt-1 border-t border-gray-300">
@@ -1067,6 +1090,14 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	taxInclusive: {
+		type: Boolean,
+		default: false,
+	},
+	hasCoupon: {
+		type: Boolean,
+		default: false,
+	},
 	company: {
 		type: String,
 		default: "",
@@ -1665,10 +1696,25 @@ const remainingAvailableCredit = computed(() => {
 	return remaining > 0 ? roundCurrency(remaining) : 0
 })
 
-// Discount từ invoice-level pricing rule (additional_discount_percentage):
-// = (subtotal + tax - item_discount) - grandTotal
-const pricingRuleDiscountAmount = computed(() => {
-	const beforeAdditional = props.subtotal + props.taxAmount - props.discountAmount
+// props.discountAmount (cartStore.totalDiscount) bundles two different things
+// together: the per-item Pricing Rule / Promotional Scheme discount, plus the
+// additional/coupon discount on top. Split them back out so the breakdown
+// shows both instead of one opaque "Discount" number the coupon amount is
+// buried inside of.
+const itemLevelDiscountAmount = computed(() =>
+	roundCurrency(props.discountAmount - (props.additionalDiscount || 0)),
+)
+
+// Residual/unreconciled invoice-level discount (e.g. a backend-side "Additional
+// Discount %" on the Sales Invoice that isn't the coupon flow above). Normally 0.
+// = (subtotal [+ tax, unless tax-inclusive pricing] - item_discount) - grandTotal
+// Must mirror the same tax-inclusive branching as cartStore's own grandTotal
+// computation (useInvoice.js), otherwise this shows a phantom value equal to
+// the tax amount whenever prices already include tax.
+const otherInvoiceDiscountAmount = computed(() => {
+	const beforeAdditional = props.taxInclusive
+		? props.subtotal - props.discountAmount
+		: props.subtotal + props.taxAmount - props.discountAmount
 	const diff = roundCurrency(beforeAdditional - props.grandTotal)
 	return diff > 0.01 ? diff : 0
 })
@@ -2542,6 +2588,16 @@ watch(
 	(isOpen) => {
 		if (isOpen) {
 			// Only sync when dialog opens, not continuously
+			// props.additionalDiscount is always a currency amount (set via
+			// cartStore.additionalDiscount = discountAmount in POSSale.vue),
+			// never a percentage, so the widget must switch to "amount" mode
+			// when syncing one in, or the raw value gets misread as a
+			// percentage (e.g. 279900 -> 279900%). Leave the type alone when
+			// there's nothing to sync so the configured manual-entry default
+			// (settingsStore.usePercentageDiscount) still applies.
+			if (props.additionalDiscount) {
+				additionalDiscountType.value = "amount"
+			}
 			localAdditionalDiscount.value = props.additionalDiscount || 0
 			localRemarks.value = props.remarks || ""
 		}

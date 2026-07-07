@@ -487,6 +487,8 @@
 			:items="cartStore.displayCartItems"
 			:tax-amount="cartStore.totalTax"
 			:discount-amount="cartStore.totalDiscount"
+			:tax-inclusive="cartStore.taxInclusive"
+			:has-coupon="!!cartStore.appliedCoupon"
 			:target-doctype="cartStore.targetDoctype"
 			:is-submitting="cartStore.isSubmitting"
 			@payment-completed="handlePaymentCompleted"
@@ -566,6 +568,7 @@
 			<CouponDialog
 				v-model="uiStore.showCouponDialog"
 				:subtotal="cartStore.subtotal"
+				:net-total="cartStore.netTotal"
 				:items="cartStore.invoiceItems"
 				:pos-profile="shiftStore.profileName"
 				:customer="cartStore.customer?.name || cartStore.customer"

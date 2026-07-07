@@ -162,6 +162,11 @@ const props = defineProps({
 		required: true,
 		note: __("Cart subtotal BEFORE tax - used for discount calculations"),
 	},
+	netTotal: {
+		type: Number,
+		default: null,
+		note: __("Subtotal after item-level (Pricing Rule) discounts, before tax - used when coupon.apply_on is Net Total"),
+	},
 	items: Array,
 	posProfile: String,
 	customer: String,
@@ -290,22 +295,31 @@ async function applyCoupon() {
 			return
 		}
 
-		// Calculate discount on subtotal (before tax) using centralized helper
+		// Base amount to calculate the discount on: "Grand Total" coupons apply on the
+		// gross subtotal, everything else ("Net Total") applies after item-level
+		// (Pricing Rule) discounts are already subtracted — matches apply_coupon_discount()
+		// in pos_coupon.py.
+		const baseAmount =
+			coupon.apply_on === "Grand Total"
+				? props.subtotal
+				: (props.netTotal ?? props.subtotal)
+
+		// Calculate discount using centralized helper
 		// Transform server coupon format to discount object format
 		const discountObj = {
 			percentage: coupon.discount_type === "Percentage" ? coupon.discount_percentage : 0,
 			amount: coupon.discount_type === "Amount" ? coupon.discount_amount : 0,
 		}
 
-		let discountAmount = calculateDiscountAmount(discountObj, props.subtotal)
+		let discountAmount = calculateDiscountAmount(discountObj, baseAmount)
 
 		// Apply maximum discount limit if specified
 		if (coupon.max_amount && discountAmount > coupon.max_amount) {
 			discountAmount = coupon.max_amount
 		}
 
-		// Clamp discount to subtotal to prevent negative totals
-		discountAmount = Math.min(discountAmount, props.subtotal)
+		// Clamp discount to its base amount to prevent negative totals
+		discountAmount = Math.min(discountAmount, baseAmount)
 
 		appliedDiscount.value = {
 			name: coupon.coupon_name || coupon.coupon_code,

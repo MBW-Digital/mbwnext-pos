@@ -182,6 +182,8 @@ export function useInvoice() {
 	}
 
 	const subtotal = computed(() => roundCurrency(_cachedSubtotal.value))
+	// Subtotal minus item-level (Pricing Rule) discounts, before any additional/coupon discount.
+	const netTotal = computed(() => roundCurrency(_cachedSubtotal.value - _cachedTotalDiscount.value))
 	const totalTax = computed(() => {
 		if (transactionPreviewTotals.value?.total_tax > 0) {
 			return roundCurrency(transactionPreviewTotals.value.total_tax)
@@ -624,8 +626,12 @@ export function useInvoice() {
 		// Store coupon code for tracking
 		couponCode.value = discount.code || discount.name
 
-		// Use centralized calculation to handle percentage/amount and clamping
-		let discountAmount = calculateDiscountAmount(discount, subtotal.value)
+		// The caller (CouponDialog) already computed the final currency amount,
+		// respecting the coupon's apply_on (Net Total vs Grand Total) and any
+		// min/max clamps. Recomputing here from discount.percentage against the
+		// gross subtotal.value would silently discard that and re-introduce the
+		// "coupon calculated on gross price instead of net total" bug.
+		let discountAmount = discount.amount ?? 0
 
 		// Clamp discount to subtotal (cannot exceed total)
 		if (discountAmount > subtotal.value) {
@@ -1506,6 +1512,7 @@ export function useInvoice() {
 
 		// Computed
 		subtotal,
+		netTotal,
 		totalTax,
 		totalDiscount,
 		grandTotal,

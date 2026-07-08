@@ -388,7 +388,14 @@ def _fetch_einvoice_pdf_or_portal(token: str) -> dict:
 				except Exception:
 					pass
 		elif provider == "Viettel":
-			raise RuntimeError(_("Viettel PDF download chưa hỗ trợ."))
+			from mbwnext_einvoice.mbwnext_einvoice.api.einvoice import get_einvoice_pdf
+
+			try:
+				viettel_result = get_einvoice_pdf(si_name)
+			except frappe.ValidationError as exc:
+				raise RuntimeError(str(exc)) from exc
+			pdf_b64 = viettel_result.get("pdf_base64") or ""
+			portal_url = viettel_result.get("portal_url") or ""
 		elif provider == "MISA":
 			raise RuntimeError(_("MISA PDF download chưa hỗ trợ."))
 		else:

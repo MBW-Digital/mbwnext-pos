@@ -860,29 +860,37 @@
 						<div class="flex-1 min-w-0 flex flex-col justify-center">
 							<!-- Single row: Name + Qty + UOM + Price + Total + Remove -->
 							<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
-								<div class="flex items-center gap-1 flex-1 min-w-0">
-									<h4
-										class="text-[11px] font-bold truncate leading-tight min-w-0"
-										:class="item.is_free_display ? 'text-green-800' : 'text-gray-900'"
-									>
-										{{ item.item_name }}
-									</h4>
-									<span
-										v-if="item.is_free_display"
-										class="inline-flex items-center px-1 py-0.5 bg-green-600 text-white rounded-full text-[8px] font-bold flex-shrink-0"
-									>
-										{{ __("Free gift") }}
-									</span>
-									<div
-										v-if="item.discount_amount && item.discount_amount > 0"
-										class="inline-flex items-center px-1 py-0.5 bg-red-50 text-red-700 rounded-full text-[8px] font-bold border border-red-200 flex-shrink-0"
-									>
-										{{
-											__("{0}%", [
-												Number(item.discount_percentage).toFixed(0),
-											])
-										}}
+								<div class="flex flex-col min-w-0 flex-1">
+									<div class="flex items-center gap-1 min-w-0">
+										<h4
+											class="text-[11px] font-bold truncate leading-tight min-w-0"
+											:class="item.is_free_display ? 'text-green-800' : 'text-gray-900'"
+										>
+											{{ item.item_name }}
+										</h4>
+										<span
+											v-if="item.is_free_display"
+											class="inline-flex items-center px-1 py-0.5 bg-green-600 text-white rounded-full text-[8px] font-bold flex-shrink-0"
+										>
+											{{ __("Free gift") }}
+										</span>
+										<div
+											v-if="item.discount_amount && item.discount_amount > 0"
+											class="inline-flex items-center px-1 py-0.5 bg-red-50 text-red-700 rounded-full text-[8px] font-bold border border-red-200 flex-shrink-0"
+										>
+											{{
+												__("{0}%", [
+													Number(item.discount_percentage).toFixed(0),
+												])
+											}}
+										</div>
 									</div>
+									<span
+										v-if="item.item_code"
+										class="text-[9px] font-semibold text-gray-600 truncate leading-tight"
+									>
+										{{ item.item_code }}
+									</span>
 								</div>
 
 								<!-- Quantity -->
@@ -1167,7 +1175,8 @@
 										<input
 											type="number"
 											min="0"
-											step="0.01"
+											:step="getInlineDiscountType(item) === 'percentage' ? 'any' : '0.01'"
+											inputmode="decimal"
 											class="w-full h-6 border border-gray-300 rounded ps-1 pe-4 text-[10px] text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
 											:value="
 												getInlineDiscountType(item) === 'percentage'

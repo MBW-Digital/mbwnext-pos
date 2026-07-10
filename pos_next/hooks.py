@@ -240,6 +240,18 @@ doc_events = {
 	"Loyalty Program": {
 		"validate": "pos_next.api.loyalty_program_hooks.validate",
 	},
+	"Pricing Rule": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotional Scheme": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotion Campaign": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
 }
 
 # Scheduled Tasks

@@ -41,6 +41,20 @@ class OfferSource:
 	PRICING_RULE = "Pricing Rule"
 
 
+# Cache for get_offers(): avoids re-scanning `tabPricing Rule` (can be tens of
+# thousands of rows) on every POS item add. Invalidated explicitly whenever a
+# Pricing Rule / Promotional Scheme / Promotion Campaign is saved or deleted
+# (see hooks.py doc_events -> clear_offers_cache), with a TTL as a safety net.
+OFFERS_CACHE_KEY_PREFIX = "pos_offers_v1"
+OFFERS_CACHE_TTL_SECONDS = 3600
+
+
+def clear_offers_cache(doc=None, method=None):
+	"""Invalidate cached POS offers. Hooked to Pricing Rule / Promotional
+	Scheme / Promotion Campaign on_update and on_trash."""
+	frappe.cache().delete_keys(OFFERS_CACHE_KEY_PREFIX)
+
+
 # ============================================================================
 # Data Classes
 # ============================================================================
@@ -509,6 +523,11 @@ def get_offers(pos_profile: str) -> List[Dict]:
 	Returns:
 		List of offer dictionaries
 	"""
+	cache_key = f"{OFFERS_CACHE_KEY_PREFIX}::{pos_profile}"
+	cached = frappe.cache().get_value(cache_key, expires=True)
+	if cached is not None:
+		return cached
+
 	try:
 		profile = frappe.get_doc("POS Profile", pos_profile)
 		date = nowdate()
@@ -531,7 +550,10 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		from pos_next.pricing_rule_warehouse import filter_offer_dicts_by_warehouse
 
 		offer_dicts = filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
-		return filter_offer_dicts_by_warehouse(offer_dicts, pos_warehouse)
+		result = filter_offer_dicts_by_warehouse(offer_dicts, pos_warehouse)
+
+		frappe.cache().set_value(cache_key, result, expires_in_sec=OFFERS_CACHE_TTL_SECONDS)
+		return result
 
 	except Exception as e:
 		frappe.log_error(f"Error fetching offers: {str(e)}", "Offers API")

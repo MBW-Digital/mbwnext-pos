@@ -906,7 +906,7 @@ export function useInvoice() {
 				batch_no: item.batch_no,
 				serial_no: item.serial_no,
 				conversion_factor: item.conversion_factor || 1,
-				discount_percentage: roundCurrency(item.discount_percentage || 0),
+				discount_percentage: Number.parseFloat(item.discount_percentage) || 0,
 				discount_amount: roundCurrency(item.discount_amount || 0),
 				pricing_rules: stringifyPricingRules(item.pricing_rules),
 			}

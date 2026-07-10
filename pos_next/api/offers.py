@@ -394,7 +394,7 @@ class OfferBuilder:
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule.get("promotional_scheme") or rule["name"],
-			description=rule.get("title") or rule.get("promotional_scheme") or "",
+			description=rule.get("custom_promotion_campaign") or "",
 			apply_on=rule["apply_on"],
 			offer="Item Price" if is_price_discount else "Give Product",
 			auto=is_auto,
@@ -637,7 +637,7 @@ def _get_promotional_scheme_offers(
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
 			price_or_product_discount, apply_discount_on, priority,
-			warehouse, valid_from, valid_upto
+			warehouse, valid_from, valid_upto, custom_promotion_campaign
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE

@@ -29,7 +29,7 @@ function createTab(id, label) {
  * Each tab holds a snapshot of cart state managed by usePOSCartStore.
  */
 export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
-	const tabs = ref([createTab("tab-1", "Hóa đơn 1")])
+	const tabs = ref([createTab("tab-1", "Tab 1")])
 
 	const activeTabId = ref("tab-1")
 	const nextIndex = ref(2)
@@ -50,7 +50,7 @@ export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
 			return activeTabId.value
 		}
 		const id = `tab-${nextIndex.value++}`
-		const label = `Hóa đơn ${tabs.value.length + 1}`
+		const label = `Tab ${tabs.value.length + 1}`
 		tabs.value.push(createTab(id, label))
 		activeTabId.value = id
 		return id

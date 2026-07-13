@@ -41,83 +41,83 @@
 			</div>
 		</div>
 
-		<!-- Search Bar with Camera Scan, Barcode Scanner and View Controls -->
-		<div class="px-1.5 sm:px-3 py-1.5 sm:py-2 bg-white border-b border-gray-200">
-			<div class="flex items-center gap-1 sm:gap-2">
-				<div class="flex-1 relative min-w-0">
-					<!-- Search Icon -->
-					<div class="absolute inset-y-0 start-0 ps-2 sm:ps-3 flex items-center pointer-events-none">
-						<svg
-							class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-gray-400"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-							/>
-						</svg>
-					</div>
-					<!-- Search Input -->
-					<input
-						id="item-search"
-						name="item-search"
-						ref="searchInputRef"
-						:value="searchTerm"
-						@input="handleSearchInput"
-						@keydown="handleKeyDown"
-						@click="handleSearchClick"
-						type="text"
-						:placeholder="searchPlaceholder"
-						:class="[
-							'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 pe-16 sm:pe-24 focus:outline-none transition-all',
-							autoAddEnabled
-								? 'border-blue-400 bg-blue-50 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
-								: scannerEnabled
-								? 'border-green-400 bg-green-50 focus:ring-2 focus:ring-green-500 focus:border-transparent'
-								: 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
-						]"
-						:aria-label="__('Search items')"
-					/>
-					<!-- Barcode Scanner + Auto-Add Toggle (inside search input) -->
-					<div class="absolute inset-y-0 end-0 z-10 pe-1 sm:pe-2 flex items-center gap-0.5">
-						<button
-							@click="toggleBarcodeScanner"
-							:class="[
-								'p-1 sm:p-1.5 rounded transition-[background-color] duration-75 touch-manipulation',
-								scannerEnabled
-									? 'bg-green-100 hover:bg-green-200 active:bg-green-300 text-green-700'
-									: 'hover:bg-gray-100 active:bg-gray-200 text-gray-600'
-							]"
-							:title="scannerEnabled ? __('Barcode Scanner: ON (Click to disable)') : __('Barcode Scanner: OFF (Click to enable)')"
-							:aria-label="scannerEnabled ? __('Disable barcode scanner') : __('Enable barcode scanner')"
-						>
-							<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
-							</svg>
-						</button>
-						<button
-							@click="toggleAutoAdd"
-							:class="[
-								'p-1 sm:p-1.5 rounded transition-[background-color] duration-75 flex items-center gap-0.5 text-[9px] sm:text-xs font-medium px-1 sm:px-2 touch-manipulation',
-								autoAddEnabled
-									? 'bg-blue-100 hover:bg-blue-200 active:bg-blue-300 text-blue-700'
-									: 'hover:bg-gray-100 active:bg-gray-200 text-gray-600'
-							]"
-							:title="autoAddEnabled ? __('Auto-Add: ON - Press Enter to add items to cart') : __('Auto-Add: OFF - Click to enable automatic cart addition on Enter')"
-							:aria-label="autoAddEnabled ? __('Disable auto-add') : __('Enable auto-add')"
-						>
-							<svg class="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-							</svg>
-							<span class="hidden xs:inline">{{ __('Auto') }}</span>
-						</button>
-					</div>
+		<!-- Search Bar -->
+		<div class="px-1.5 sm:px-3 pt-1.5 sm:pt-2 bg-white">
+			<div class="relative">
+				<!-- Search Icon -->
+				<div class="absolute inset-y-0 start-0 ps-2 sm:ps-3 flex items-center pointer-events-none">
+					<svg
+						class="h-3.5 w-3.5 sm:h-4 sm:w-4 text-gray-400"
+						fill="none"
+						stroke="currentColor"
+						viewBox="0 0 24 24"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+						/>
+					</svg>
 				</div>
-				<!-- Camera scan button between search and view mode -->
+				<!-- Search Input -->
+				<input
+					id="item-search"
+					name="item-search"
+					ref="searchInputRef"
+					:value="searchTerm"
+					@input="handleSearchInput"
+					@keydown="handleKeyDown"
+					@click="handleSearchClick"
+					type="text"
+					:placeholder="searchPlaceholder"
+					:class="[
+						'w-full text-[11px] sm:text-sm border rounded-lg px-2 sm:px-3 py-2 ps-7 sm:ps-10 pe-2 sm:pe-3 focus:outline-none transition-all',
+						autoAddEnabled
+							? 'border-blue-400 bg-blue-50 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+							: scannerEnabled
+							? 'border-green-400 bg-green-50 focus:ring-2 focus:ring-green-500 focus:border-transparent'
+							: 'border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent'
+					]"
+					:aria-label="__('Search items')"
+				/>
+			</div>
+		</div>
+
+		<!-- Toolbar: Barcode Scanner, Auto-Add, Camera Scan and View Controls -->
+		<div class="px-1.5 sm:px-3 py-1.5 sm:py-2 bg-white border-b border-gray-200">
+			<div class="flex items-center gap-1 sm:gap-2 flex-wrap">
+				<button
+					@click="toggleBarcodeScanner"
+					:class="[
+						'p-1.5 sm:p-2 rounded-lg transition-[background-color] duration-75 touch-manipulation',
+						scannerEnabled
+							? 'bg-green-100 hover:bg-green-200 active:bg-green-300 text-green-700'
+							: 'bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-600'
+					]"
+					:title="scannerEnabled ? __('Barcode Scanner: ON (Click to disable)') : __('Barcode Scanner: OFF (Click to enable)')"
+					:aria-label="scannerEnabled ? __('Disable barcode scanner') : __('Enable barcode scanner')"
+				>
+					<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"/>
+					</svg>
+				</button>
+				<button
+					@click="toggleAutoAdd"
+					:class="[
+						'p-1.5 sm:p-2 rounded-lg transition-[background-color] duration-75 flex items-center gap-1 touch-manipulation',
+						autoAddEnabled
+							? 'bg-blue-100 hover:bg-blue-200 active:bg-blue-300 text-blue-700'
+							: 'bg-gray-100 hover:bg-gray-200 active:bg-gray-300 text-gray-600'
+					]"
+					:title="autoAddEnabled ? __('Auto-Add: ON - Press Enter to add items to cart') : __('Auto-Add: OFF - Click to enable automatic cart addition on Enter')"
+					:aria-label="autoAddEnabled ? __('Disable auto-add') : __('Enable auto-add')"
+				>
+					<svg class="w-3.5 h-3.5 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+					</svg>
+				</button>
+				<!-- Camera scan button -->
 				<button
 					@click="showCameraBarcodeDialog = true"
 					class="p-1.5 sm:p-2 rounded-full bg-red-600 hover:bg-red-700 active:bg-red-800 text-white shadow-sm flex-shrink-0 transition-colors touch-manipulation"
@@ -159,7 +159,7 @@
 				</div>
 
 				<!-- Sort Dropdown -->
-				<div class="relative z-50">
+				<div class="relative z-50 ms-auto">
 					<button
 						@click="toggleSortDropdown"
 						data-sort-button
@@ -514,12 +514,10 @@
 				<table v-if="paginatedItems.length > 0" class="min-w-full divide-y divide-gray-200">
 					<thead class="bg-gray-50 sticky top-0 z-10">
 						<tr>
-							<th scope="col" class="px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[50px] sm:w-[60px]">{{ __('Image') }}</th>
-							<th scope="col" class="px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 max-w-[120px] sm:max-w-[180px] md:max-w-[200px]">{{ __('Name') }}</th>
-							<th scope="col" class="hidden sm:table-cell px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 sm:max-w-[150px]">{{ __('Code') }}</th>
-							<th scope="col" class="px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[70px] sm:w-[100px]">{{ __('Rate') }}</th>
-							<th scope="col" class="px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[70px] sm:w-[100px]">{{ __('Qty') }}</th>
-							<th scope="col" class="hidden md:table-cell px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 md:w-[80px]">{{ __('UOM') }}</th>
+							<th scope="col" class="px-2 py-2 text-start text-[10px] font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[40px]">{{ __('Image') }}</th>
+							<th scope="col" class="px-2 py-2 text-start text-[10px] font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10">{{ __('Name') }}</th>
+							<th scope="col" class="px-2 py-2 text-start text-[10px] font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[60px]">{{ __('Rate') }}</th>
+							<th scope="col" class="px-2 py-2 text-start text-[10px] font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 w-[50px]">{{ __('Qty') }}</th>
 						</tr>
 					</thead>
 					<tbody class="bg-white divide-y divide-gray-200">
@@ -532,8 +530,8 @@
 							@click="getOptimizedClickHandler(item).click"
 							class="group cursor-pointer hover:bg-blue-50 hover:shadow-md transition-[background-color,box-shadow] duration-100 touch-manipulation active:bg-blue-100"
 						>
-							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[50px] sm:w-[60px]">
-								<div class="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
+							<td class="px-2 py-2 whitespace-nowrap w-[40px]">
+								<div class="w-7 h-7 bg-gray-100 rounded flex items-center justify-center overflow-hidden">
 									<LazyImage
 										v-if="item.image"
 										:src="item.image"
@@ -543,28 +541,26 @@
 										root-margin="100px"
 									>
 										<template #error>
-											<svg class="h-4 w-4 sm:h-5 sm:w-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+											<svg class="h-4 w-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
 											</svg>
 										</template>
 									</LazyImage>
-									<svg v-else class="h-4 w-4 sm:h-5 sm:w-5 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<svg v-else class="h-4 w-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 										<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
 									</svg>
 								</div>
 							</td>
-							<td class="px-2 sm:px-3 py-2 max-w-[120px] sm:max-w-[180px] md:max-w-[200px]">
-								<div class="text-xs sm:text-sm font-medium text-gray-900 truncate" :title="item.item_name">
+							<td class="px-2 py-2 max-w-[110px]">
+								<div class="text-xs font-medium text-gray-900 truncate" :title="item.item_name">
 									{{ item.item_name }}
 								</div>
+								<div class="text-[10px] text-gray-500 truncate" :title="item.item_code">{{ item.item_code }}</div>
 							</td>
-							<td class="hidden sm:table-cell px-2 sm:px-3 py-2 whitespace-nowrap sm:max-w-[150px]">
-								<div class="text-xs sm:text-sm font-semibold text-gray-700 truncate" :title="item.item_code">{{ item.item_code }}</div>
+							<td class="px-2 py-2 whitespace-nowrap w-[60px]">
+								<div class="text-[11px] font-semibold text-blue-600">{{ formatCurrency(item.rate || item.price_list_rate || 0) }}</div>
 							</td>
-							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[70px] sm:w-[100px]">
-								<div class="text-xs sm:text-sm font-semibold text-blue-600">{{ formatCurrency(item.rate || item.price_list_rate || 0) }}</div>
-							</td>
-							<td class="px-2 sm:px-3 py-2 whitespace-nowrap w-[70px] sm:w-[100px]">
+							<td class="px-2 py-2 whitespace-nowrap w-[50px]">
 								<!-- Stock Badge - Tap to select, long press to view warehouse availability -->
 								<div
 									v-if="item.is_stock_item || item.is_bundle"
@@ -573,8 +569,8 @@
 									@pointercancel="clearLongPress"
 									@pointerleave="clearLongPress"
 									:class="[
-										'inline-block px-1.5 sm:px-3 py-0.5 sm:py-1.5 rounded-md shadow-sm',
-										'text-[10px] sm:text-sm font-bold cursor-pointer select-none',
+										'inline-block px-1 py-0.5 rounded-md shadow-sm',
+										'text-[10px] font-bold cursor-pointer select-none',
 										'hover:scale-105 hover:shadow-md transition-all duration-200',
 										getStockStatus((item.actual_qty ?? item.stock_qty ?? 0)).color,
 										getStockStatus((item.actual_qty ?? item.stock_qty ?? 0)).textColor
@@ -585,18 +581,15 @@
 								</div>
 								<span
 									v-else
-									class="text-xs sm:text-sm text-gray-400 italic"
+									class="text-[10px] text-gray-400 italic"
 								>
 									{{ __('N/A') }}
 								</span>
 							</td>
-							<td class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]">
-								<div class="text-xs sm:text-sm font-semibold text-gray-700">{{ item.uom || item.stock_uom || __('Nos', null, 'UOM') }}</div>
-							</td>
 						</tr>
 						<!-- Loading More Indicator Row -->
 						<tr v-if="loadingMore">
-							<td colspan="6" class="px-2 sm:px-3 py-4 text-center bg-white">
+							<td colspan="4" class="px-2 sm:px-3 py-4 text-center bg-white">
 								<div class="flex justify-center items-center">
 									<div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"></div>
 									<p class="ms-2 text-xs text-gray-500">{{ __('Loading more items...') }}</p>
@@ -606,14 +599,14 @@
 
 						<!-- End of Results Indicator Row - Only show on last page or when all items fit in one page -->
 						<tr v-else-if="!hasMore && filteredItems.length > 0 && !searchTerm && (currentPage === totalPages || totalPages === 1)">
-							<td colspan="6" class="px-2 sm:px-3 py-3 text-center bg-white">
+							<td colspan="4" class="px-2 sm:px-3 py-3 text-center bg-white">
 								<p class="text-xs text-gray-400">{{ __('All items loaded') }}</p>
 							</td>
 						</tr>
 
 						<!-- Search Results Count Row -->
 						<tr v-else-if="searchTerm && filteredItems.length > 0">
-							<td colspan="6" class="px-2 sm:px-3 py-3 text-center bg-white">
+							<td colspan="4" class="px-2 sm:px-3 py-3 text-center bg-white">
 								<p class="text-xs text-gray-500">{{ __('{0} items found', [filteredItems.length]) }}</p>
 							</td>
 						</tr>
@@ -784,7 +777,8 @@ const {
 } = storeToRefs(itemStore)
 
 // Local state
-const viewMode = ref("grid")
+// Defaults from POS Settings "Default Card View" (off = compact list view)
+const viewMode = ref(settingsStore.defaultCardView ? "grid" : "list")
 const lastKeyTime = ref(0)
 const barcodeBuffer = ref("")
 const searchInputRef = ref(null)
@@ -904,6 +898,29 @@ watch(
 		}
 	},
 	{ immediate: true },
+)
+
+// Settings may still be loading when this component mounts; once loaded,
+// apply the configured default view unless the user already picked one.
+watch(
+	() => settingsStore.isLoaded,
+	(loaded) => {
+		if (loaded && !userManuallySetView.value) {
+			viewMode.value = settingsStore.defaultCardView ? "grid" : "list"
+		}
+	},
+)
+
+// Also react live when the admin changes "Default Card View" in Settings
+// and saves during an already-open session, unless the cashier already
+// picked a view manually this session.
+watch(
+	() => settingsStore.defaultCardView,
+	(isCardView) => {
+		if (!userManuallySetView.value) {
+			viewMode.value = isCardView ? "grid" : "list"
+		}
+	},
 )
 
 // Reset to page 1 when filtered items meaningfully change

@@ -75,7 +75,7 @@
 						</div>
 
 						<!-- Settings Form -->
-						<div v-else-if="settings.pos_profile || posProfile" class="p-6 flex flex-col gap-6">
+						<div v-else-if="hasProfile" class="p-6 flex flex-col gap-6">
 							<!-- Tabs Navigation -->
 							<div class="flex p-1 bg-gray-200 rounded-lg self-start">
 								<button
@@ -89,6 +89,12 @@
 									:class="['px-4 py-2 text-sm font-medium rounded-md transition-all duration-200', activeTab === 'sales' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50']"
 								>
 									{{ __('Sales Management') }}
+								</button>
+								<button
+									@click="activeTab = 'display'"
+									:class="['px-4 py-2 text-sm font-medium rounded-md transition-all duration-200', activeTab === 'display' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/50']"
+								>
+									{{ __('Display') }}
 								</button>
 							</div>
 
@@ -393,7 +399,38 @@
 									</div>
 								</div>
 							</div>
+						</div>
 
+							<!-- Display Settings Section -->
+							<div v-if="activeTab === 'display'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+								<div :class="displaySectionClasses.header">
+									<div class="flex items-center justify-between">
+										<div class="flex items-center gap-3">
+											<div :class="displaySectionClasses.iconContainer">
+												<svg :class="displaySectionClasses.icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2"/>
+												</svg>
+											</div>
+											<div>
+												<h3 class="text-lg font-bold text-gray-900">{{ __('Display') }}</h3>
+												<p class="text-xs text-gray-600 mt-0.5">{{ __('Configure how the item list and cart panels are laid out') }}</p>
+											</div>
+										</div>
+									</div>
+								</div>
+								<div class="p-6 flex flex-col gap-3">
+									<CheckboxField
+										v-model="settings.default_card_view"
+										:label="__('Default Card View')"
+										:description="__('Show items as cards with images by default. When off, the item list opens in the compact list/table view.')"
+									/>
+									<CheckboxField
+										v-model="settings.item_list_panel_right"
+										:label="__('Item List Panel on Right')"
+										:description="__('Show the item list (products) panel on the right and the cart on the left, instead of the default left/right layout.')"
+									/>
+								</div>
+							</div>
 
 						<!-- USB Thermal Printer (WebUSB) -->
 						<div v-if="activeTab === 'sales'" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -520,7 +557,6 @@
 				</div>
 			</div>
 		</div>
-		</div>
 	</Transition>
 </template>
 
@@ -580,6 +616,8 @@ const settings = ref({
 				allow_negative_stock: 0,
 	tax_inclusive: 0,
 	allow_manual_cash_drawer: 0,
+	default_card_view: 0,
+	item_list_panel_right: 0,
 })
 
 // Stock Sync Settings (localStorage persisted)
@@ -607,6 +645,11 @@ const warehouseOptions = computed(() => {
 const stockSectionClasses = computed(() => getSectionHeaderClasses("purple"))
 const salesSectionClasses = computed(() => getSectionHeaderClasses("green"))
 const usbSectionClasses = computed(() => getSectionHeaderClasses("blue"))
+const displaySectionClasses = computed(() => getSectionHeaderClasses("indigo"))
+
+const hasProfile = computed(() =>
+	Boolean(settings.value.pos_profile || props.posProfile),
+)
 
 const usbPrinter = useWebUSBPrinter()
 
@@ -681,6 +724,7 @@ const settingsResource = createResource({
 			pos_profile: props.posProfile,
 		}
 	},
+	auto: false,
 	onSuccess(data) {
 		if (data) {
 			Object.assign(settings.value, data)

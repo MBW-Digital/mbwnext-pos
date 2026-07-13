@@ -34,6 +34,7 @@
   "column_break_display",
   "display_discount_percentage",
   "display_discount_amount",
+  "item_list_panel_right",
   "section_break_operations",
   "allow_sales_order",
   "allow_select_sales_order",
@@ -277,6 +278,13 @@
    "fieldname": "display_discount_amount",
    "fieldtype": "Check",
    "label": "Display Discount Amount"
+  },
+  {
+   "default": "0",
+   "description": "Show the item list (products) panel on the right side and the cart on the left, instead of the default left/right layout",
+   "fieldname": "item_list_panel_right",
+   "fieldtype": "Check",
+   "label": "Item List Panel on Right"
   },
   {
    "collapsible": 1,

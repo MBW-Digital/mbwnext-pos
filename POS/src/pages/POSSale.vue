@@ -309,6 +309,7 @@
 							:class="[
 								'flex flex-col bg-white overflow-hidden',
 								uiStore.isDesktop ? 'flex-shrink-0 min-h-0' : 'flex-1',
+								itemsPanelOnRight ? 'order-3' : 'order-1',
 							]"
 							style="contain: layout style paint"
 						>
@@ -339,7 +340,7 @@
 						role="separator"
 						aria-orientation="vertical"
 						@pointerdown="startResize"
-						class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize relative flex-shrink-0 transition-[background-color] duration-100 hidden lg:block"
+						class="w-1 bg-gray-200 hover:bg-blue-400 cursor-col-resize relative flex-shrink-0 transition-[background-color] duration-100 hidden lg:block order-2"
 						:class="{
 							'bg-blue-500': uiStore.isResizing,
 							'pointer-events-none opacity-0': uiStore.isAnyDialogOpen,
@@ -367,6 +368,7 @@
 							:class="[
 								'flex flex-col bg-gray-50 overflow-hidden',
 								uiStore.isDesktop ? 'flex-1 min-h-0' : 'flex-1',
+								itemsPanelOnRight ? 'order-1' : 'order-3',
 							]"
 							style="min-width: 300px; contain: layout style paint"
 						>
@@ -1081,6 +1083,9 @@ const stockStore = useStockStore();
 const customerSearchStore = useCustomerSearchStore();
 // Note: settingsStore is an alias to posSettingsStore (same Pinia store singleton)
 const settingsStore = posSettingsStore;
+
+// Item list panel position: 'true' shows items panel on the right, cart on the left
+const itemsPanelOnRight = computed(() => settingsStore.itemListPanelRight);
 
 // Payment / VNPost: v-model binds to active tab (computed below). Mirror into uiStore for divider / registerDialog.
 const activeTabPaymentDialogModel = computed({
@@ -3094,8 +3099,11 @@ function handleResize(event) {
 	resizeState.containerWidth = containerWidth;
 
 	const deltaX = event.clientX - resizeState.startX;
-	// In RTL, dragging right should decrease width, so invert deltaX
-	const adjustedDelta = isRTL.value ? -deltaX : deltaX;
+	// In RTL, dragging right should decrease width, so invert deltaX.
+	// When the items panel is moved to the right side, the drag direction
+	// flips again — so only invert when exactly one of the two is true.
+	const shouldInvert = isRTL.value !== itemsPanelOnRight.value;
+	const adjustedDelta = shouldInvert ? -deltaX : deltaX;
 	const rawWidth = resizeState.startWidth + adjustedDelta;
 
 	uiStore.setLeftPanelWidth(rawWidth, containerWidth);

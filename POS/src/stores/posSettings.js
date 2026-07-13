@@ -32,6 +32,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		show_customer_balance: 0,
 		display_discount_percentage: 0,
 		display_discount_amount: 0,
+		item_list_panel_right: 0,
 		// Operations
 		allow_sales_order: 0,
 		allow_select_sales_order: 0,
@@ -137,6 +138,9 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	const displayDiscountAmount = computed(() =>
 		Boolean(settings.value.display_discount_amount),
 	)
+	const itemListPanelRight = computed(() =>
+		Boolean(settings.value.item_list_panel_right),
+	)
 
 	// Computed - Operations
 	const allowSalesOrder = computed(() =>
@@ -231,6 +235,10 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	// Resource
 	const settingsResource = createResource({
 		url: "pos_next.pos_next.doctype.pos_settings.pos_settings.get_pos_settings",
+		auto: false,
+		makeParams() {
+			return { pos_profile: settings.value.pos_profile }
+		},
 		onSuccess(data) {
 			if (data) {
 				Object.assign(settings.value, data)
@@ -302,6 +310,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 			show_customer_balance: 0,
 			display_discount_percentage: 0,
 			display_discount_amount: 0,
+			item_list_panel_right: 0,
 			allow_sales_order: 0,
 			allow_select_sales_order: 0,
 			create_only_sales_order: 0,
@@ -425,6 +434,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 		showCustomerBalance,
 		displayDiscountPercentage,
 		displayDiscountAmount,
+		itemListPanelRight,
 
 		// Computed - Operations
 		allowSalesOrder,

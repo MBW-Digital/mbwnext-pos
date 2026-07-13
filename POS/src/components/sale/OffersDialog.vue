@@ -31,73 +31,67 @@
 							v-for="offer in eligibleOffers"
 							:key="offer.name"
 							:class="[
-								'relative rounded-xl p-4 transition-all duration-200 border-2',
+								'rounded-lg p-3 transition-all duration-200 border-2',
 								isOfferApplied(offer)
 									? 'bg-green-50 border-green-500 shadow-md'
 									: 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-200 hover:border-green-400 hover:shadow-lg cursor-pointer'
 							]"
 						>
-						<!-- Applied Badge -->
-						<div
-							v-if="isOfferApplied(offer)"
-							class="absolute top-2 end-2 bg-green-600 text-white text-[10px] font-bold px-2 py-1 rounded-full flex items-center gap-1"
-						>
-							<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-								<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-							</svg>
-							<span>{{ __('APPLIED') }}</span>
-						</div>
-
-						<!-- Source Badge (Pricing Rule vs Promotional Scheme) -->
-						<div
-							:class="[
-								'absolute top-2 text-[10px] font-bold px-2 py-1 rounded-full',
-								isOfferApplied(offer) ? 'end-24' : 'end-2',
-								offer.source === 'Pricing Rule'
-									? 'bg-blue-600 text-white'
-									: 'bg-purple-600 text-white'
-							]"
-						>
-							{{ offer.source === 'Pricing Rule' ? __('PRICING RULE') : __('PROMO SCHEME') }}
-						</div>
-
-						<!-- Offer Header -->
-						<div class="mb-3 me-28">
-							<h4 class="text-base font-bold text-gray-900 text-start">
+						<!-- Offer Header: title, then a wrapping horizontal row of compact badges -->
+						<div class="mb-2">
+							<h4 class="text-sm font-bold text-gray-900 text-start">
 								{{ offer.title || offer.name }}
 							</h4>
-							<p v-if="offer.description" class="text-xs text-gray-600 mt-1 text-start">
-								{{ offer.description }}
-							</p>
-						</div>
-
-						<!-- Discount Display -->
-						<div class="flex items-center gap-3 mb-3">
-							<div
-								:class="[
-									'text-white px-4 py-2 rounded-lg transition-all',
-									isOfferApplied(offer)
-										? 'bg-green-700 ring-2 ring-green-600'
-										: offer.offer === 'Give Product'
-											? 'bg-purple-600'
-											: offer.discount_percentage
-												? 'bg-orange-600'
-												: 'bg-green-600'
-								]"
-							>
-								<div class="text-lg font-bold">
+							<div class="flex flex-wrap items-center gap-1 mt-1">
+								<div
+									v-if="isOfferApplied(offer)"
+									class="bg-green-600 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full flex items-center gap-0.5 whitespace-nowrap"
+								>
+									<svg class="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+										<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+									</svg>
+									<span>{{ __('APPLIED') }}</span>
+								</div>
+								<div
+									:class="[
+										'text-[9px] font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap',
+										offer.source === 'Pricing Rule'
+											? 'bg-blue-600 text-white'
+											: 'bg-purple-600 text-white'
+									]"
+								>
+									{{ offer.source === 'Pricing Rule' ? __('PRICING RULE') : __('PROMO SCHEME') }}
+								</div>
+								<div
+									:class="[
+										'text-white px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap transition-all',
+										isOfferApplied(offer)
+											? 'bg-green-700 ring-1 ring-green-600'
+											: offer.offer === 'Give Product'
+												? 'bg-purple-600'
+												: offer.discount_percentage
+													? 'bg-orange-600'
+													: 'bg-green-600'
+									]"
+								>
 									<span v-if="offer.discount_percentage">{{ __('{0}% OFF', [Number(offer.discount_percentage).toFixed(2)]) }}</span>
 									<span v-else-if="offer.discount_amount">{{ __('{0} OFF', [formatCurrency(offer.discount_amount)]) }}</span>
 									<span v-else>{{ __('Special Offer') }}</span>
 								</div>
-							</div>
-							<div v-if="offer.offer === 'Give Product'" class="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-semibold">
-								{{ __('+ Free Item') }}
+								<div v-if="offer.offer === 'Give Product'" class="text-[9px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-semibold whitespace-nowrap">
+									{{ __('+ Free Item') }}
+								</div>
 							</div>
 						</div>
+						<p
+							v-if="offer.description && offer.description.trim().toLowerCase() !== (offer.title || offer.name || '').trim().toLowerCase()"
+							class="text-xs text-gray-600 mb-2 text-start"
+						>
+							{{ offer.description }}
+						</p>
 
 						<!-- Offer Details -->
-						<div class="grid grid-cols-2 gap-3 mb-3">
+						<div class="grid grid-cols-2 gap-2 mb-1">
 							<!-- Min Amount -->
 							<div v-if="offer.min_amt" class="flex items-center gap-2">
 								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -204,22 +198,12 @@
 							</p>
 						</div>
 
-						<!-- Offer Status - Auto-applied/removed based on cart -->
-						<div class="mt-3">
+						<!-- Not-yet-applied hint. Once applied, the badge in the header already shows this. -->
+						<div v-if="!isOfferApplied(offer)" class="mt-2">
 							<div
-								v-if="isOfferApplied(offer)"
-								class="w-full py-2 px-4 rounded-lg font-semibold text-sm bg-green-100 text-green-800 border border-green-300 flex items-center justify-center gap-2"
+								class="w-full py-1.5 px-3 rounded-lg font-medium text-xs bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center gap-1.5"
 							>
-								<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-									<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-								</svg>
-								{{ __('Applied') }}
-							</div>
-							<div
-								v-else
-								class="w-full py-2 px-4 rounded-lg font-semibold text-sm bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center gap-2"
-							>
-								<svg class="w-4 h-4 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<svg class="w-3.5 h-3.5 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
 								</svg>
 								{{ __('Will apply when eligible') }}

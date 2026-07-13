@@ -1228,8 +1228,8 @@ function clearLongPress() {
 function selectItem(item, autoAdd = false) {
 	if (!item) return false
 
-	const company = shiftStore.profileCompany
-	if (isPosStopSelling(item, company)) {
+	const posProfile = shiftStore.profileName
+	if (isPosStopSelling(item, posProfile)) {
 		showError(getPosStopSellingMessage())
 		return false
 	}
@@ -1286,20 +1286,13 @@ async function handleBarcodeSearch(forceAutoAdd = false) {
 
 		if (item) {
 			// Item found by barcode - validate stock and add to cart
+			// Stop-selling is handled in selectItem via soft flag (no API throw)
 			if (selectItem(item, shouldAutoAdd)) {
 				itemStore.clearSearch()
 			}
 			return
 		}
 	} catch (error) {
-		const errMsg = String(error?.message || error?.messages?.[0] || "")
-		if (errMsg.includes("khóa kinh doanh")) {
-			showError(getPosStopSellingMessage())
-			if (shouldAutoAdd) {
-				itemStore.clearSearch()
-			}
-			return
-		}
 		console.error("Barcode API error:", error)
 	}
 

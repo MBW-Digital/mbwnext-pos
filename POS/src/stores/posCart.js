@@ -5,8 +5,6 @@ import { usePOSShiftStore } from "@/stores/posShift"
 import { parseError } from "@/utils/errorHandler"
 import {
 	assertCanSellInPos,
-	getPosStopSellingMessage,
-	isPosStopSelling,
 	parseStopSellingApiResult,
 } from "@/utils/posStopSelling"
 import {
@@ -754,16 +752,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {{ merge?: boolean }} options - merge: false = add as new line each time (for per-line service items)
 	 */
 	async function ensureStopSellingChecked(item, currentProfile) {
-		const company =
-			currentProfile?.company ||
-			shiftStore.profileCompany ||
-			shiftStore.currentCompany?.name ||
-			shiftStore.currentCompany ||
+		const profileName =
+			currentProfile?.name ||
+			currentProfile ||
+			shiftStore.profileName ||
 			null
-		const profileName = currentProfile?.name || currentProfile
 		const itemCode = item.item_code || item.name
 
-		assertCanSellInPos(item, company)
+		assertCanSellInPos(item, profileName)
 
 		if (!profileName || !itemCode) {
 			return
@@ -771,22 +767,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 		// Online: always confirm with server (catalog cache may be stale)
 		if (!offlineState.isOffline) {
-			try {
-				const result = await call(
-					"mbwnext_advanced_selling.controllers.python.discontinued_product.check_item_stop_selling",
-					{ item_code: itemCode, pos_profile: profileName },
-				)
-				item.pos_stop_selling = parseStopSellingApiResult(result) ? 1 : 0
-				assertCanSellInPos(item, company)
-			} catch (error) {
-				const errMsg = String(
-					error?.message || error?.messages?.[0] || "",
-				)
-				if (errMsg.includes("khóa kinh doanh")) {
-					throw new Error(getPosStopSellingMessage())
-				}
-				throw error
-			}
+			const result = await call(
+				"mbwnext_advanced_selling.controllers.python.discontinued_product.check_item_stop_selling",
+				{ item_code: itemCode, pos_profile: profileName },
+			)
+			item.pos_stop_selling = parseStopSellingApiResult(result) ? 1 : 0
+			assertCanSellInPos(item, profileName)
 		}
 	}
 

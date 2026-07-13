@@ -234,35 +234,6 @@
 						class="lg:hidden bg-white border-b border-gray-200 flex shadow-sm sticky top-0 z-[100]"
 					>
 						<button
-							@click="handleTabSwitch('items')"
-							:class="[
-								'flex-1 px-3 py-3 text-sm font-semibold transition-[color,background-color,border-color] duration-100 relative touch-manipulation',
-								uiStore.mobileActiveTab === 'items'
-									? 'text-blue-600 border-b-3 border-blue-600 bg-blue-50'
-									: 'text-gray-600 hover:text-gray-800 hover:bg-gray-50 active:bg-gray-100',
-							]"
-							:aria-label="__('View items')"
-							:aria-selected="uiStore.mobileActiveTab === 'items'"
-							role="tab"
-						>
-							<div class="flex items-center justify-center gap-1.5">
-								<svg
-									class="w-5 h-5"
-									fill="none"
-									stroke="currentColor"
-									viewBox="0 0 24 24"
-								>
-									<path
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										stroke-width="2"
-										d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
-									/>
-								</svg>
-								<span>{{ __("Items") }}</span>
-							</div>
-						</button>
-						<button
 							@click="handleTabSwitch('cart')"
 							:class="[
 								'flex-1 px-3 py-3 text-sm font-semibold transition-[color,background-color,border-color] duration-100 relative touch-manipulation',
@@ -295,6 +266,35 @@
 								>
 									{{ cartStore.itemCount }}
 								</span>
+							</div>
+						</button>
+						<button
+							@click="handleTabSwitch('items')"
+							:class="[
+								'flex-1 px-3 py-3 text-sm font-semibold transition-[color,background-color,border-color] duration-100 relative touch-manipulation',
+								uiStore.mobileActiveTab === 'items'
+									? 'text-blue-600 border-b-3 border-blue-600 bg-blue-50'
+									: 'text-gray-600 hover:text-gray-800 hover:bg-gray-50 active:bg-gray-100',
+							]"
+							:aria-label="__('View items')"
+							:aria-selected="uiStore.mobileActiveTab === 'items'"
+							role="tab"
+						>
+							<div class="flex items-center justify-center gap-1.5">
+								<svg
+									class="w-5 h-5"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+									/>
+								</svg>
+								<span>{{ __("Items") }}</span>
 							</div>
 						</button>
 					</div>
@@ -372,49 +372,61 @@
 							]"
 							style="min-width: 300px; contain: layout style paint"
 						>
-							<InvoiceCart
-								ref="invoiceCartRef"
-								:items="cartStore.displayCartItems"
-								:customer="cartStore.customer"
-								:subtotal="cartStore.subtotal"
-								:tax-amount="cartStore.totalTax"
-								:discount-amount="cartStore.totalDiscount"
-								:grand-total="cartStore.grandTotal"
-								:pos-profile="shiftStore.profileName"
-								:currency="shiftStore.profileCurrency"
-								:applied-offers="cartStore.appliedOffers"
-								:warehouses="profileWarehouses"
-								:cold-storage-fee-item-code="serviceSurchargeItemCode"
-								@update-quantity="cartStore.updateItemQuantity"
-								@remove-item="
-									(itemCode, uom) => cartStore.removeItem(itemCode, uom)
-								"
-								@select-customer="handleCustomerSelected"
-								@create-customer="handleCreateCustomer"
-								@edit-customer="handleEditCustomer"
-								@proceed-to-payment="handleProceedToPayment"
-								@clear-cart="handleClearCart"
-								@save-draft="handleSaveDraft"
-								@apply-coupon="uiStore.showCouponDialog = true"
-								@show-offers="uiStore.showOffersDialog = true"
-								@remove-offer="
-									(offer) =>
-										cartStore.removeOffer(
-											offer,
-											shiftStore.currentProfile,
-											offersDialogRef.value
-										)
-								"
-								@update-uom="cartStore.changeItemUOM"
-								@edit-item="handleEditItem"
-								@view-shift="uiStore.showOpenShiftDialog = true"
-								@show-drafts="uiStore.showDraftDialog = true"
-								@show-history="uiStore.showHistoryDialog = true"
-								@show-return="uiStore.showReturnDialog = true"
-								@close-shift="handleCloseShift()"
-								@add-cold-storage-fee-line="handleAddColdStorageFeeLine"
-								@remove-cold-storage-fee-line="handleRemoveColdStorageFeeLine"
-							/>
+							<!-- Compact quick-add search bar (Mobile only): add items without leaving the Cart tab -->
+							<div v-if="!uiStore.isDesktop" class="border-b border-gray-200 flex-shrink-0">
+								<ItemsSelector
+									compact
+									:pos-profile="shiftStore.profileName"
+									:cart-items="cartStore.invoiceItems"
+									:currency="shiftStore.profileCurrency"
+									@item-selected="handleItemSelected"
+								/>
+							</div>
+							<div class="flex-1 min-h-0">
+								<InvoiceCart
+									ref="invoiceCartRef"
+									:items="cartStore.displayCartItems"
+									:customer="cartStore.customer"
+									:subtotal="cartStore.subtotal"
+									:tax-amount="cartStore.totalTax"
+									:discount-amount="cartStore.totalDiscount"
+									:grand-total="cartStore.grandTotal"
+									:pos-profile="shiftStore.profileName"
+									:currency="shiftStore.profileCurrency"
+									:applied-offers="cartStore.appliedOffers"
+									:warehouses="profileWarehouses"
+									:cold-storage-fee-item-code="serviceSurchargeItemCode"
+									@update-quantity="cartStore.updateItemQuantity"
+									@remove-item="
+										(itemCode, uom) => cartStore.removeItem(itemCode, uom)
+									"
+									@select-customer="handleCustomerSelected"
+									@create-customer="handleCreateCustomer"
+									@edit-customer="handleEditCustomer"
+									@proceed-to-payment="handleProceedToPayment"
+									@clear-cart="handleClearCart"
+									@save-draft="handleSaveDraft"
+									@apply-coupon="uiStore.showCouponDialog = true"
+									@show-offers="uiStore.showOffersDialog = true"
+									@remove-offer="
+										(offer) =>
+											cartStore.removeOffer(
+												offer,
+												shiftStore.currentProfile,
+												offersDialogRef.value
+											)
+									"
+									@update-uom="cartStore.changeItemUOM"
+									@edit-item="handleEditItem"
+									@view-shift="uiStore.showOpenShiftDialog = true"
+									@show-drafts="uiStore.showDraftDialog = true"
+									@show-history="uiStore.showHistoryDialog = true"
+									@show-return="uiStore.showReturnDialog = true"
+									@close-shift="handleCloseShift()"
+									@add-cold-storage-fee-line="handleAddColdStorageFeeLine"
+									@remove-cold-storage-fee-line="handleRemoveColdStorageFeeLine"
+								/>
+							</div>
 						</div>
 					</keep-alive>
 

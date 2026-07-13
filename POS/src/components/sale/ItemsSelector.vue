@@ -1,7 +1,7 @@
 <template>
-	<div class="flex flex-col h-full bg-gray-50">
+	<div :class="['flex flex-col bg-gray-50', compact ? '' : 'h-full']">
 		<!-- Item Groups Filter Tabs -->
-		<div class="px-1.5 sm:px-3 pt-1.5 sm:pt-3 pb-1.5 sm:pb-2 bg-white border-b border-gray-200">
+		<div v-if="!compact" class="px-1.5 sm:px-3 pt-1.5 sm:pt-3 pb-1.5 sm:pb-2 bg-white border-b border-gray-200">
 			<div class="flex items-center gap-1 sm:gap-2 overflow-x-auto pb-1 scrollbar-hide snap-x snap-mandatory">
 				<button
 					@click="itemStore.setSelectedItemGroup(null)"
@@ -34,7 +34,7 @@
 		</div>
 
 		<!-- Cache Sync Indicator -->
-		<div v-if="cacheSyncing" class="px-1.5 sm:px-3 py-1 bg-blue-50 border-b border-blue-200">
+		<div v-if="cacheSyncing && !compact" class="px-1.5 sm:px-3 py-1 bg-blue-50 border-b border-blue-200">
 			<div class="flex items-center justify-center gap-2 text-[10px] sm:text-xs text-blue-700">
 				<div class="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-600"></div>
 				<span>{{ __('Syncing catalog in background... {0} items cached', [cacheStats.items]) }}</span>
@@ -129,7 +129,7 @@
 						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
 					</svg>
 				</button>
-				<div class="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
+				<div v-if="!compact" class="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5 flex-shrink-0">
 					<button
 						@click="setViewMode('grid')"
 						:class="[
@@ -159,7 +159,7 @@
 				</div>
 
 				<!-- Sort Dropdown -->
-				<div class="relative z-50 ms-auto">
+				<div v-if="!compact" class="relative z-50 ms-auto">
 					<button
 						@click="toggleSortDropdown"
 						data-sort-button
@@ -245,6 +245,8 @@
 			</div>
 		</div>
 
+		<!-- Full grid/list results area (hidden in compact mode, which uses a small dropdown instead) -->
+		<template v-if="!compact">
 		<!-- Initial Loading State - Only for first load -->
 		<div v-if="loading && !filteredItems" class="flex-1 flex items-center justify-center p-3">
 			<div class="text-center py-8">
@@ -701,6 +703,48 @@
 				</div>
 			</div>
 		</div>
+		</template>
+
+		<!-- Compact results dropdown (Cart tab quick-add) -->
+		<!-- Only takes up space while there's an active search; stays collapsed when idle. -->
+		<div v-if="compact && searchTerm" class="max-h-64 overflow-y-auto border-t border-gray-100">
+			<div v-if="paginatedItems.length > 0" class="divide-y divide-gray-100">
+				<div
+					v-for="item in paginatedItems.slice(0, 8)"
+					:key="item.item_code"
+					@click="getOptimizedClickHandler(item).click"
+					class="flex items-center gap-2 px-2 py-2 cursor-pointer hover:bg-blue-50 active:bg-blue-100 touch-manipulation"
+				>
+					<div class="w-8 h-8 bg-gray-100 rounded flex items-center justify-center overflow-hidden flex-shrink-0">
+						<LazyImage
+							v-if="item.image"
+							:src="item.image"
+							:alt="item.item_name"
+							container-class="relative w-full h-full"
+							img-class="w-full h-full object-cover"
+							root-margin="100px"
+						>
+							<template #error>
+								<svg class="h-4 w-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+								</svg>
+							</template>
+						</LazyImage>
+						<svg v-else class="h-4 w-4 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+						</svg>
+					</div>
+					<div class="flex-1 min-w-0">
+						<div class="text-xs font-medium text-gray-900 truncate">{{ item.item_name }}</div>
+						<div class="text-[10px] text-gray-500 truncate">{{ item.item_code }}</div>
+					</div>
+					<div class="text-xs font-semibold text-blue-600 flex-shrink-0">{{ formatCurrency(item.rate || item.price_list_rate || 0) }}</div>
+				</div>
+			</div>
+			<div v-else class="flex items-center justify-center py-3 text-center">
+				<p class="text-xs text-gray-500">{{ __('No results for {0}', [searchTerm]) }}</p>
+			</div>
+		</div>
 	</div>
 
 	<!-- Warehouse Availability Dialog -->
@@ -749,6 +793,13 @@ const props = defineProps({
 	currency: {
 		type: String,
 		default: DEFAULT_CURRENCY,
+	},
+	// Compact mode: search bar + scan only, with a small results dropdown
+	// instead of the full grid/list panel. Used to add items from the
+	// mobile Cart tab without switching tabs.
+	compact: {
+		type: Boolean,
+		default: false,
 	},
 })
 

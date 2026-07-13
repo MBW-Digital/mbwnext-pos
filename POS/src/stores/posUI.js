@@ -74,7 +74,7 @@ export const usePOSUIStore = defineStore("posUI", () => {
 	const initialCustomerName = ref("")
 
 	// Mobile responsiveness
-	const mobileActiveTab = ref("items") // 'items' or 'cart'
+	const mobileActiveTab = ref("cart") // 'items' or 'cart'
 	const windowWidth = ref(
 		typeof window !== "undefined" ? window.innerWidth : 1024,
 	)

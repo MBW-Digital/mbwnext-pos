@@ -73,6 +73,14 @@ class CustomSalesInvoice(SalesInvoice):
 		if cint(self.is_pos):
 			skip_change_gl_entries = not _get_post_change_gl_entries_setting()
 
+			# POS invoices often have no header-level cost_center (only items do).
+			# Payment mode accounts can be P&L accounts (e.g. a redemption/discount
+			# account for a loyalty "wallet" mode of payment), which require a cost
+			# center on the GL Entry. Fall back to the Company's default cost center.
+			cost_center = self.cost_center or frappe.get_cached_value(
+				"Company", self.company, "cost_center"
+			)
+
 			for payment_mode in self.payments:
 				if skip_change_gl_entries and payment_mode.account == self.account_for_change_amount:
 					payment_mode.base_amount -= flt(self.change_amount)
@@ -95,7 +103,7 @@ class CustomSalesInvoice(SalesInvoice):
 								if cint(self.is_return) and self.return_against
 								else self.name,
 								"against_voucher_type": self.doctype,
-								"cost_center": self.cost_center,
+								"cost_center": cost_center,
 							},
 							self.party_account_currency,
 							item=self,
@@ -121,7 +129,7 @@ class CustomSalesInvoice(SalesInvoice):
 								"debit_in_account_currency": payment_mode.base_amount
 								if payment_mode_account_currency == self.company_currency
 								else payment_mode.amount,
-								"cost_center": self.cost_center,
+								"cost_center": cost_center,
 							},
 							payment_mode_account_currency,
 							item=self,

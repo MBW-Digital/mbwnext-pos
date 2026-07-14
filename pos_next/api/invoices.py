@@ -878,10 +878,6 @@ def update_invoice(data):
                 .format(invoice_doc.customer)
             )
 
-        # Disable automatic pricing rules (we handle discounts manually from POS)
-        invoice_doc.ignore_pricing_rule = 1
-        invoice_doc.flags.ignore_pricing_rule = True
-
         # ========================================================================
         # DISCOUNT CALCULATION - CRITICAL LOGIC
         # ========================================================================
@@ -963,6 +959,12 @@ def update_invoice(data):
                 frappe.log_error(f"Error loading rounding setting: {str(e)}", "POS Invoice Creation")
 
         invoice_doc.disable_rounded_total = disable_rounded
+
+        # Snapshot POS's rate/discount_amount before set_missing_values()
+        # below can corrupt them; restored by the "validate" doc-event hook
+        # (see sales_invoice_hooks.py for why).
+        from pos_next.api.sales_invoice_hooks import capture_pos_authoritative_discounts
+        capture_pos_authoritative_discounts(invoice_doc)
 
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
@@ -2680,8 +2682,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         if remaining_qty <= 0:
             return None
 
-        # Get rate breakdown for display - use 3 decimal precision for rates
+        # item['rate'] is already the tax-inclusive gross rate charged
+        # (copied verbatim by ERPNext's make_sales_return()) - keep it as
+        # `gross_rate` for the submission. net_rate/discount_per_unit/
+        # tax_per_unit below are for display only; do NOT put net_rate back
+        # into "rate" - that silently drops the tax portion from the refund.
         price_list_rate = flt(item.get("price_list_rate") or item.get("rate"), 3)
+        gross_rate = flt(item.get("rate"), 3)
         net_rate = flt(item.get("net_rate") or item.get("rate"), 3)
         discount_per_unit = flt(price_list_rate - net_rate, 3)
         tax_per_unit = flt(item_tax_map.get(item.get("item_code"), 0) / original_qty, 3) if original_qty else 0
@@ -2693,9 +2700,10 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
             "remaining_qty": remaining_qty,
             "qty": -remaining_qty,
             "price_list_rate": price_list_rate,
-            "rate": net_rate,
+            "rate": gross_rate,
+            "net_rate": net_rate,
             "discount_per_unit": discount_per_unit,
-            "amount": flt(net_rate * -remaining_qty, 3),
+            "amount": flt(gross_rate * -remaining_qty, 3),
             "tax_per_unit": tax_per_unit,
             "rate_with_tax": flt(net_rate + tax_per_unit, 3),
         }

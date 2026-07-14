@@ -8,6 +8,7 @@ Event handlers for Sales Invoice document events
 
 import frappe
 from frappe import _
+from frappe.utils import cint, flt
 
 
 def validate(doc, method=None):
@@ -22,6 +23,69 @@ def validate(doc, method=None):
 	"""
 	apply_tax_inclusive(doc)
 	auto_assign_loyalty_program_on_invoice(doc)
+	restore_pos_authoritative_discounts(doc)
+
+
+def capture_pos_authoritative_discounts(doc, method=None):
+	"""Snapshot each item's rate/discount_amount/pricing_rules before core validate() runs.
+
+	ERPNext's set_missing_item_details() (inside core validate(), which runs
+	after this before_validate hook) re-fetches each item's Pricing Rule and
+	re-derives rate = price_list_rate * (1 - discount_percentage / 100) -
+	e.g. 499000 * (1 - 40.08/100) = 299000.8 - overwriting the whole-currency
+	rate POS actually charged. restore_pos_authoritative_discounts() (in the
+	`validate` hook below) puts this snapshot back afterwards.
+
+	Stored on item.flags (in-memory, not a DB field) - safe since
+	before_validate and validate share the same Document instance within one
+	save()/submit() call. Idempotent per item: update_invoice() also calls
+	this manually, earlier, before its own calculate_taxes_and_totals() call
+	can corrupt the values - the framework's own before_validate call must
+	not overwrite that earlier, still-correct snapshot.
+	"""
+	if not cint(doc.get("is_pos")):
+		return
+
+	for item in doc.get("items", []):
+		if item.flags.get("pos_authoritative_discount"):
+			continue
+		if not item.price_list_rate or not item.get("pricing_rules"):
+			continue
+		item.flags.pos_authoritative_discount = {
+			"price_list_rate": item.price_list_rate,
+			"rate": item.rate,
+			"discount_amount": item.discount_amount,
+			"pricing_rules": item.pricing_rules,
+		}
+
+
+def restore_pos_authoritative_discounts(doc):
+	"""Restore the snapshot from capture_pos_authoritative_discounts() after
+	core validate() has re-derived (and mis-rounded) the same fields from the
+	live Pricing Rule."""
+	if not cint(doc.get("is_pos")):
+		return
+
+	changed = False
+	for item in doc.get("items", []):
+		snapshot = item.flags.get("pos_authoritative_discount")
+		if not snapshot:
+			continue
+		if item.rate == snapshot["rate"] and item.discount_percentage == 0:
+			continue
+
+		item.price_list_rate = snapshot["price_list_rate"]
+		item.rate = snapshot["rate"]
+		item.discount_amount = snapshot["discount_amount"]
+		item.pricing_rules = snapshot["pricing_rules"]
+		# Zero discount_percentage so calculate_taxes_and_totals() below uses
+		# `rate = price_list_rate - discount_amount` instead of re-deriving
+		# the same fractional rate from discount_percentage.
+		item.discount_percentage = 0
+		changed = True
+
+	if changed:
+		doc.calculate_taxes_and_totals()
 
 
 def apply_tax_inclusive(doc):

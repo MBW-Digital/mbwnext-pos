@@ -1164,6 +1164,10 @@ const createReturnResource = createResource({
 					shouldUseListPriceRefund.value && !item.is_free_item
 						? item.price_list_rate || item.rate
 						: item.rate,
+				// Forward the original price_list_rate/item_tax_template so tax
+				// is reversed the same way it was originally applied.
+				price_list_rate: item.price_list_rate,
+				item_tax_template: item.item_tax_template,
 				warehouse: item.warehouse,
 				uom: item.uom,
 				conversion_factor: item.conversion_factor || 1,

@@ -404,10 +404,10 @@
 								<span class="text-gray-600 text-start">{{ __('Subtotal') }}</span>
 								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(subtotal) }}</span>
 							</div>
-							<!-- Tax -->
+							<!-- Tax: informational breakdown when tax-inclusive (already counted in Subtotal/Grand Total), additive otherwise -->
 							<div v-if="taxAmount > 0" class="flex items-center justify-between text-sm">
-								<span class="text-gray-600 text-start">{{ __('Tax') }}</span>
-								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(taxAmount) }}</span>
+								<span class="text-gray-500 text-start">{{ taxInclusive ? __('Tax (included)') : __('Tax') }}</span>
+								<span :class="['text-end', taxInclusive ? 'font-normal text-gray-500 italic' : 'font-medium text-gray-900']">{{ formatCurrency(taxAmount) }}</span>
 							</div>
 						<!-- Pricing Rule / Promotional Scheme discount (per-item) -->
 						<div v-if="itemLevelDiscountAmount > 0" class="flex items-center justify-between text-sm">

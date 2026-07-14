@@ -114,32 +114,40 @@ def apply_selling_item_tax_templates(doc, method=None):
     """API/POS không chạy Form JS — ép item_tax_template/item_tax_rate thuế đầu ra trước khi validate.
 
     Giống logic set_selling_tax_from_item trong controllers/js/sales_invoice.js.
+
+    Hàng trả (is_return=1) bỏ qua bước "gán lại tax template" (đã copy nguyên
+    từ hóa đơn gốc), nhưng vẫn phải chạy _ensure_pos_sales_taxes_rows() - đây
+    là nơi duy nhất dựng bảng "taxes" cho hóa đơn POS (ERPNext core bỏ qua khi
+    is_pos=1); thiếu bước này thì phiếu trả mất luôn dòng thuế GTGT.
     """
-    if doc.doctype != "Sales Invoice" or getattr(doc, "is_return", 0):
+    if doc.doctype != "Sales Invoice":
         return
     if not doc.company or not doc.get("items"):
         return
 
-    selling = _selling_item_tax_template_names(doc.company)
-    if selling:
-        changed = False
-        for row in doc.items:
-            if not row.get("item_code"):
-                continue
-            curr = row.get("item_tax_template")
-            if curr and curr in selling:
-                continue
-            replacement = _first_selling_tax_template_for_item(row.item_code, selling)
-            if not replacement or replacement == curr:
-                continue
-            row.item_tax_template = replacement
-            row.item_tax_rate = get_item_tax_map(doc.company, replacement, as_json=True)
-            changed = True
+    is_return = cint(getattr(doc, "is_return", 0))
 
-        if changed:
-            # Bỏ bảng thuế cũ để calculate_taxes_and_totals dựng lại theo item_tax_rate mới
-            doc.set("taxes", [])
+    if not is_return:
+        selling = _selling_item_tax_template_names(doc.company)
+        if selling:
+            changed = False
+            for row in doc.items:
+                if not row.get("item_code"):
+                    continue
+                curr = row.get("item_tax_template")
+                if curr and curr in selling:
+                    continue
+                replacement = _first_selling_tax_template_for_item(row.item_code, selling)
+                if not replacement or replacement == curr:
+                    continue
+                row.item_tax_template = replacement
+                row.item_tax_rate = get_item_tax_map(doc.company, replacement, as_json=True)
+                changed = True
 
-    # POS: luôn đảm bảo có child table taxes (ERPNext bỏ qua khi is_pos)
+            if changed:
+                # Bỏ bảng thuế cũ để calculate_taxes_and_totals dựng lại theo item_tax_rate mới
+                doc.set("taxes", [])
+
+    # POS: luôn đảm bảo có child table taxes (ERPNext bỏ qua khi is_pos) - kể cả hàng trả
     if cint(doc.get("is_pos")):
         _ensure_pos_sales_taxes_rows(doc)

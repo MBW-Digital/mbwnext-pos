@@ -221,7 +221,10 @@ doc_events = {
 		"after_insert": "pos_next.api.customers.auto_assign_loyalty_program"
 	},
 	"Sales Invoice": {
-        "before_validate": "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
+        "before_validate": [
+            "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
+            "pos_next.api.sales_invoice_hooks.capture_pos_authoritative_discounts"
+        ],
 		"validate": [
 			"pos_next.api.sales_invoice_hooks.validate",
 			"pos_next.api.wallet.validate_wallet_payment"

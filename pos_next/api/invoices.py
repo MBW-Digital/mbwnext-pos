@@ -855,12 +855,15 @@ def update_invoice(data):
                     {
                         "doctype": "Customer",
                         "customer_name": customer_name,
-                        "customer_group": "All Customer Groups",
-                        "territory": "All Territories",
                         "customer_type": "Individual",
                     }
                 )
                 cust.flags.ignore_permissions = True
+                cust.flags.pos_profile = pos_profile
+                # territory/customer_group filled by
+                # pos_next.api.customers.set_default_territory_and_customer_group
+                # (before_insert hook) - avoids hardcoding a literal like "All
+                # Territories" that may not exist as a real record on every site.
                 cust.insert()
                 invoice_doc.customer = cust.name
                 invoice_doc.customer_name = cust.customer_name
@@ -3717,7 +3720,8 @@ def apply_offers(invoice_data, selected_offers=None):
 
         # If still no customer_group, use default
         if not customer_group:
-            customer_group = "All Customer Groups"
+            from pos_next.api.customers import default_customer_group
+            customer_group = default_customer_group()
 
         pricing_args = frappe._dict(
             {

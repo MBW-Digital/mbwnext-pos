@@ -227,14 +227,17 @@ const dropdownRef = ref(null)
 const countrySearchRef = ref(null)
 
 const customerGroups = ref(["Commercial", "Individual", "Non Profit", "Government"])
-const territories = ref(["All Territories"])
+// Loaded from the real Territory list (see territoriesResource below) - not
+// seeded with a literal like "All Territories", which isn't guaranteed to
+// exist as a record (ERPNext's root Territory name is locale-dependent).
+const territories = ref([])
 
 const customerData = ref({
 	customer_name: "",
 	mobile_no: "",
 	email_id: "",
 	customer_group: "Individual",
-	territory: "All Territories",
+	territory: "",
 })
 
 // =============================================================================
@@ -339,9 +342,12 @@ const createCustomerResource = createResource({
 			customer_name: customerData.value.customer_name,
 			customer_type: "Individual",
 			customer_group: customerData.value.customer_group || __("Individual"),
-			territory: customerData.value.territory || __("All Territories"),
+			territory: customerData.value.territory || "",
 			mobile_no: customerData.value.mobile_no || "",
 			email_id: customerData.value.email_id || "",
+			// Read by pos_next's set_customer_code_if_mandatory (before_insert
+			// hook) to generate the <shop_code><sequence> customer_code, e.g. AP1.
+			pos_profile: props.posProfile || "",
 		},
 	}),
 	onSuccess: (data) => {
@@ -363,7 +369,7 @@ const updateCustomerResource = createResource({
 		fieldname: {
 			customer_name: customerData.value.customer_name,
 			customer_group: customerData.value.customer_group || __("Individual"),
-			territory: customerData.value.territory || __("All Territories"),
+			territory: customerData.value.territory || "",
 			mobile_no: customerData.value.mobile_no || "",
 			email_id: customerData.value.email_id || "",
 		},
@@ -462,7 +468,7 @@ const resetForm = () => {
 		mobile_no: "",
 		email_id: "",
 		customer_group: "Individual",
-		territory: "All Territories",
+		territory: "",
 	})
 	selectedCountryCode.value = ""
 	phoneNumber.value = ""
@@ -485,7 +491,7 @@ watch(
 			customerData.value.customer_name = customer.customer_name || ""
 			customerData.value.email_id = customer.email_id || ""
 			customerData.value.customer_group = customer.customer_group || "Individual"
-			customerData.value.territory = customer.territory || "All Territories"
+			customerData.value.territory = customer.territory || ""
 			// Handle mobile_no with country code
 			if (customer.mobile_no) {
 				customerData.value.mobile_no = customer.mobile_no

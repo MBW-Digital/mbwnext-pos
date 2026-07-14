@@ -1292,6 +1292,16 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 					"Bundle Availability Warning"
 				)
 
+		# Item tax template + rate for offline cart / tax totals - batched for
+		# all items in this response (one query total instead of a full Item
+		# document load per item; see bulk_ensure_selling_item_tax_for_items()).
+		from pos_next.controllers.python.sales_invoice import (
+			bulk_ensure_selling_item_tax_for_items,
+		)
+		item_tax_by_code = bulk_ensure_selling_item_tax_for_items(
+			item_codes, pos_profile_doc.company
+		)
+
 		# Enrich items with price, stock, barcode, and UOM data
 		for item in items:
 			stock_uom = item.get("stock_uom")
@@ -1415,22 +1425,10 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 			# UOM-specific prices map for frontend selector
 			item["uom_prices"] = uom_prices_map.get(item["item_code"], {})
 
-			# Item tax template + rate for offline cart / tax totals
-			try:
-				from pos_next.controllers.python.sales_invoice import (
-					ensure_selling_item_tax_for_item_line,
-				)
-
-				tpl, tr = ensure_selling_item_tax_for_item_line(
-					item["item_code"],
-					pos_profile_doc.company,
-				)
-				if tpl:
-					item["item_tax_template"] = tpl
-				if tr:
-					item["item_tax_rate"] = tr
-			except Exception:
-				pass
+			# Item tax template + rate for offline cart / tax totals (batched above)
+			tpl_tr = item_tax_by_code.get(item["item_code"])
+			if tpl_tr:
+				item["item_tax_template"], item["item_tax_rate"] = tpl_tr
 
 		# Apply resolved barcode data (weighted/priced) to the first matching item
 		if resolved_barcode_data and items:

@@ -7,9 +7,31 @@ import re
 
 import frappe
 from frappe import _
+from frappe.model.naming import getseries
+from frappe.utils.nestedset import get_root_of
 
 
 VN_COUNTRY_CODE = "84"
+
+
+def default_territory():
+    """Selling Settings' default, else the actual root Territory record.
+
+    Do NOT hardcode "All Territories" - ERPNext's setup wizard names the
+    root Territory in whatever language the site was installed in (e.g.
+    "Tất cả khu vực" on a Vietnamese install), so that literal string
+    doesn't exist as a real record on every site.
+    """
+    return frappe.db.get_single_value("Selling Settings", "territory") or get_root_of("Territory")
+
+
+def default_customer_group():
+    """Selling Settings' default, else the actual root Customer Group record.
+
+    See default_territory() - "All Customer Groups" is likewise not a safe
+    hardcoded literal.
+    """
+    return frappe.db.get_single_value("Selling Settings", "customer_group") or get_root_of("Customer Group")
 
 
 def _phone_to_vn_customer_code(mobile_no):
@@ -29,12 +51,34 @@ def _phone_to_vn_customer_code(mobile_no):
     return VN_COUNTRY_CODE + digits
 
 
-def _get_unique_customer_code(customer_name, mobile_no=None):
+def _shop_code_customer_code(pos_profile):
+    """<Shop Code>+<sequence>, e.g. AP1, AP2 - one counter per POS Profile shop code.
+
+    Uses frappe's Series counter (`tabSeries`, row-locked on read) so
+    concurrent POS terminals never hand out the same number. Namespaced with
+    a "CUSTCODE-" prefix on the counter key so it can't collide with an
+    unrelated naming series that happens to use the same shop code text.
+    """
+    if not pos_profile:
+        return None
+    shop_code = frappe.db.get_value("POS Profile", pos_profile, "custom_shop_code")
+    if not shop_code:
+        return None
+    seq = getseries(f"CUSTCODE-{shop_code}", 1)
+    return f"{shop_code}{seq}"
+
+
+def _get_unique_customer_code(customer_name, mobile_no=None, pos_profile=None):
     """
     Generate a unique customer_code when the field is mandatory.
-    Prefers mobile_no: format 84 + digits (VN), e.g. 84862598791.
+    From POS: <shop_code><sequence>, e.g. AP1, AP2 (see _shop_code_customer_code).
+    Otherwise prefers mobile_no: format 84 + digits (VN), e.g. 84862598791.
     Fallback: unique code from customer_name if no phone or phone invalid.
     """
+    shop_code_result = _shop_code_customer_code(pos_profile)
+    if shop_code_result:
+        return shop_code_result
+
     code = _phone_to_vn_customer_code(mobile_no) if mobile_no else None
     if code:
         candidate = code
@@ -105,7 +149,7 @@ def get_customers(search_term="", pos_profile=None, limit=20):
 
 
 @frappe.whitelist()
-def create_customer(customer_name, mobile_no=None, email_id=None, customer_group="Individual", territory="All Territories", company=None):
+def create_customer(customer_name, mobile_no=None, email_id=None, customer_group=None, territory=None, company=None, pos_profile=None):
     """
     Create a new customer from POS.
 
@@ -113,9 +157,10 @@ def create_customer(customer_name, mobile_no=None, email_id=None, customer_group
         customer_name (str): Customer name (required)
         mobile_no (str): Mobile number (optional)
         email_id (str): Email address (optional)
-        customer_group (str): Customer group (default: Individual)
-        territory (str): Territory (default: All Territories)
+        customer_group (str): Customer group (default: Selling Settings' default / root Customer Group)
+        territory (str): Territory (default: Selling Settings' default / root Territory)
         company (str): Company (optional, unused)
+        pos_profile (str): POS Profile - used to derive the <shop_code><sequence> customer_code
 
     Returns:
         dict: Created customer document
@@ -131,15 +176,17 @@ def create_customer(customer_name, mobile_no=None, email_id=None, customer_group
         "doctype": "Customer",
         "customer_name": customer_name,
         "customer_type": "Individual",
-        "customer_group": customer_group or "Individual",
-        "territory": territory or "All Territories",
+        "customer_group": customer_group or default_customer_group(),
+        "territory": territory or default_territory(),
         "mobile_no": mobile_no or "",
         "email_id": email_id or "",
     }
 
     # Set customer_code if the custom field exists and is mandatory (e.g. MBWNext Advanced Selling)
     if frappe.get_meta("Customer").has_field("customer_code"):
-        doc_dict["customer_code"] = _get_unique_customer_code(customer_name, mobile_no=mobile_no)
+        doc_dict["customer_code"] = _get_unique_customer_code(
+            customer_name, mobile_no=mobile_no, pos_profile=pos_profile
+        )
 
     customer = frappe.get_doc(doc_dict)
 
@@ -177,10 +224,29 @@ def auto_assign_loyalty_program(doc, method=None):
         )
 
 
+def set_default_territory_and_customer_group(doc, method=None):
+    """Before_insert hook: fill territory/customer_group when left blank.
+
+    Covers CreateCustomerDialog.vue's direct frappe.client.insert call (no
+    pos_next endpoint in between to default these server-side otherwise).
+    """
+    if not doc.get("territory"):
+        doc.territory = default_territory()
+    if not doc.get("customer_group"):
+        doc.customer_group = default_customer_group()
+
+
 def set_customer_code_if_mandatory(doc, method=None):
     """
     Before_insert hook: set customer_code when the custom field exists and is mandatory
-    and the value is empty. Uses mobile_no + mã vùng VN (84), e.g. 84862598791; else fallback from customer_name.
+    and the value is empty. From POS: <shop_code><sequence> (e.g. AP1, AP2 - see
+    _shop_code_customer_code); else mobile_no + mã vùng VN (84), e.g. 84862598791;
+    else fallback from customer_name.
+
+    pos_profile comes from doc.flags.pos_profile (set by callers that construct
+    the doc in Python, e.g. invoices.py's auto-create-customer fallback) or from
+    doc.get("pos_profile") (a plain extra key in the insert payload - how
+    CreateCustomerDialog.vue passes it through frappe.client.insert).
     """
     if not frappe.get_meta("Customer").has_field("customer_code"):
         return
@@ -189,6 +255,7 @@ def set_customer_code_if_mandatory(doc, method=None):
     doc.customer_code = _get_unique_customer_code(
         doc.customer_name or "CUST",
         mobile_no=doc.get("mobile_no"),
+        pos_profile=doc.flags.get("pos_profile") or doc.get("pos_profile"),
     )
 
 

@@ -38,6 +38,53 @@ def _first_selling_tax_template_for_item(item_code, selling_names):
     return None
 
 
+def _bulk_first_selling_tax_template_for_items(item_codes, selling_names):
+    """Batched version of _first_selling_tax_template_for_item() for list
+    endpoints (e.g. the POS item grid) - one query for all items instead of
+    a frappe.get_cached_doc() full Item load per item (N+1).
+
+    Returns {item_code: template_name}, first match per item by child-row
+    order (idx), same semantics as iterating item.get("taxes") in order.
+    """
+    if not item_codes or not selling_names:
+        return {}
+    rows = frappe.get_all(
+        "Item Tax",
+        filters={
+            "parent": ["in", list(item_codes)],
+            "item_tax_template": ["in", list(selling_names)],
+        },
+        fields=["parent", "item_tax_template"],
+        order_by="parent asc, idx asc",
+    )
+    result = {}
+    for row in rows:
+        result.setdefault(row.parent, row.item_tax_template)
+    return result
+
+
+def bulk_ensure_selling_item_tax_for_items(item_codes, company):
+    """Batched version of ensure_selling_item_tax_for_item_line() for list
+    endpoints. Returns {item_code: (template, item_tax_rate_json)} - one
+    get_item_tax_map() call per DISTINCT template found, not per item.
+    """
+    if not item_codes or not company:
+        return {}
+    selling = _selling_item_tax_template_names(company)
+    if not selling:
+        return {}
+    template_map = _bulk_first_selling_tax_template_for_items(item_codes, selling)
+    if not template_map:
+        return {}
+    rate_cache = {}
+    result = {}
+    for item_code, template in template_map.items():
+        if template not in rate_cache:
+            rate_cache[template] = get_item_tax_map(company, template, as_json=True)
+        result[item_code] = (template, rate_cache[template])
+    return result
+
+
 def ensure_selling_item_tax_for_item_line(item_code, company, item_tax_template=None, item_tax_rate=None):
     """Trả về (template, item_tax_rate_json) thuế bán; giữ nguyên nếu đã đúng.
 

@@ -940,6 +940,9 @@ def update_invoice(data):
             invoice_doc.is_pos = 1
             invoice_doc.update_stock = 1
 
+        if not invoice_doc.get("posting_date"):
+            invoice_doc.posting_date = nowdate()
+
         # ========================================================================
         # ROUNDING CONFIGURATION
         # ========================================================================

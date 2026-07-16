@@ -1508,10 +1508,18 @@ def get_item_details(
 
 @frappe.whitelist()
 def get_service_surcharge_item_details(pos_profile):
-	"""Get item details for POS Profile's Service Surcharge Item (for offline cache)."""
+	"""Get item details for POS Profile's Service Surcharge Item (for offline cache).
+
+	Returns None when service_surcharge_item is not configured — avoids calling
+	get_item_details with a hard-coded fallback that may not exist.
+	"""
 	try:
 		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-		item_code = pos_profile_doc.get("service_surcharge_item") or "Phí bảo quản lạnh"
+		item_code = pos_profile_doc.get("service_surcharge_item")
+		if not item_code:
+			return None
+		if not frappe.db.exists("Item", item_code):
+			return None
 		return get_item_details(item_code, pos_profile, qty=1)
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Service Surcharge Item Error")

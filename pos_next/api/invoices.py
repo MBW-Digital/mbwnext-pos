@@ -1962,6 +1962,10 @@ def get_returnable_invoices(limit=50, pos_profile=None):
         .limit(cint(limit))
     )
 
+    # Only show invoices from the current POS Profile
+    if pos_profile:
+        query = query.where(si.pos_profile == pos_profile)
+
     # Add date filter if return validity is configured
     if return_validity_days > 0:
         cutoff_date = add_days(today(), -return_validity_days)
@@ -1981,15 +1985,15 @@ def get_returnable_invoices(limit=50, pos_profile=None):
 
 @frappe.whitelist()
 def search_invoice_by_number(search_term, pos_profile=None):
-    """Search for invoices by invoice number across the entire database.
-    No date restrictions - searches all returnable invoices matching the term.
+    """Search for invoices by invoice number for the current POS Profile.
+    No date restrictions - searches returnable invoices matching the term.
 
     Uses query builder with LEFT JOINs to calculate remaining returnable quantities.
     Only returns invoices that have items available for return.
 
     Args:
         search_term: Invoice number or partial number to search for (min 3 chars)
-        pos_profile: Optional POS profile for context (reserved for future use)
+        pos_profile: Current POS Profile — only invoices from this profile are returned
 
     Returns:
         List of matching invoices with return availability info (max 10 results)
@@ -2009,6 +2013,15 @@ def search_invoice_by_number(search_term, pos_profile=None):
     ret_item = frappe.qb.DocType("Sales Invoice Item").as_("ret_item")
 
     # Build query with query builder
+    conditions = (
+        (si.docstatus == 1)
+        & (si.is_return == 0)
+        & (si.is_pos == 1)
+        & (si.name.like(f"%{search_term}%"))
+    )
+    if pos_profile:
+        conditions = conditions & (si.pos_profile == pos_profile)
+
     query = (
         frappe.qb.from_(si)
         .left_join(si_item).on(si_item.parent == si.name)
@@ -2032,12 +2045,7 @@ def search_invoice_by_number(search_term, pos_profile=None):
             Coalesce(Sum(Case().when(ret_item.qty.isnotnull(), Abs(ret_item.qty)).else_(0)), 0).as_("total_returned_qty"),
             Coalesce(Sum(Case().when(si_item.qty.isnotnull(), si_item.qty).else_(0)), 0).as_("total_original_qty"),
         )
-        .where(
-            (si.docstatus == 1)
-            & (si.is_return == 0)
-            & (si.is_pos == 1)
-            & (si.name.like(f"%{search_term}%"))
-        )
+        .where(conditions)
         .groupby(si.name)
         .orderby(si.posting_date, order=frappe.qb.desc)
         .orderby(si.creation, order=frappe.qb.desc)
@@ -2056,12 +2064,12 @@ def search_invoice_by_number(search_term, pos_profile=None):
 
 
 @frappe.whitelist()
-def check_invoice_return_validity(invoice_name):
-    """Check if an invoice is within the return validity period.
+def check_invoice_return_validity(invoice_name, pos_profile=None):
+    """Check if an invoice is within the return validity period and same POS Profile.
 
     Returns detailed information for the UI to display, including:
     - valid: Boolean indicating if return is allowed
-    - error_type: 'not_found' or 'return_period_expired' if invalid
+    - error_type: 'not_found', 'wrong_pos_profile', or 'return_period_expired' if invalid
     - Additional context (invoice_date, days_since, allowed_days) for expired returns
     """
     from frappe.utils import date_diff, getdate, formatdate
@@ -2082,6 +2090,15 @@ def check_invoice_return_validity(invoice_name):
         }
 
     invoice_info = invoice_data[0]
+
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        return {
+            "valid": False,
+            "error_type": "wrong_pos_profile",
+            "message": _(
+                "Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS."
+            ).format(invoice_name, invoice_info.pos_profile),
+        }
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -2515,7 +2532,7 @@ def _build_return_transaction_rule_data(invoice_name, invoice_info, has_tpr_fiel
 
 
 @frappe.whitelist()
-def prepare_return_invoice(invoice_name, pos_opening_shift=None):
+def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=None):
     """Prepare a return invoice using ERPNext's make_sales_return.
 
     This uses ERPNext's standard return document creation which properly copies
@@ -2527,11 +2544,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     The function validates:
     - Invoice exists and is submitted (docstatus = 1)
     - Invoice is not already a return
+    - Invoice belongs to the current POS Profile (when pos_profile is provided)
     - Return is within the validity period (if configured in POS Settings)
 
     Args:
         invoice_name: The original Sales Invoice name to create return against
         pos_opening_shift: The current POS Opening Shift name
+        pos_profile: Current POS Profile — rejects invoices from other profiles
 
     Returns:
         dict: The prepared return invoice document with:
@@ -2575,6 +2594,14 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     # Check if it's already a return
     if invoice_info.is_return:
         frappe.throw(_("Cannot create return against a return invoice"))
+
+    # Only allow returns for invoices from the current POS Profile
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        frappe.throw(
+            _("Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS.").format(
+                invoice_name, invoice_info.pos_profile
+            )
+        )
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:

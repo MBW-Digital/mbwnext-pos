@@ -173,12 +173,26 @@ def auto_assign_loyalty_program_on_invoice(doc):
 def before_cancel(doc, method=None):
 	"""
 	Before Cancel hook for Sales Invoice.
-	Cancel any credit redemption journal entries.
-
-	Args:
-		doc: Sales Invoice document
-		method: Hook method name (unused)
+	- Cancel wallet transactions from loyalty→wallet conversion
+	- Cancel any credit redemption journal entries
 	"""
+	# Cancel linked Wallet Transactions first (Dynamic Link would otherwise block SI cancel)
+	try:
+		from pos_next.api.wallet import cancel_wallet_transactions_for_invoice
+		cancel_wallet_transactions_for_invoice(doc, method)
+	except frappe.ValidationError:
+		raise
+	except Exception as e:
+		frappe.log_error(
+			title="Wallet Transaction Cancellation Error",
+			message=f"Invoice: {doc.name}, Error: {str(e)}\n{frappe.get_traceback()}"
+		)
+		frappe.throw(
+			_("Cannot cancel invoice because linked wallet transaction(s) could not be cancelled: {0}").format(
+				str(e)
+			)
+		)
+
 	try:
 		from pos_next.api.credit_sales import cancel_credit_journal_entries
 		cancel_credit_journal_entries(doc.name)

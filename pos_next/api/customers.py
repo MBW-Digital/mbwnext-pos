@@ -100,52 +100,88 @@ def _get_unique_customer_code(customer_name, mobile_no=None, pos_profile=None):
     return candidate
 
 
+def _mobile_search_variants(search_term):
+	"""Build mobile LIKE patterns for VN-style numbers (0904 ↔ 84-904 ↔ +84-904)."""
+	digits = re.sub(r"\D", "", search_term or "")
+	patterns = set()
+	if not digits:
+		return patterns
+
+	patterns.add(f"%{digits}%")
+	if digits.startswith("0") and len(digits) > 1:
+		rest = digits[1:]
+		patterns.add(f"%{rest}%")
+		patterns.add(f"%{VN_COUNTRY_CODE}{rest}%")
+	elif digits.startswith(VN_COUNTRY_CODE) and len(digits) > len(VN_COUNTRY_CODE):
+		rest = digits[len(VN_COUNTRY_CODE) :]
+		patterns.add(f"%0{rest}%")
+		patterns.add(f"%{rest}%")
+
+	return patterns
+
+
 @frappe.whitelist()
 def get_customers(search_term="", pos_profile=None, limit=20):
+	"""
+	Search customers for inline customer selection in POS.
 
-    """
-    Search customers for inline customer selection in POS.
+	Args:
+		search_term (str): Search query (name, mobile, or customer ID)
+		pos_profile (str): POS Profile to filter by customer group
+		limit (int): Max results. 0 + empty search_term = full list (offline cache).
 
-    Args:
-        search_term (str): Search query (name, mobile, or customer ID)
-        pos_profile (str): POS Profile to filter by customer group
-        limit (int): Maximum number of results to return
+	Returns:
+		list: Customer dicts with name, customer_name, mobile_no, email_id
+	"""
+	try:
+		from frappe.utils import cint
 
-    Returns:
-        list: List of customer dictionaries with name, customer_name, mobile_no, email_id
-    """
-    try:
-        frappe.logger().debug(
-            f"get_customers called with search_term={search_term}, pos_profile={pos_profile}, limit={limit}"
-        )
+		search_term = (search_term or "").strip()
+		limit = cint(limit)
 
-        filters = {}
+		filters = {"disabled": 0}
 
-        # Filter by POS Profile customer group if specified
-        if pos_profile:
-            frappe.logger().debug(f"Loading POS Profile: {pos_profile}")
-            profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-            # Check if customer_group field exists (it may not exist in all versions)
-            if hasattr(profile_doc, "customer_group") and profile_doc.customer_group:
-                filters["customer_group"] = profile_doc.customer_group
-                frappe.logger().debug(f"Filtering by customer_group: {profile_doc.customer_group}")
+		if pos_profile:
+			profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+			if hasattr(profile_doc, "customer_group") and profile_doc.customer_group:
+				filters["customer_group"] = profile_doc.customer_group
 
-        # Return all customers (for client-side filtering)
-        filters["disabled"] = 0
-        customer_limit = limit if limit not in (None, 0) else frappe.db.count("Customer", filters)
-        result = frappe.get_all(
-            "Customer",
-            filters=filters,
-            fields=["name", "customer_name", "mobile_no", "email_id"],
-            limit=customer_limit,
-            order_by="customer_name asc",
-        )
-        frappe.logger().debug(f"get_customers returned {len(result)} customers")
-        return result
-    except Exception as e:
-        frappe.logger().error(f"Error in get_customers: {str(e)}")
-        frappe.logger().error(frappe.get_traceback())
-        frappe.throw(_("Error fetching customers: {0}").format(str(e)))
+		fields = ["name", "customer_name", "mobile_no", "email_id"]
+
+		# Empty search: used for offline full dump when limit=0
+		if not search_term:
+			customer_limit = limit if limit > 0 else frappe.db.count("Customer", filters)
+			return frappe.get_all(
+				"Customer",
+				filters=filters,
+				fields=fields,
+				limit=customer_limit,
+				order_by="customer_name asc",
+			)
+
+		# Search mode — always capped (never return unbounded results)
+		max_results = limit if limit > 0 else 20
+		or_filters = [
+			["customer_name", "like", f"%{search_term}%"],
+			["name", "like", f"%{search_term}%"],
+			["mobile_no", "like", f"%{search_term}%"],
+		]
+		for pattern in _mobile_search_variants(search_term):
+			or_filters.append(["mobile_no", "like", pattern])
+
+		result = frappe.get_all(
+			"Customer",
+			filters=filters,
+			or_filters=or_filters,
+			fields=fields,
+			limit=max_results,
+			order_by="customer_name asc",
+		)
+		return result
+	except Exception as e:
+		frappe.logger().error(f"Error in get_customers: {str(e)}")
+		frappe.logger().error(frappe.get_traceback())
+		frappe.throw(_("Error fetching customers: {0}").format(str(e)))
 
 
 @frappe.whitelist()

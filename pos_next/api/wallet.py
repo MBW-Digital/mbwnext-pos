@@ -123,6 +123,68 @@ def process_loyalty_to_wallet(doc, method=None):
 		)
 
 
+def cancel_wallet_transactions_for_invoice(doc, method=None):
+	"""
+	Cancel Wallet Transactions created from this Sales Invoice (loyalty → wallet).
+	Must run on before_cancel / on_cancel so reverse GL happens and SI is not blocked
+	by Dynamic Link from Wallet Transaction.reference_name.
+	"""
+	if not doc.is_pos:
+		return
+
+	transactions = frappe.get_all(
+		"Wallet Transaction",
+		filters={
+			"reference_doctype": "Sales Invoice",
+			"reference_name": doc.name,
+			"docstatus": 1,
+		},
+		pluck="name",
+	)
+
+	if not transactions:
+		return
+
+	# If wallet credit was already spent, reversing it would go negative — block with clear message
+	total_credit = 0.0
+	for name in transactions:
+		wt = frappe.db.get_value(
+			"Wallet Transaction",
+			name,
+			["transaction_type", "amount", "customer", "company"],
+			as_dict=True,
+		)
+		if wt and wt.transaction_type in ("Credit", "Loyalty Credit"):
+			total_credit += flt(wt.amount)
+
+	if total_credit > 0:
+		balance = get_customer_wallet_balance(doc.customer, doc.company)
+		if flt(balance) + 0.0001 < total_credit:
+			frappe.throw(
+				_(
+					"Cannot cancel invoice {0}: wallet credit of {1} from this invoice "
+					"was already used. Available wallet balance: {2}. "
+					"Please reverse wallet payments first."
+				).format(
+					doc.name,
+					frappe.format_value(total_credit, {"fieldtype": "Currency"}),
+					frappe.format_value(balance, {"fieldtype": "Currency"}),
+				),
+				title=_("Wallet Credit Already Used"),
+			)
+
+	for name in transactions:
+		wt_doc = frappe.get_doc("Wallet Transaction", name)
+		wt_doc.flags.ignore_permissions = True
+		wt_doc.cancel()
+
+	frappe.msgprint(
+		_("Cancelled {0} wallet transaction(s) linked to this invoice").format(len(transactions)),
+		alert=True,
+		indicator="orange",
+	)
+
+
 def get_wallet_amount_from_payments(payments):
 	"""
 	Calculate total wallet payment amount from invoice payments.

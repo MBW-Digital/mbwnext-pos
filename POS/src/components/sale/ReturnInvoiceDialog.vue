@@ -1763,6 +1763,7 @@ function openReturnModal(invoice) {
 	fetchInvoiceResource.fetch({
 		invoice_name: invoice.name,
 		pos_opening_shift: props.posOpeningShift,
+		pos_profile: props.posProfile,
 	})
 	returnModal.visible = true
 }
@@ -1776,11 +1777,13 @@ async function checkValidityAndOpenModal(invoiceName, fallbackOnError = false) {
 	try {
 		const validity = await checkInvoiceValidityResource.fetch({
 			invoice_name: invoiceName,
+			pos_profile: props.posProfile,
 		})
 		if (handleValidityResponse(validity)) {
 			fetchInvoiceResource.fetch({
 				invoice_name: invoiceName,
 				pos_opening_shift: props.posOpeningShift,
+				pos_profile: props.posProfile,
 			})
 			returnModal.visible = true
 		}

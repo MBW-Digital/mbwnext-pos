@@ -1158,11 +1158,9 @@ const { userName, userImage } = useUserData();
 // Locale composable for RTL support
 const { isRTL } = useLocale();
 
-// Item code dịch vụ làm nóng/lạnh: lấy từ POS Profile (service_surcharge_item), fallback "Phí bảo quản lạnh"
+// Item code dịch vụ làm nóng/lạnh: chỉ dùng khi POS Profile có cấu hình service_surcharge_item
 const serviceSurchargeItemCode = computed(
-	() =>
-		shiftStore.currentProfile?.service_surcharge_item ||
-		'Phí bảo quản lạnh'
+	() => shiftStore.currentProfile?.service_surcharge_item || ''
 );
 
 // External app URL for "Open App" menu (default: site_url/app; override via site_config.json: pos_external_app_url)

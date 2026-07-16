@@ -52,6 +52,15 @@ class WalletTransaction(AccountsController):
 
 	def on_cancel(self):
 		"""Reverse GL entries on cancel"""
+		# Must be set before post-cancel link validation (same pattern as Sales Invoice)
+		self.ignore_linked_doctypes = (
+			"GL Entry",
+			"Payment Ledger Entry",
+			"Repost Payment Ledger",
+			"Repost Payment Ledger Items",
+			"Repost Accounting Ledger",
+			"Repost Accounting Ledger Items",
+		)
 		self.make_gl_entries(cancel=True)
 		self.update_wallet_balance()
 

@@ -592,11 +592,12 @@ async function searchCachedItems(searchTerm = "", limit = 50) {
 	}
 }
 
-// Search cached customers
+// Search cached customers — early-exit + VN phone digit normalization
 async function searchCachedCustomers(searchTerm = "", limit = 20) {
 	try {
 		const db = await initDB()
-		const term = searchTerm.toLowerCase()
+		const term = (searchTerm || "").toLowerCase().trim()
+		const max = limit > 0 ? limit : Number.POSITIVE_INFINITY
 
 		if (!term) {
 			return limit > 0
@@ -604,19 +605,48 @@ async function searchCachedCustomers(searchTerm = "", limit = 20) {
 				: await db.table("customers").toArray()
 		}
 
-		// Get all customers and filter in memory for 'includes' behavior
-		// This is fast because IndexedDB is already in-memory for small datasets
-		const allCustomers = await db.table("customers").toArray()
+		const termDigits = term.replace(/\D/g, "")
+		const results = []
 
-		const results = allCustomers
-			.filter((cust) => {
+		const matchesMobile = (mobile) => {
+			if (!mobile) return false
+			const lower = mobile.toLowerCase()
+			if (lower.includes(term)) return true
+			if (!termDigits) return false
+			const digits = mobile.replace(/\D/g, "")
+			if (!digits) return false
+			if (digits.includes(termDigits)) return true
+			if (termDigits.startsWith("0") && termDigits.length > 1) {
+				const rest = termDigits.slice(1)
+				return digits.includes(rest) || digits.includes(`84${rest}`)
+			}
+			if (termDigits.startsWith("84") && termDigits.length > 2) {
+				const rest = termDigits.slice(2)
+				return digits.includes(rest) || digits.includes(`0${rest}`)
+			}
+			return false
+		}
+
+		const STOP = Symbol("stop-customer-search")
+		try {
+			await db.table("customers").each((cust) => {
+				if (results.length >= max) throw STOP
+
 				const name = (cust.customer_name || "").toLowerCase()
-				const mobile = (cust.mobile_no || "").toLowerCase()
 				const id = (cust.name || "").toLowerCase()
 
-				return name.includes(term) || mobile.includes(term) || id.includes(term)
+				if (
+					name.includes(term) ||
+					id.includes(term) ||
+					matchesMobile(cust.mobile_no)
+				) {
+					results.push(cust)
+					if (results.length >= max) throw STOP
+				}
 			})
-			.slice(0, limit || allCustomers.length)
+		} catch (e) {
+			if (e !== STOP) throw e
+		}
 
 		return results
 	} catch (error) {

@@ -147,9 +147,10 @@
 <div class="divider"></div>
 
 {%- for item in doc.items -%}
+{%- set item_disc_pct = item_discount_percent_for_receipt(item) -%}
 <div class="item-name lr">
 	<span class="name">{{ item.item_name }}</span>
-	<span class="disc">{% if item.discount_percentage and item.discount_percentage > 0 %}-{{ "%.2f"|format(item.discount_percentage) }}%{% endif %}</span>
+	<span class="disc">{% if item_disc_pct and item_disc_pct > 0 %}-{{ "%.2f"|format(item_disc_pct) }}%{% endif %}</span>
 </div>
 <div class="item-sub lr">
 	<span>{{ item_barcode_for_receipt(item) }}</span>

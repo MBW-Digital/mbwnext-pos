@@ -375,6 +375,40 @@ def item_gross_amount_for_receipt(item) -> float:
 	return flt(rate * qty)
 
 
+def _item_field(item, field):
+	return getattr(item, field, None) if not isinstance(item, dict) else item.get(field)
+
+
+def item_discount_percent_for_receipt(item) -> float:
+	"""% chiết khấu dòng hàng cho phiếu in.
+
+	Ưu tiên `discount_percentage`. Nếu = 0 (khuyến mãi qua Pricing Rule bị POS
+	quy về số tiền + rate tròn, xem sales_invoice_hooks.restore_pos_authoritative_discounts)
+	thì quy đổi lại % từ giá gốc: (price_list_rate - rate) / price_list_rate * 100,
+	hoặc từ discount_amount khi thiếu rate. Trả 0 nếu không có chiết khấu.
+	"""
+	pct = flt(_item_field(item, "discount_percentage"))
+	if pct > 0:
+		return pct
+
+	price_list_rate = flt(_item_field(item, "price_list_rate"))
+	if price_list_rate <= 0:
+		return 0.0
+
+	rate = flt(_item_field(item, "rate"))
+	if rate > 0 and rate < price_list_rate:
+		return (price_list_rate - rate) / price_list_rate * 100
+
+	qty = flt(_item_field(item, "qty"))
+	discount_amount = flt(_item_field(item, "discount_amount"))
+	if discount_amount > 0 and qty > 0:
+		per_unit = discount_amount / qty
+		if per_unit < price_list_rate:
+			return per_unit / price_list_rate * 100
+
+	return 0.0
+
+
 def ha_vang_receipt_meta_for_jinja(doc):
 	"""Metadata cho Print Format POS HA Vang Receipt."""
 	inv = doc.as_dict()

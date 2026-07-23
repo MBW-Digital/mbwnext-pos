@@ -24,6 +24,7 @@ def validate(doc, method=None):
 	apply_tax_inclusive(doc)
 	auto_assign_loyalty_program_on_invoice(doc)
 	restore_pos_authoritative_discounts(doc)
+	reconcile_inclusive_tax_rounding(doc)
 
 
 def capture_pos_authoritative_discounts(doc, method=None):
@@ -133,6 +134,34 @@ def apply_tax_inclusive(doc):
 	# Recalculate if we made changes
 	if has_changes:
 		doc.calculate_taxes_and_totals()
+
+
+def reconcile_inclusive_tax_rounding(doc):
+	taxes = doc.get("taxes") or []
+	if not taxes:
+		return
+	if not any(cint(t.included_in_print_rate) for t in taxes):
+		return
+
+	sum_net = flt(sum(flt(item.base_net_amount) for item in doc.get("items", [])))
+	sum_tax = flt(sum(flt(tax.base_tax_amount_after_discount_amount) for tax in taxes))
+	diff = flt(flt(doc.base_grand_total) - (sum_net + sum_tax))
+
+	# Same tolerance ERPNext itself uses to decide a diff is legitimate
+	# per-line rounding noise (see adjust_grand_total_for_inclusive_tax) -
+	# beyond that, don't silently mask what could be a real data problem.
+	if not diff or abs(diff) > 5:
+		return
+
+	last_tax = taxes[-1]
+	last_tax.tax_amount = flt(last_tax.tax_amount + diff)
+	last_tax.base_tax_amount = flt(last_tax.base_tax_amount + diff)
+	last_tax.tax_amount_after_discount_amount = flt(last_tax.tax_amount_after_discount_amount + diff)
+	last_tax.base_tax_amount_after_discount_amount = flt(
+		last_tax.base_tax_amount_after_discount_amount + diff
+	)
+	last_tax.total = flt(last_tax.total + diff)
+	last_tax.base_total = flt(last_tax.base_total + diff)
 
 
 def auto_assign_loyalty_program_on_invoice(doc):

@@ -8,6 +8,7 @@ import re
 import frappe
 from frappe import _
 from frappe.model.naming import getseries
+from frappe.utils import now_datetime
 from frappe.utils.nestedset import get_root_of
 
 
@@ -52,12 +53,8 @@ def _phone_to_vn_customer_code(mobile_no):
 
 
 def _shop_code_customer_code(pos_profile):
-    """<Shop Code>+<sequence>, e.g. AP1, AP2 - one counter per POS Profile shop code.
-
-    Uses frappe's Series counter (`tabSeries`, row-locked on read) so
-    concurrent POS terminals never hand out the same number. Namespaced with
-    a "CUSTCODE-" prefix on the counter key so it can't collide with an
-    unrelated naming series that happens to use the same shop code text.
+    """<Shop Code><STT><YYMMDDHHMMSS>, e.g. AP3260723083303 - shop code,
+    running sequence number (STT), then the creation timestamp.
     """
     if not pos_profile:
         return None
@@ -65,7 +62,13 @@ def _shop_code_customer_code(pos_profile):
     if not shop_code:
         return None
     seq = getseries(f"CUSTCODE-{shop_code}", 1)
-    return f"{shop_code}{seq}"
+    timestamp = now_datetime().strftime("%y%m%d%H%M%S")
+    candidate = f"{shop_code}{seq}{timestamp}"
+    suffix = 0
+    while frappe.db.exists("Customer", {"customer_code": candidate}):
+        suffix += 1
+        candidate = f"{shop_code}{seq}{timestamp}-{suffix}"
+    return candidate
 
 
 def _get_unique_customer_code(customer_name, mobile_no=None, pos_profile=None):

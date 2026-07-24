@@ -7,7 +7,6 @@ import re
 
 import frappe
 from frappe import _
-from frappe.model.naming import getseries
 from frappe.utils import now_datetime
 from frappe.utils.nestedset import get_root_of
 
@@ -53,21 +52,20 @@ def _phone_to_vn_customer_code(mobile_no):
 
 
 def _shop_code_customer_code(pos_profile):
-    """<Shop Code><STT><YYMMDDHHMMSS>, e.g. AP3260723083303 - shop code,
-    running sequence number (STT), then the creation timestamp.
+    """<Shop Code><YYMMDDHHMMSS>, e.g. AP260723083303 - shop code + the
+    creation timestamp (second resolution), no running sequence number.
     """
     if not pos_profile:
         return None
     shop_code = frappe.db.get_value("POS Profile", pos_profile, "custom_shop_code")
     if not shop_code:
         return None
-    seq = getseries(f"CUSTCODE-{shop_code}", 1)
     timestamp = now_datetime().strftime("%y%m%d%H%M%S")
-    candidate = f"{shop_code}{seq}{timestamp}"
+    candidate = f"{shop_code}{timestamp}"
     suffix = 0
     while frappe.db.exists("Customer", {"customer_code": candidate}):
         suffix += 1
-        candidate = f"{shop_code}{seq}{timestamp}-{suffix}"
+        candidate = f"{shop_code}{timestamp}-{suffix}"
     return candidate
 
 

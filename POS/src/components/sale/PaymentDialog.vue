@@ -1955,7 +1955,13 @@ const canComplete = computed(() => {
 		return paymentEntries.value.length > 0
 	}
 
-	// Otherwise require full payment
+	// Otherwise require full payment. A 0-total invoice (e.g. 100% discount/coupon)
+	// has nothing to pay, so don't require a payment entry - the numpad's Add
+	// button is itself disabled at amount 0, so the cashier could never satisfy
+	// paymentEntries.length > 0 for this case anyway.
+	if (roundCurrency(props.grandTotal) === 0) {
+		return true
+	}
 	return remainingAmount.value === 0 && paymentEntries.value.length > 0
 })
 

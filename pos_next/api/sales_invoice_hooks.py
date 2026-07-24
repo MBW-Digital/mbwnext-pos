@@ -24,6 +24,7 @@ def validate(doc, method=None):
 	apply_tax_inclusive(doc)
 	auto_assign_loyalty_program_on_invoice(doc)
 	restore_pos_authoritative_discounts(doc)
+	reconcile_base_grand_total(doc)
 	reconcile_inclusive_tax_rounding(doc)
 
 
@@ -134,6 +135,41 @@ def apply_tax_inclusive(doc):
 	# Recalculate if we made changes
 	if has_changes:
 		doc.calculate_taxes_and_totals()
+
+
+def reconcile_base_grand_total(doc):
+	"""Fix an ERPNext core bug: when total_taxes_and_charges rounds to exactly
+	0, calculate_totals() sets base_grand_total = base_net_total instead of
+	deriving it from grand_total (see erpnext/controllers/taxes_and_totals.py,
+	calculate_totals(), the "else: self.doc.base_net_total" branch).
+
+	That branch silently ignores a "Grand Total"-level discount whenever it
+	zeroes out tax on a heavily-discounted (or free, 100%-off) POS invoice -
+	net_total no longer equals grand_total in that case, but base_grand_total
+	gets set from net_total anyway, so it disagrees with grand_total even
+	though conversion_rate=1. make_gl_entries() then debits/credits from the
+	two mismatched totals and submit fails with "Debit and Credit not equal".
+
+	Re-derive base_grand_total from grand_total directly - the correct
+	formula regardless of whether total_taxes_and_charges is zero.
+	"""
+	if not cint(doc.get("is_pos")):
+		return
+
+	expected_base_grand_total = flt(
+		flt(doc.grand_total) * flt(doc.conversion_rate or 1),
+		doc.precision("base_grand_total"),
+	)
+	if flt(doc.base_grand_total) == expected_base_grand_total:
+		return
+
+	doc.base_grand_total = expected_base_grand_total
+
+	if doc.meta.get_field("base_rounded_total") and not doc.is_rounded_total_disabled():
+		doc.base_rounded_total = flt(
+			flt(doc.rounded_total) * flt(doc.conversion_rate or 1),
+			doc.precision("base_rounded_total"),
+		)
 
 
 def reconcile_inclusive_tax_rounding(doc):

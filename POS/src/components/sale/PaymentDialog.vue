@@ -416,7 +416,10 @@
 						</div>
 						<!-- Coupon discount (additional discount on top of item-level pricing) -->
 						<div v-if="additionalDiscount > 0" class="flex items-center justify-between text-sm">
-							<span class="text-gray-600 text-start">{{ __('Coupon Discount') }}</span>
+							<span class="text-gray-600 text-start">
+								{{ __('Coupon Discount') }}
+								<span v-if="couponDiscountPercentage > 0" class="text-gray-500">({{ couponDiscountPercentage }}%)</span>
+							</span>
 							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(additionalDiscount) }}</span>
 						</div>
 						<!-- Residual/unreconciled invoice-level discount, normally 0 -->
@@ -1098,6 +1101,10 @@ const props = defineProps({
 		type: Boolean,
 		default: false,
 	},
+	appliedCoupon: {
+		type: Object,
+		default: null,
+	},
 	company: {
 		type: String,
 		default: "",
@@ -1704,6 +1711,14 @@ const remainingAvailableCredit = computed(() => {
 const itemLevelDiscountAmount = computed(() =>
 	roundCurrency(props.discountAmount - (props.additionalDiscount || 0)),
 )
+
+// Percentage-type coupons show their % beside the Coupon Discount label so the
+// cashier can see both the rate and the resulting amount.
+const couponDiscountPercentage = computed(() => {
+	const coupon = props.appliedCoupon
+	if (!coupon || coupon.type !== "Percentage") return 0
+	return Number(coupon.percentage) || 0
+})
 
 // Residual/unreconciled invoice-level discount (e.g. a backend-side "Additional
 // Discount %" on the Sales Invoice that isn't the coupon flow above). Normally 0.

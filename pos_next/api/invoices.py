@@ -760,6 +760,49 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
     return {"valid": True}
 
 
+def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
+    """Record the POS Coupon used on the invoice in the custom_pos_coupons child table.
+
+    The discount itself is already carried by the invoice's discount_amount; this table
+    only makes visible WHICH coupon produced it and how much of the discount it accounts
+    for, so the value can be reported on without re-deriving it from the coupon config.
+
+    Args:
+        invoice_doc: The Sales Invoice document being saved
+        coupon: The validated POS Coupon document (from check_coupon_code)
+        coupon_discount_amount: Amount the POS UI actually discounted for this coupon.
+            Falls back to recomputing from the coupon config when not supplied.
+    """
+    if not coupon or not invoice_doc.meta.get_field("custom_pos_coupons"):
+        return
+
+    amount = flt(coupon_discount_amount)
+    if amount <= 0:
+        # No amount from the client — recompute from the coupon config so the row is
+        # never silently zero. net_total is the base for "Net Total" coupons.
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import apply_coupon_discount
+
+        result = apply_coupon_discount(
+            coupon,
+            flt(invoice_doc.get("total")),
+            flt(invoice_doc.get("net_total")) or flt(invoice_doc.get("total")),
+        )
+        if result.get("valid"):
+            amount = flt(result.get("discount"))
+
+    invoice_doc.set("custom_pos_coupons", [])
+    invoice_doc.append(
+        "custom_pos_coupons",
+        {
+            "coupon": coupon.name,
+            "coupon_code": coupon.coupon_code,
+            "discount_type": coupon.discount_type,
+            "discount_percentage": flt(coupon.discount_percentage),
+            "discount_amount": amount,
+        },
+    )
+
+
 # ==========================================
 # Invoice Management (Two-Step Flow)
 # ==========================================
@@ -1043,6 +1086,12 @@ def update_invoice(data):
 
                 # Store coupon code on invoice for tracking
                 invoice_doc.coupon_code = coupon_code
+
+                _set_applied_pos_coupons(
+                    invoice_doc,
+                    coupon_result.get("coupon"),
+                    data.get("coupon_discount_amount"),
+                )
 
         # Assign FIFO batches before save (includes free-gift lines without batch)
         if doctype == "Sales Invoice":

@@ -38,6 +38,7 @@ export function useInvoice() {
 	// Lưu lại để check threshold khi trả hàng (KM reclaim)
 	const transactionPricingRule = ref("")
 	const couponCode = ref(null)
+	const couponDiscountAmount = ref(0) // Discount attributable to the coupon alone
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
 
@@ -647,6 +648,10 @@ export function useInvoice() {
 		// This preserves item-level pricing rules while applying coupon discount
 		additionalDiscount.value = discountAmount
 
+		// Track separately from additionalDiscount: that one also carries offer /
+		// transaction pricing rule discounts, so it cannot be attributed to the coupon
+		couponDiscountAmount.value = discountAmount
+
 		// Rebuild cache after applying additional discount
 		rebuildIncrementalCache()
 	}
@@ -660,6 +665,7 @@ export function useInvoice() {
 		transactionPreviewTotals.value = null
 		transactionApplyDiscountOn.value = null
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 		rebuildIncrementalCache()
 	}
 
@@ -1070,6 +1076,7 @@ export function useInvoice() {
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
 		apply_discount_on: transactionApplyDiscountOn.value || undefined,
 		coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 		remarks: (remarks.value || "").trim(),
 		is_pos: 1,
 		update_stock: 1,
@@ -1142,6 +1149,7 @@ export function useInvoice() {
 				additional_discount_percentage: additionalDiscountPercentage.value || 0,
 				posa_transaction_pricing_rule: transactionPricingRule.value || "",
 				coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 				remarks: (remarks.value || "").trim(),
 				is_pos: 1,
 				update_stock: 1, // Critical: Ensures stock is updated
@@ -1299,6 +1307,7 @@ export function useInvoice() {
 			apply_discount_on: transactionApplyDiscountOn.value || undefined,
       remarks: (remarks.value || "").trim(),
 			coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 			is_pos: 1,
 			update_stock: 1,
 		}
@@ -1383,6 +1392,7 @@ export function useInvoice() {
 		additionalDiscountPercentage.value = 0
 		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1412,6 +1422,7 @@ export function useInvoice() {
 		additionalDiscountPercentage.value = 0
 		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1506,6 +1517,7 @@ export function useInvoice() {
 		transactionApplyDiscountOn,
 		transactionPricingRule,
 		couponCode,
+		couponDiscountAmount,
 		taxRules,
 		taxInclusive,
 		isSubmitting,

@@ -1238,8 +1238,9 @@
 
 		<!-- Totals Summary -->
 		<div class="p-1.5 sm:p-2 bg-white border-t border-gray-200">
+			<!-- Discount, excluding the coupon — the coupon has its own line below -->
 			<div
-				v-if="items.length > 0 && discountAmount > 0"
+				v-if="items.length > 0 && displayDiscountAmount > 0"
 				class="mb-1.5 flex items-center justify-between bg-red-50 rounded px-1.5 py-1"
 			>
 				<div class="flex items-center gap-1">
@@ -1257,7 +1258,35 @@
 					<span class="text-xs font-bold text-red-700">{{ __("Discount") }}</span>
 				</div>
 				<span class="text-sm font-extrabold text-red-600 text-center min-w-[60px]">{{
-					formatCurrency(discountAmount)
+					formatCurrency(displayDiscountAmount)
+				}}</span>
+			</div>
+
+			<!-- Coupon discount: shown separately, with its % when the coupon is percentage-based -->
+			<div
+				v-if="items.length > 0 && couponDiscountAmount > 0"
+				class="mb-1.5 flex items-center justify-between bg-purple-50 rounded px-1.5 py-1"
+			>
+				<div class="flex items-center gap-1 min-w-0">
+					<svg
+						class="w-3.5 h-3.5 text-purple-600 flex-shrink-0"
+						fill="currentColor"
+						viewBox="0 0 20 20"
+					>
+						<path
+							d="M10 2a1 1 0 011 1v1a1 1 0 002 0V3a1 1 0 112 0v1a2 2 0 002 2v2a2 2 0 000 4v2a2 2 0 00-2 2v1a1 1 0 11-2 0v-1a1 1 0 10-2 0v1a1 1 0 11-2 0v-1a1 1 0 10-2 0v1a1 1 0 11-2 0v-1a2 2 0 00-2-2v-2a2 2 0 000-4V6a2 2 0 002-2V3a1 1 0 011-1h4z"
+						/>
+					</svg>
+					<span class="text-xs font-bold text-purple-700 truncate">{{ __("Coupon Discount") }}</span>
+					<span
+						v-if="couponDiscountPercentage > 0"
+						class="text-[10px] font-bold text-purple-700 bg-purple-200 rounded px-1 py-0.5 flex-shrink-0"
+					>
+						{{ couponDiscountPercentage }}%
+					</span>
+				</div>
+				<span class="text-sm font-extrabold text-purple-600 text-center min-w-[60px]">{{
+					formatCurrency(couponDiscountAmount)
 				}}</span>
 			</div>
 
@@ -1414,6 +1443,16 @@ const props = defineProps({
 	discountAmount: {
 		type: Number,
 		default: 0,
+	},
+	// Coupon-only portion of discountAmount — displayed on its own line, not lumped
+	// into the Discount line above it
+	couponDiscount: {
+		type: Number,
+		default: 0,
+	},
+	appliedCoupon: {
+		type: Object,
+		default: null,
 	},
 	grandTotal: {
 		type: Number,
@@ -1798,6 +1837,23 @@ const displaySubtotal = computed(() => {
  * Không tính lại từ subtotal+tax-discount vì sẽ bỏ sót invoice-level discount (pricing rule).
  */
 const displayGrandTotal = computed(() => props.grandTotal);
+
+/** Coupon discount shown on its own line, never inside the Discount line. */
+const couponDiscountAmount = computed(() =>
+	Math.max(0, Number(props.couponDiscount) || 0),
+);
+
+/** Discount line excludes the coupon so the two lines don't double-count it. */
+const displayDiscountAmount = computed(() =>
+	Math.max(0, (Number(props.discountAmount) || 0) - couponDiscountAmount.value),
+);
+
+/** Percentage-type coupons show their % next to the label; amount-type show nothing. */
+const couponDiscountPercentage = computed(() => {
+	const coupon = props.appliedCoupon;
+	if (!coupon || coupon.type !== "Percentage") return 0;
+	return Number(coupon.percentage) || 0;
+});
 
 /**
  * ============================================================================

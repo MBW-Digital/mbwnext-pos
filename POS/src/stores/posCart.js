@@ -107,6 +107,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		couponDiscountAmount,
 		remarks,
 		transactionPricingRule,
 		taxInclusive,
@@ -153,6 +154,26 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const pendingItemQty = ref(1)
 	const appliedOffers = ref([])
 	const appliedCoupon = ref(null)
+
+	/**
+	 * Discount contributed by the applied coupon alone.
+	 *
+	 * additionalDiscount also carries offer / transaction pricing rule discounts, so it
+	 * cannot stand in for the coupon. Clamped to the discount actually applied so the
+	 * coupon line can never claim more than the cart was really discounted by.
+	 */
+	const couponDiscount = computed(() => {
+		if (!appliedCoupon.value) return 0
+		const fromCoupon = Number(couponDiscountAmount.value) || 0
+		const applied = Number(additionalDiscount.value) || 0
+		return roundCurrency(Math.max(0, Math.min(fromCoupon, applied)))
+	})
+
+	/** Total discount excluding the coupon — the coupon gets its own line in the cart. */
+	const discountExcludingCoupon = computed(() =>
+		roundCurrency(Math.max(0, (Number(totalDiscount.value) || 0) - couponDiscount.value)),
+	)
+
 	const selectionMode = ref("uom") // 'uom' or 'variant'
 	const suppressOfferReapply = ref(false)
 	const currentDraftId = ref(null)
@@ -2941,6 +2962,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		couponDiscountAmount,
+		couponDiscount,
+		discountExcludingCoupon,
 		remarks,
 		taxInclusive,
 		pendingItem,

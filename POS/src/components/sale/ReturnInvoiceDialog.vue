@@ -867,8 +867,6 @@ const { isOffline } = useOffline()
 // ============================================
 // Constants (hoisted for performance)
 // ============================================
-const INVOICE_PATTERN = /^(ACC-SINV|SINV|SI|INV|ACC)/i
-const INVOICE_FORMAT_PATTERN = /^\d{4,}$/
 const DATE_FORMAT_OPTIONS = { year: "numeric", month: "short", day: "numeric" }
 const MAX_SUGGESTIONS = 8
 const SEARCH_DEBOUNCE_MS = 300
@@ -1565,12 +1563,6 @@ const searchSuggestions = computed(() => {
 // Debounce timer for server search (will be cleaned up on unmount)
 let serverSearchTimeout = null
 
-// Helper to check if search term looks like an invoice number
-const looksLikeInvoiceNumber = (term) =>
-	INVOICE_PATTERN.test(term) ||
-	INVOICE_FORMAT_PATTERN.test(term) ||
-	term.includes("-")
-
 // Watch for search input changes and auto-search server when no local matches
 watch(normalizedSearchTerm, (searchTerm) => {
 	// Clear any pending search
@@ -1581,7 +1573,6 @@ watch(normalizedSearchTerm, (searchTerm) => {
 
 	// Early exit conditions
 	if (!searchTerm || searchTerm.length < MIN_SERVER_SEARCH_LENGTH) return
-	if (!looksLikeInvoiceNumber(searchTerm)) return
 
 	// Check if we already have this in local results (reuse filtered list)
 	if (filteredInvoiceList.value.length > 0) return
@@ -1803,7 +1794,7 @@ async function checkValidityAndOpenModal(invoiceName, fallbackOnError = false) {
  */
 async function searchInvoiceDirectly() {
 	const searchTerm = normalizedSearchTerm.value
-	if (!searchTerm || !looksLikeInvoiceNumber(searchTerm)) return
+	if (!searchTerm || searchTerm.length < MIN_SERVER_SEARCH_LENGTH) return
 	await checkValidityAndOpenModal(searchTerm, false)
 }
 

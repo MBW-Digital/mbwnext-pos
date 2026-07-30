@@ -144,7 +144,8 @@ pos_next/
 | Loyalty Program | validate | `loyalty_program_hooks.validate` |
 
 ### override_doctype_class
-- **Sales Invoice** → `CustomSalesInvoice` — wallet payment GL entries, loyalty exclusion
+- **Sales Invoice** → `CustomSalesInvoice` — wallet payment GL entries, loyalty exclusion,
+  hạch toán chiết khấu theo VAS (xem *Hạch toán chiết khấu VAS* ở Lưu ý quan trọng)
 - **Pricing Rule** → `PricingRule` — time window validation
 
 ### scheduler_events
@@ -244,6 +245,48 @@ yarn build                           # Production build
 ```
 
 ## Lưu ý quan trọng
+
+### `discount_amount`: cả dòng ở POS vs một đơn vị ở ERPNext (PM-TASK-00027)
+
+Trong giỏ POS, `recalculateItem()` tính `discount_amount` trên `baseAmount = qty × giá`,
+tức là mức giảm của **CẢ DÒNG**. Còn `Sales Invoice Item.discount_amount` của ERPNext là
+mức giảm trên **MỘT đơn vị**, và ERPNext tính lại `rate = price_list_rate - discount_amount`.
+
+Gửi thẳng số của cả dòng xuống thì với `qty >= 2` rate bị trừ thừa — thường ra **ÂM**
+(dữ liệu production đã có hoá đơn Tổng cộng −6.700.184). Nguy hiểm hơn là ca không âm:
+hoá đơn vẫn submit được nhưng doanh thu ghi nhận **thiếu**, không ai phát hiện.
+
+`formatItemsForSubmission()` (POS/src/composables/useInvoice.js) chia `discount_amount`
+cho `qty` trước khi gửi. Đây là chỗ DUY NHẤT chuyển đổi giữa hai quy ước — cả luồng
+online và offline đều đi qua đó. Khi đọc/ghi `discount_amount` ở ranh giới POS ↔ ERPNext,
+luôn tự hỏi con số đang ở đơn vị nào.
+
+### Hạch toán chiết khấu theo VAS (nhánh `ha_vang`, PM-TASK-00023)
+
+`CustomSalesInvoice` ghi đè 2 chỗ trong luồng sinh bút toán:
+
+1. `set_default_additional_discount_account()` — tự điền `additional_discount_account`
+   theo `Company.discount_account` (TK 521 khai ở tab Accounts). Khi Selling Settings bật
+   `enable_discount_accounting`, ERPNext đặt trường này là **bắt buộc** mỗi khi hoá đơn có
+   `discount_amount`, thu ngân phải gõ tay từng hoá đơn.
+2. `get_tax_amounts()` — thuế đầu ra **luôn** lấy `tax_amount_after_discount_amount`.
+   ERPNext gốc cố ý đổi sang `tax_amount` (số thuế TRƯỚC khi trừ chiết khấu tổng đơn) khi
+   hội đủ: bật discount accounting + có `additional_discount_account` +
+   `apply_discount_on = "Grand Total"`. VAS thì 33311 phải bằng số thuế thực kê khai.
+   Phần chênh được `book_tax_discount_difference_to_income()` dồn vào tài khoản doanh thu
+   (511) để bút toán vẫn cân — đúng yêu cầu "511 = giá trị cũ + phần chênh lệch tính sai thuế".
+
+⚠ **Hai phần này phải đi cùng nhau.** Chỉ bật (1) mà thiếu (2) thì thuế đầu ra nhảy lên số
+TRƯỚC chiết khấu — sai nặng hơn hiện trạng.
+
+⚠ `book_tax_discount_difference_to_income()` cộng **phần lệch nợ/có thực tế** của bộ bút
+toán, KHÔNG cộng phần chênh tính từ bảng thuế: mỗi dòng bút toán làm tròn riêng nên hai số
+lệch nhau 1–2 đồng (đã gặp ở 11/40 hoá đơn khi thử). Nếu độ lệch vượt 5 đồng thì hàm không
+can thiệp, để ERPNext báo "Debit and Credit not equal" thay vì che mất lỗi thật.
+
+⚠ Đặt ở `pos_next` vì Frappe 15 chưa có `extend_doctype_class`, mà `override_doctype_class`
+của Sales Invoice đã do app này giữ. Đây là **logic kế toán VAS nằm nhờ trong app POS** —
+nếu sau này muốn áp dụng cho mọi khách thì chuyển sang `mbwnext_advanced_accounting`.
 
 - Frontend Vue 3 nằm trong `POS/` — build riêng bằng `yarn build`, output vào `pos_next/public/`
 - **Dùng yarn**, không dùng npm (.clauderc)

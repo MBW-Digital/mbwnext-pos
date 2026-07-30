@@ -210,3 +210,125 @@ class CustomSalesInvoice(SalesInvoice):
 			for row in item_list
 			if not cint(getattr(row.item_row, "pos_skip_stock_deduction", 0))
 		]
+
+	def validate(self):
+		super().validate()
+		self.set_default_additional_discount_account()
+
+	def set_default_additional_discount_account(self):
+		"""Gán sẵn tài khoản chiết khấu cho Additional Discount.
+
+		Selling Settings bật `enable_discount_accounting` thì ERPNext đặt
+		`additional_discount_account` là BẮT BUỘC mỗi khi hoá đơn có
+		`discount_amount` — thu ngân phải gõ tay từng hoá đơn. Lấy theo
+		`Company.discount_account` (tài khoản 521 khai ở tab Accounts của
+		Company, cùng nguồn mà Sales Voucher đang dùng).
+
+		Chỉ điền khi đang trống — người dùng chọn tài khoản khác thì giữ nguyên.
+		"""
+		if self.get("additional_discount_account") or not flt(self.get("discount_amount")):
+			return
+
+		if not self.get("company"):
+			return
+
+		# discount_account là custom field của mbwnext_localization;
+		# default_discount_account là field gốc ERPNext, dùng dự phòng.
+		accounts = frappe.db.get_value(
+			"Company", self.company, ["discount_account", "default_discount_account"], as_dict=True
+		)
+		if not accounts:
+			return
+
+		self.additional_discount_account = accounts.get("discount_account") or accounts.get(
+			"default_discount_account"
+		)
+
+	def get_tax_amounts(self, tax, enable_discount_accounting):
+		"""Thuế đầu ra luôn hạch toán theo Tax Amount After Discount Amount.
+
+		ERPNext gốc (accounts_controller.get_tax_amounts) cố ý dùng `tax_amount`
+		— tức số thuế TRƯỚC khi trừ chiết khấu tổng đơn — khi hoá đơn vừa bật
+		discount accounting, vừa có `additional_discount_account`, vừa
+		`apply_discount_on = "Grand Total"`. Lý do của ERPNext: coi khoản chiết
+		khấu là chi phí riêng nên giữ thuế trên giá gộp.
+
+		Kế toán VAS thì ngược lại: 33311 phải bằng đúng số thuế thực kê khai
+		(`tax_amount_after_discount_amount`). Phần chênh giữa hai con số được
+		dồn vào tài khoản doanh thu ở `make_discount_gl_entries` bên dưới, nên
+		bút toán vẫn cân.
+		"""
+		return tax.tax_amount_after_discount_amount, tax.base_tax_amount_after_discount_amount
+
+	def get_gl_entries(self, warehouse_account=None):
+		gl_entries = super().get_gl_entries(warehouse_account)
+		self.book_tax_discount_difference_to_income(gl_entries)
+		return gl_entries
+
+	def book_tax_discount_difference_to_income(self, gl_entries):
+		"""Dồn phần chênh thuế (do get_tax_amounts ở trên) vào tài khoản doanh thu.
+
+		ERPNext gốc ghi 33311 theo `tax_amount`; ta ghi theo
+		`tax_amount_after_discount_amount` nên bên Có hụt đúng bằng phần chênh
+		giữa hai số. Bên Nợ (131 và 521) không đổi, nên phải cộng phần chênh đó
+		vào doanh thu thì bút toán mới cân — đây chính là "511 = giá trị cũ +
+		phần chênh lệch tính sai thuế".
+
+		Cộng đúng phần LỆCH THỰC TẾ của bộ bút toán chứ không cộng phần chênh
+		tính từ bảng thuế: từng dòng bút toán được làm tròn riêng nên hai số có
+		thể lệch nhau 1–2 đồng, cộng theo bảng thuế sẽ để lại chênh lệch nợ/có
+		(đã gặp ở 11/40 hoá đơn khi thử).
+		"""
+		expected = self.get_tax_discount_difference()
+		if not expected:
+			return
+
+		precision = self.precision("base_net_total")
+		residual = flt(
+			sum(flt(gle.get("debit")) for gle in gl_entries)
+			- sum(flt(gle.get("credit")) for gle in gl_entries),
+			precision,
+		)
+		if not residual:
+			return
+
+		# Chỉ hấp thụ phần lệch đúng bằng chênh thuế (cộng/trừ vài đồng làm tròn).
+		# Lệch nhiều hơn nghĩa là có nguyên nhân khác — để nguyên cho ERPNext báo
+		# "Debit and Credit not equal" thay vì che mất một lỗi thật.
+		if abs(residual - expected) > 5:
+			return
+
+		income_accounts = {item.income_account for item in self.get("items") if item.income_account}
+		income_entries = [gle for gle in gl_entries if gle.get("account") in income_accounts]
+		if not income_entries:
+			return
+
+		# Cộng vào dòng doanh thu lớn nhất: hoá đơn nhiều dòng hàng vẫn chỉ có
+		# một bút toán chênh lệch, không rải nhỏ ra từng dòng.
+		target = max(income_entries, key=lambda gle: flt(gle.get("credit")))
+		for field in ("credit", "credit_in_account_currency", "credit_in_transaction_currency"):
+			if target.get(field):
+				target[field] = flt(flt(target[field]) + residual, precision)
+
+	def get_tax_discount_difference(self):
+		"""Phần thuế ERPNext gốc sẽ ghi thừa, = tax_amount - tax_amount_after_discount_amount.
+
+		Chỉ phát sinh đúng trong điều kiện mà ERPNext đổi sang `tax_amount`
+		(xem get_tax_amounts): bật discount accounting + có chiết khấu tổng đơn +
+		có tài khoản chiết khấu + áp trên Grand Total.
+		"""
+		if not (
+			self.enable_discount_accounting
+			and self.get("discount_amount")
+			and self.get("additional_discount_account")
+			and self.get("apply_discount_on") == "Grand Total"
+		):
+			return 0.0
+
+		return flt(
+			sum(
+				flt(tax.base_tax_amount) - flt(tax.base_tax_amount_after_discount_amount)
+				for tax in self.get("taxes")
+			),
+			self.precision("base_net_total"),
+		)

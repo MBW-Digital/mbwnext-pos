@@ -901,10 +901,11 @@ export function useInvoice() {
 	 */
 	function formatItemsForSubmission(items) {
 		return items.map((item) => {
+			const qty = item.quantity || item.qty || 1
 			const row = {
 				item_code: item.item_code,
 				item_name: item.item_name,
-				qty: item.quantity || item.qty || 1,
+				qty,
 				rate: computeBackendRate(item),
 				price_list_rate: roundCurrency(item.price_list_rate || item.rate),
 				uom: item.uom,
@@ -913,7 +914,12 @@ export function useInvoice() {
 				serial_no: item.serial_no,
 				conversion_factor: item.conversion_factor || 1,
 				discount_percentage: Number.parseFloat(item.discount_percentage) || 0,
-				discount_amount: roundCurrency(item.discount_amount || 0),
+				// Chia cho số lượng: trong giỏ POS `discount_amount` là mức giảm của CẢ
+				// DÒNG (recalculateItem tính trên baseAmount = qty x giá), còn ERPNext
+				// hiểu Sales Invoice Item.discount_amount là giảm trên MỘT đơn vị và tính
+				// lại rate = price_list_rate - discount_amount. Gửi nguyên số của cả dòng
+				// thì với qty >= 2 rate bị trừ thừa, thường ra ÂM (xem PM-TASK-00027).
+				discount_amount: qty ? roundCurrency((item.discount_amount || 0) / qty) : 0,
 				pricing_rules: stringifyPricingRules(item.pricing_rules),
 			}
 			if (item.is_free_item) {

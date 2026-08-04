@@ -261,6 +261,24 @@ cho `qty` trước khi gửi. Đây là chỗ DUY NHẤT chuyển đổi giữa 
 online và offline đều đi qua đó. Khi đọc/ghi `discount_amount` ở ranh giới POS ↔ ERPNext,
 luôn tự hỏi con số đang ở đơn vị nào.
 
+### Cơ sở giá khi trả hàng: `rate`, KHÔNG phải `price_list_rate` (PM-TASK-00032)
+
+`ReturnInvoiceDialog.vue` hoàn tiền theo `item.rate` — đơn giá đã bán của dòng, tức **đã
+trừ khuyến mại cấp dòng (Pricing Rule) nhưng chưa phân bổ chiết khấu bill-level**.
+
+Đừng nhầm `rate` với "giá sau chiết khấu bill". Với `apply_discount_on = "Grand Total"`,
+ERPNext để chiết khấu tổng đơn ở **header** và chỉ phân bổ xuống `net_rate`/`net_amount`,
+`rate` giữ nguyên. Nên hoàn theo `rate` đã tự động không phân bổ CK bill lên dòng trả —
+đúng ý đồ, không cần thay bằng `price_list_rate`.
+
+Từng có bản sửa dùng `price_list_rate` khi hoá đơn có CK bill + trả một phần (commit
+`eebb190`). Nó vứt luôn cả KM cấp dòng: món bán 799.600 (KM 60%) được hoàn 1.999.000.
+
+Vì sao `rate` mới đúng: khi trả một phần mà phần hàng giữ lại **vẫn đủ điều kiện** KM
+bill, toàn bộ CK bill dồn cho phần giữ lại, nên dòng trả phải hoàn ở giá trước phân bổ.
+Khi phần giữ lại **không còn đủ** `min_amt`, `needsKmReclaim` bật và số KM bị thu hồi đi
+qua `write_off_amount` — đó mới là chỗ duy nhất trừ CK bill khỏi tiền hoàn.
+
 ### Hạch toán chiết khấu theo VAS (nhánh `ha_vang`, PM-TASK-00023)
 
 `CustomSalesInvoice` ghi đè 2 chỗ trong luồng sinh bút toán:

@@ -673,8 +673,8 @@
 						<!-- KM Reclaim breakdown -->
 						<template v-if="needsKmReclaim || (kmReclaimConfirmed && kmReclaimAmount > 0)">
 							<div class="flex justify-between items-center text-sm pt-2 border-t border-red-200">
-								<span class="text-gray-600">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
-								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotalAtListPrice) }}</span>
+								<span class="text-gray-600">{{ __('Hoàn hàng (giá đã bán):') }}</span>
+								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotal) }}</span>
 							</div>
 							<div class="flex justify-between items-center text-sm">
 								<span class="text-red-600 font-medium">{{ __('Thu hồi KM:') }}</span>
@@ -822,8 +822,8 @@
 						</span>
 					</div>
 					<div class="border-t border-gray-200 pt-2 flex justify-between">
-						<span class="text-gray-500">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
-						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotalAtListPrice) }}</span>
+						<span class="text-gray-500">{{ __('Hoàn hàng (giá đã bán):') }}</span>
+						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotal) }}</span>
 					</div>
 					<div class="flex justify-between text-red-600">
 						<span>{{ __('Thu hồi KM:') }}</span>
@@ -831,7 +831,7 @@
 					</div>
 					<div class="border-t border-gray-300 pt-2 flex justify-between">
 						<span class="font-semibold text-gray-700">{{ __('Thực hoàn:') }}</span>
-						<span class="font-bold text-gray-900">{{ formatCurrency(returnTotalAtListPrice - kmReclaimDialog.reclaim) }}</span>
+						<span class="font-bold text-gray-900">{{ formatCurrency(Math.max(0, returnTotal - kmReclaimDialog.reclaim)) }}</span>
 					</div>
 				</div>
 			</div>
@@ -1158,10 +1158,11 @@ const createReturnResource = createResource({
 				item_code: item.item_code,
 				item_name: item.item_name,
 				qty: -Math.abs(item.return_qty),
-				rate:
-					shouldUseListPriceRefund.value && !item.is_free_item
-						? item.price_list_rate || item.rate
-						: item.rate,
+				// Hoàn đúng đơn giá đã bán của dòng (đã trừ CK cấp dòng / Pricing
+				// Rule, chưa phân bổ CK bill-level). KHÔNG dùng price_list_rate:
+				// giá gốc sẽ hoàn thừa đúng bằng phần khuyến mại của món hàng.
+				// CK bill-level nếu phải thu hồi thì đi qua write_off (thu hồi KM).
+				rate: item.rate,
 				// Forward the original price_list_rate/item_tax_template so tax
 				// is reversed the same way it was originally applied.
 				price_list_rate: item.price_list_rate,
@@ -1319,33 +1320,13 @@ const allPaidItemsFullyReturned = computed(() => {
 	)
 })
 
-function lineReturnAtListPrice(item) {
-	const qty = Number(item.return_qty) || 0
-	const priceListRate = Number(item.price_list_rate) || 0
-	const netRate = Number(item.rate ?? item.net_rate) || 0
-	const taxPerUnit = Number(item.tax_per_unit) || 0
-	let taxOnList = taxPerUnit
-	if (priceListRate > 0 && netRate > 0 && taxPerUnit > 0) {
-		taxOnList = priceListRate * (taxPerUnit / netRate)
-	}
-	return roundCurrency(qty * (priceListRate + taxOnList))
-}
-
 function lineReturnDisplayAmount(item) {
 	if (item.is_free_item) return 0
-	if (shouldUseListPriceRefund.value) return lineReturnAtListPrice(item)
 	const qty = Number(item.return_qty) || 0
 	return roundCurrency(qty * (item.rate_with_tax || item.rate))
 }
 
 function lineDiscountDisplay(item) {
-	if (
-		shouldUseListPriceRefund.value &&
-		!needsKmReclaim.value &&
-		!kmReclaimConfirmed.value
-	) {
-		return 0
-	}
 	return Number(item.discount_per_unit) || 0
 }
 
@@ -1379,16 +1360,6 @@ const needsKmReclaim = computed(() => {
 	return remainingOrderValue.value < threshold
 })
 
-// Trả một phần có CK bill-level: hoàn theo giá list (+ thuế), không phân bổ CK lên dòng trả
-const shouldUseListPriceRefund = computed(() => {
-	if (!transactionRuleData.value || !selectedItems.value.length) return false
-	const headerDiscount =
-		Number(transactionRuleData.value.header_discount_amount) || 0
-	if (headerDiscount <= 0) return false
-	if (isFullReturn.value || allPaidItemsFullyReturned.value) return false
-	return true
-})
-
 // Map: item.name (= sales_invoice_item row ID) → item for O(1) linkage lookup
 const returnItemByRowId = computed(() => {
 	const map = {}
@@ -1416,7 +1387,8 @@ const filteredReturnItems = computed(() => {
 
 const hasOpenShift = computed(() => Boolean(props.posOpeningShift))
 
-// Hoàn theo giá net đã ghi trên HĐ (sau phân bổ chiết khấu bill)
+// Hoàn theo đơn giá đã bán của dòng: đã trừ CK cấp dòng (Pricing Rule), CHƯA
+// phân bổ CK bill-level — phần bill-level chỉ bị trừ khi phải thu hồi KM.
 const returnTotal = computed(() =>
 	roundCurrency(
 		selectedItems.value.reduce(
@@ -1428,22 +1400,12 @@ const returnTotal = computed(() =>
 	),
 )
 
-// Hoàn theo giá list + thuế (trước chiết khấu bill) — dùng khi thu hồi KM
-const returnTotalAtListPrice = computed(() =>
-	roundCurrency(
-		selectedItems.value.reduce((sum, item) => sum + lineReturnAtListPrice(item), 0),
-	),
-)
-
 // Số tiền thực hoàn cho khách
 const partialRefundBase = computed(() => {
-	if (shouldUseListPriceRefund.value) {
-		if (needsKmReclaim.value || kmReclaimConfirmed.value) {
-			return roundCurrency(
-				Math.max(0, returnTotalAtListPrice.value - kmReclaimDeduction.value),
-			)
-		}
-		return returnTotalAtListPrice.value
+	if (needsKmReclaim.value || kmReclaimConfirmed.value) {
+		return roundCurrency(
+			Math.max(0, returnTotal.value - kmReclaimDeduction.value),
+		)
 	}
 	return returnTotal.value
 })

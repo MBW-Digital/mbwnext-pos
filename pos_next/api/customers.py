@@ -147,17 +147,45 @@ def get_customers(search_term="", pos_profile=None, limit=20):
 			if hasattr(profile_doc, "customer_group") and profile_doc.customer_group:
 				filters["customer_group"] = profile_doc.customer_group
 
-		fields = ["name", "customer_name", "mobile_no", "email_id"]
+		# customer_group and territory are needed to decide whether an offer limited
+		# via applicable_for covers this customer (PM-TASK-00034).
+		fields = [
+			"name",
+			"customer_name",
+			"mobile_no",
+			"email_id",
+			"customer_group",
+			"territory",
+		]
+
+		def _fill_scope_defaults(rows):
+			"""Mirror the fallback apply_offers() uses, so the POS judges offers
+			limited by customer group / territory the same way the server will.
+			Plenty of imported customers have both fields blank."""
+			fallback_group = None
+			fallback_territory = None
+			for row in rows:
+				if not row.get("customer_group"):
+					if fallback_group is None:
+						fallback_group = default_customer_group()
+					row["customer_group"] = fallback_group
+				if not row.get("territory"):
+					if fallback_territory is None:
+						fallback_territory = default_territory()
+					row["territory"] = fallback_territory
+			return rows
 
 		# Empty search: used for offline full dump when limit=0
 		if not search_term:
 			customer_limit = limit if limit > 0 else frappe.db.count("Customer", filters)
-			return frappe.get_all(
-				"Customer",
-				filters=filters,
-				fields=fields,
-				limit=customer_limit,
-				order_by="customer_name asc",
+			return _fill_scope_defaults(
+				frappe.get_all(
+					"Customer",
+					filters=filters,
+					fields=fields,
+					limit=customer_limit,
+					order_by="customer_name asc",
+				)
 			)
 
 		# Search mode — always capped (never return unbounded results)
@@ -178,11 +206,43 @@ def get_customers(search_term="", pos_profile=None, limit=20):
 			limit=max_results,
 			order_by="customer_name asc",
 		)
-		return result
+		return _fill_scope_defaults(result)
 	except Exception as e:
 		frappe.logger().error(f"Error in get_customers: {str(e)}")
 		frappe.logger().error(frappe.get_traceback())
 		frappe.throw(_("Error fetching customers: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_customer_scope(customer):
+	"""Current customer group / territory of one customer, defaults filled in.
+
+	The POS keeps whole customer objects in its recent/frequent lists, in the
+	offline cache and in the saved cart, so the group on a selected customer can
+	be hours old. Deciding whether a customer-scoped promotion applies from that
+	stale copy hides promotions the customer really qualifies for, so the cart
+	re-reads the scope here whenever the customer changes (PM-TASK-00033).
+	"""
+	if not customer:
+		return {}
+
+	# get_customers() above reads through frappe.get_all(), which applies
+	# permissions; a raw get_value() here would be a looser door onto the same
+	# data, so check explicitly.
+	if not frappe.has_permission("Customer", "read", doc=customer):
+		frappe.throw(_("Not permitted to read this customer"), frappe.PermissionError)
+
+	row = frappe.db.get_value(
+		"Customer", customer, ["name", "customer_group", "territory"], as_dict=True
+	)
+	if not row:
+		return {}
+
+	return {
+		"name": row.name,
+		"customer_group": row.customer_group or default_customer_group(),
+		"territory": row.territory or default_territory(),
+	}
 
 
 @frappe.whitelist()

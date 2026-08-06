@@ -11,7 +11,7 @@ Promotional Schemes and standalone Pricing Rules.
 
 from typing import Dict, List, Optional
 import datetime
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 import frappe
 from frappe import _
 from frappe.utils import flt, getdate, nowdate, cint
@@ -108,10 +108,74 @@ class Offer:
 	valid_time_from: Optional[str] = None
 	valid_time_to: Optional[str] = None
 	warehouse: Optional[str] = None
+	# Whether the rule measures qty/amount over the whole matching set (1) or per
+	# cart line (0). The POS has to mirror this or it offers promos ERPNext will
+	# refuse — see PM-TASK-00035.
+	mixed_conditions: int = 0
+	# Customer scoping (PM-TASK-00034). `applicable_values` is the resolved set of
+	# names that satisfy the scope, tree descendants already expanded, so the POS
+	# can match with a plain lookup instead of walking the tree in the browser.
+	applicable_for: Optional[str] = None
+	applicable_values: List[str] = field(default_factory=list)
 
 	def to_dict(self) -> Dict:
 		"""Convert to dictionary for API response"""
 		return asdict(self)
+
+
+# ============================================================================
+# Helpers (customer scoping)
+# ============================================================================
+
+# applicable_for -> the Pricing Rule field holding the scoped value.
+_APPLICABLE_FOR_FIELD = {
+	"Customer": "customer",
+	"Customer Group": "customer_group",
+	"Territory": "territory",
+	"Sales Partner": "sales_partner",
+	"Campaign": "campaign",
+}
+
+# Scopes that are trees: a rule on a parent node also covers every node under it.
+_APPLICABLE_FOR_TREE = {
+	"Customer Group": "Customer Group",
+	"Territory": "Territory",
+}
+
+
+def _resolve_applicable_scope(rule: Dict) -> tuple:
+	"""Return (applicable_for, values) describing who a rule is limited to.
+
+	Descendants are expanded here, on the server, so the POS can decide with a
+	set lookup — the browser has no way to walk a Customer Group tree.
+	Returns ("", []) for an unrestricted rule, which every customer satisfies.
+	"""
+	applicable_for = rule.get("applicable_for") or ""
+	fieldname = _APPLICABLE_FOR_FIELD.get(applicable_for)
+	if not fieldname:
+		return "", []
+
+	value = rule.get(fieldname)
+	if not value:
+		# Scope selected but left blank: ERPNext treats it as unrestricted.
+		return "", []
+
+	values = [value]
+	tree_doctype = _APPLICABLE_FOR_TREE.get(applicable_for)
+	if tree_doctype:
+		try:
+			from frappe.utils.nestedset import get_descendants_of
+
+			values.extend(get_descendants_of(tree_doctype, value) or [])
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "POS Offers Scope Resolution")
+
+	return applicable_for, list(dict.fromkeys(values))
+
+
+def _applicable_sql_columns() -> str:
+	"""Extra SELECT columns needed to resolve customer scoping."""
+	return ", applicable_for, customer, customer_group, territory, sales_partner, campaign"
 
 
 # ============================================================================
@@ -404,6 +468,7 @@ class OfferBuilder:
 		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
 		aw, tf, tt = _time_window_from_rule(rule)
+		scope_for, scope_values = _resolve_applicable_scope(rule)
 
 		return Offer(
 			name=rule["name"],
@@ -442,6 +507,9 @@ class OfferBuilder:
 			valid_time_from=tf,
 			valid_time_to=tt,
 			warehouse=rule.get("warehouse") or None,
+			mixed_conditions=cint(rule.get("mixed_conditions")),
+			applicable_for=scope_for or None,
+			applicable_values=scope_values,
 		)
 
 	@staticmethod
@@ -468,6 +536,7 @@ class OfferBuilder:
 			eligible_brands = eligibility.brands
 
 		aw, tf, tt = _time_window_from_rule(rule)
+		scope_for, scope_values = _resolve_applicable_scope(rule)
 
 		return Offer(
 			name=rule["name"],
@@ -505,6 +574,9 @@ class OfferBuilder:
 			valid_time_from=tf,
 			valid_time_to=tt,
 			warehouse=rule.get("warehouse") or None,
+			mixed_conditions=cint(rule.get("mixed_conditions")),
+			applicable_for=scope_for or None,
+			applicable_values=scope_values,
 		)
 
 
@@ -652,6 +724,7 @@ def _get_promotional_scheme_offers(
 	"""Fetch offers from promotional schemes"""
 
 	time_cols = _pricing_rule_time_sql_columns()
+	applicable_cols = _applicable_sql_columns()
 
 	# Fetch pricing rules linked to promotional schemes
 	pricing_rules = frappe.db.sql(f"""
@@ -659,7 +732,9 @@ def _get_promotional_scheme_offers(
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
 			price_or_product_discount, apply_discount_on, priority,
-			warehouse, valid_from, valid_upto, custom_promotion_campaign
+			warehouse, valid_from, valid_upto, custom_promotion_campaign,
+			mixed_conditions
+			{applicable_cols}
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
@@ -722,6 +797,7 @@ def _get_standalone_pricing_rule_offers(
 	"""Fetch offers from standalone pricing rules (price and product discounts)."""
 
 	time_cols = _pricing_rule_time_sql_columns()
+	applicable_cols = _applicable_sql_columns()
 
 	# Fetch standalone pricing rules (not linked to schemes).
 	# Include both Price discounts (%, amount) and Product discounts (free items).
@@ -733,7 +809,9 @@ def _get_standalone_pricing_rule_offers(
 			min_qty, max_qty, min_amt, max_amt,
 			free_item, free_qty, free_item_uom, same_item, is_recursive,
 			recurse_for, apply_recursion_over,
-			priority, warehouse, valid_from, valid_upto
+			priority, warehouse, valid_from, valid_upto,
+			mixed_conditions
+			{applicable_cols}
 			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE

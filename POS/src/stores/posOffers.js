@@ -15,7 +15,22 @@ const defaultSnapshot = () => ({
 	itemQuantities: {},      // { item_code: qty }
 	itemGroupQuantities: {}, // { item_group: qty }
 	brandQuantities: {},     // { brand: qty }
+	// Per-line view, needed for rules with mixed_conditions = 0
+	lines: [],               // [{ item_code, item_group, brand, qty }]
+	// Customer scope, for offers limited via applicable_for
+	customer: null,
+	customerGroup: null,
+	territory: null,
 })
+
+// applicable_for -> the cart snapshot field carrying the customer's value.
+// Sales Partner and Campaign are absent on purpose: the POS cart does not carry
+// them, so an offer scoped that way cannot be verified here (see checkOfferEligibility).
+const APPLICABLE_FOR_SNAPSHOT_FIELD = {
+	"Customer": "customer",
+	"Customer Group": "customerGroup",
+	"Territory": "territory",
+}
 
 function getDiscountSortValue(offer) {
 	const percentage = Number.parseFloat(offer?.discount_percentage) || 0
@@ -87,6 +102,8 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			? snapshot.brandQuantities
 			: {}
 
+		const lines = Array.isArray(snapshot.lines) ? snapshot.lines : []
+
 		cartSnapshot.value = {
 			subtotal,
 			itemCount,
@@ -97,6 +114,10 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			itemQuantities,
 			itemGroupQuantities,
 			brandQuantities,
+			lines,
+			customer: snapshot.customer || null,
+			customerGroup: snapshot.customerGroup || null,
+			territory: snapshot.territory || null,
 		}
 	}
 
@@ -160,6 +181,85 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 	}
 
 	/**
+	 * Cart lines that fall inside an offer's apply_on scope
+	 * @param {Object} offer - The offer to scope by
+	 * @returns {Array} Matching cart lines
+	 */
+	function getScopedLines(offer) {
+		const lines = cartSnapshot.value.lines || []
+
+		if (offer?.apply_on === "Item Code") {
+			const codes = new Set(offer.eligible_items || [])
+			return codes.size ? lines.filter((line) => codes.has(line.item_code)) : lines
+		}
+		if (offer?.apply_on === "Item Group") {
+			const groups = new Set(offer.eligible_item_groups || [])
+			return groups.size ? lines.filter((line) => groups.has(line.item_group)) : lines
+		}
+		if (offer?.apply_on === "Brand") {
+			const brands = new Set(offer.eligible_brands || [])
+			return brands.size ? lines.filter((line) => brands.has(line.brand)) : lines
+		}
+
+		return lines
+	}
+
+	/**
+	 * Whether the cart meets an offer's min/max quantity, judged the way ERPNext
+	 * judges it.
+	 *
+	 * mixed_conditions = 1 (and Transaction offers) measure the whole matching set.
+	 * mixed_conditions = 0 is measured one cart line at a time — summing there
+	 * advertises promotions the server will then refuse (PM-TASK-00035).
+	 *
+	 * @param {Object} offer - The offer to check
+	 * @returns {Object} {ok: boolean, reason: string|null}
+	 */
+	function checkQuantityRule(offer) {
+		const minQty = Number.parseFloat(offer?.min_qty) || 0
+		const maxQty = Number.parseFloat(offer?.max_qty) || 0
+		if (!minQty && !maxQty) {
+			return { ok: true, reason: null }
+		}
+
+		const withinRange = (qty) =>
+			(!minQty || qty >= minQty) && (!maxQty || qty <= maxQty)
+
+		const lines = getScopedLines(offer)
+		const perLine =
+			offer?.apply_on !== "Transaction" &&
+			!offer?.mixed_conditions &&
+			lines.length > 0
+
+		if (!perLine) {
+			const qty = getEligibleItemQuantity(offer)
+			if (withinRange(qty)) {
+				return { ok: true, reason: null }
+			}
+			return {
+				ok: false,
+				reason:
+					minQty && qty < minQty
+						? __('At least {0} eligible items required', [minQty])
+						: __('Maximum {0} eligible items allowed for this offer', [maxQty]),
+			}
+		}
+
+		if (lines.some((line) => withinRange(line.qty))) {
+			return { ok: true, reason: null }
+		}
+
+		const largestLine = lines.reduce((max, line) => Math.max(max, line.qty || 0), 0)
+		return {
+			ok: false,
+			reason:
+				minQty && largestLine < minQty
+					? __('At least {0} of a single item required', [minQty])
+					: __('Maximum {0} eligible items allowed for this offer', [maxQty]),
+		}
+	}
+
+	/**
 	 * Checks if an offer is eligible based on current cart state
 	 * @param {Object} offer - The offer to check
 	 * @returns {Object} {eligible: boolean, reason: string|null}
@@ -187,10 +287,35 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 			}
 		}
 
+		// Offers limited via applicable_for (PM-TASK-00034). applicable_values
+		// already has tree descendants expanded by the server, so a plain lookup
+		// is enough here.
+		if (offer?.applicable_for) {
+			const scopeField = APPLICABLE_FOR_SNAPSHOT_FIELD[offer.applicable_for]
+			if (!scopeField) {
+				// Sales Partner / Campaign: the cart carries no such value, so this
+				// cannot be verified in the browser. Don't advertise what we can't check.
+				return {
+					eligible: false,
+					reason: __("Offer is limited to {0}", [offer.applicable_for]),
+				}
+			}
+			const actual = cartSnapshot.value[scopeField]
+			const allowed = offer.applicable_values || []
+			// Only reject on a KNOWN mismatch. When the cart has no value for the
+			// scope we leave the decision to apply_offers on the server, which is
+			// authoritative — hiding a promotion we merely cannot verify would be
+			// worse than showing one the server later declines.
+			if (actual && allowed.length && !allowed.includes(actual)) {
+				return {
+					eligible: false,
+					reason: __("Offer is not valid for this customer"),
+				}
+			}
+		}
+
 		// Check item eligibility based on apply_on FIRST
 		// This determines which items are eligible for the offer
-		let eligibleItemQty = itemCount // Default to total cart qty for Transaction offers
-
 		if (offer?.apply_on === "Item Code") {
 			const eligibleItems = offer.eligible_items || []
 			if (eligibleItems.length > 0) {
@@ -203,8 +328,6 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 						reason: __("Cart does not contain eligible items for this offer"),
 					}
 				}
-				// Calculate quantity of eligible items only
-				eligibleItemQty = getEligibleItemQuantity(offer)
 			}
 		} else if (offer?.apply_on === "Item Group") {
 			const eligibleGroups = offer.eligible_item_groups || []
@@ -218,8 +341,6 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 						reason: __("Cart does not contain items from eligible groups"),
 					}
 				}
-				// Calculate quantity of items in eligible groups only
-				eligibleItemQty = getEligibleItemQuantity(offer)
 			}
 		} else if (offer?.apply_on === "Brand") {
 			const eligibleBrands = offer.eligible_brands || []
@@ -233,27 +354,13 @@ export const usePOSOffersStore = defineStore("posOffers", () => {
 						reason: __("Cart does not contain items from eligible brands"),
 					}
 				}
-				// Calculate quantity of items from eligible brands only
-				eligibleItemQty = getEligibleItemQuantity(offer)
-			}
-		}
-		// If apply_on is 'Transaction', eligibleItemQty remains as total cart qty
-
-		// Check minimum quantity against ELIGIBLE items quantity
-		// (e.g., "Buy 2 of Item A Get 1 Free" requires 2 of Item A, not 2 total items)
-		if (offer?.min_qty && eligibleItemQty < offer.min_qty) {
-			return {
-				eligible: false,
-				reason: __('At least {0} eligible items required', [offer.min_qty]),
 			}
 		}
 
-		// Check maximum quantity against ELIGIBLE items quantity
-		if (offer?.max_qty && eligibleItemQty > offer.max_qty) {
-			return {
-				eligible: false,
-				reason: __('Maximum {0} eligible items allowed for this offer', [offer.max_qty]),
-			}
+		// Quantity conditions, aggregated per the offer's own mixed_conditions
+		const qtyCheck = checkQuantityRule(offer)
+		if (!qtyCheck.ok) {
+			return { eligible: false, reason: qtyCheck.reason }
 		}
 
 		// Check minimum amount (still uses total subtotal)

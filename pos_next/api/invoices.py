@@ -3269,7 +3269,18 @@ def _apply_transaction_pricing_rules(
                     if isinstance(rule_row, frappe.model.document.Document)
                     else frappe.get_cached_doc("Pricing Rule", rule_row.get("name"))
                 )
-                if rule_doc.coupon_code_based and not doc.get("coupon_code"):
+                if rule_doc.coupon_code_based and not _coupon_unlocks_rule(
+                    doc.get("coupon_code"), rule_doc, pricing_args
+                ):
+                    continue
+
+                # _fetch_transaction_pricing_rules() loads every Transaction rule of
+                # the company and the filters above only cover qty/amount/condition,
+                # so a rule limited to one customer group would otherwise be granted
+                # to everyone (PM-TASK-00033 follow-up). qty/amount is already
+                # filtered above against the real doc totals — only the customer
+                # scope is missing.
+                if not _rule_applicable_for_matches(rule_doc, pricing_args):
                     continue
 
                 pct, amt = _get_rule_discount_values(rule_doc)
@@ -3299,6 +3310,26 @@ def _apply_transaction_pricing_rules(
                 flt(doc.get("discount_amount")),
             )
 
+            # ERPNext checks the coupon-to-rule link here but not the coupon's
+            # validity, so an expired or fully-redeemed coupon still releases the
+            # discount (PM-TASK-00039). Undo it when our own check disagrees.
+            if applied_rule_name:
+                try:
+                    applied_rule = frappe.get_cached_doc("Pricing Rule", applied_rule_name)
+                except Exception:
+                    applied_rule = None
+                if (
+                    applied_rule
+                    and applied_rule.coupon_code_based
+                    and not _coupon_unlocks_rule(
+                        doc.get("coupon_code"), applied_rule, pricing_args
+                    )
+                ):
+                    doc.additional_discount_percentage = 0
+                    doc.discount_amount = 0
+                    doc.calculate_taxes_and_totals()
+                    applied_rule_name = None
+
         # Last resort: apply selected Transaction rules directly (POS preview)
         if not applied_rule_name and selected_offer_names:
             for rule_name in selected_offer_names:
@@ -3311,6 +3342,13 @@ def _apply_transaction_pricing_rules(
 
                 pct, amt = _get_rule_discount_values(rule_doc)
                 if not pct and not amt:
+                    continue
+
+                # This branch bypasses the qty/amount filtering the `candidates`
+                # path above already does, so it has to do its own.
+                if not _rule_eligible_for_forced_discount(
+                    rule_doc, prepared_items, pricing_args
+                ):
                     continue
 
                 if rule_doc.apply_discount_on:
@@ -3418,6 +3456,237 @@ def _cart_matches_pricing_rule(rule_doc, prepared_items):
     return False
 
 
+def _coupon_unlocks_rule(coupon_code, rule_doc, pricing_args=None):
+    """Whether the coupon entered on the cart actually releases this rule.
+
+    A ``coupon_code_based`` Pricing Rule is meant to stay locked until a coupon
+    that POINTS AT IT is presented. POS used to accept any non-empty string, so
+    a coupon belonging to another promotion — or a made-up code sent straight to
+    the API — handed out the rule's discount (PM-TASK-00039).
+
+    Both coupon doctypes are honoured: ERPNext's own ``Coupon Code`` (which the
+    Pricing Rule is designed around) and this app's ``POS Coupon``, whose
+    ``pricing_rule`` field expresses the same link. A coupon with no link is a
+    standalone discount and releases nothing.
+    """
+    code = cstr(coupon_code).strip()
+    if not code:
+        return False
+
+    # ERPNext Coupon Code — validate_coupon_code() checks dates and usage limits
+    # and throws when the coupon is not usable.
+    if frappe.db.table_exists("Coupon Code"):
+        linked = frappe.db.get_value(
+            "Coupon Code",
+            {"coupon_code": code},
+            ["name", "pricing_rule"],
+            as_dict=True,
+        )
+        if linked and linked.pricing_rule == rule_doc.name:
+            try:
+                from erpnext.accounts.doctype.pricing_rule.utils import (
+                    validate_coupon_code,
+                )
+
+                validate_coupon_code(linked.name)
+                return True
+            except Exception:
+                return False
+
+    # POS Coupon — reuse the app's own validation (disabled / dates / usage /
+    # company / customer) instead of re-implementing it here.
+    pos_coupon = frappe.db.get_value(
+        "POS Coupon",
+        {"coupon_code": code.upper()},
+        ["name", "pricing_rule"],
+        as_dict=True,
+    )
+    if not pos_coupon or pos_coupon.pricing_rule != rule_doc.name:
+        return False
+
+    try:
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import check_coupon_code
+
+        result = check_coupon_code(
+            code,
+            customer=(pricing_args or {}).get("customer"),
+            company=(pricing_args or {}).get("company"),
+        )
+        return bool(result.get("coupon"))
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS Coupon Rule Unlock")
+        return False
+
+
+def _rule_scoped_cart_rows(rule_doc, prepared_items):
+    """Cart lines that fall inside a rule's apply_on scope."""
+    rows = [
+        item
+        for item in prepared_items
+        if item.get("item_code") and flt(item.get("qty") or item.get("quantity") or 0) > 0
+    ]
+
+    if rule_doc.apply_on == "Transaction":
+        return rows
+
+    if rule_doc.apply_on == "Item Code":
+        codes = {cstr(row.item_code) for row in (rule_doc.items or [])}
+        return [r for r in rows if cstr(r.get("item_code")) in codes]
+
+    if rule_doc.apply_on == "Item Group":
+        from erpnext.accounts.doctype.pricing_rule.utils import get_pricing_rule_items
+
+        groups = set(get_pricing_rule_items(rule_doc) or [])
+        if not groups:
+            groups = {cstr(row.item_group) for row in (rule_doc.item_groups or [])}
+        return [r for r in rows if cstr(r.get("item_group")) in groups]
+
+    if rule_doc.apply_on == "Brand":
+        brands = {cstr(row.brand) for row in (rule_doc.brands or [])}
+        return [r for r in rows if cstr(r.get("brand")) in brands]
+
+    return []
+
+
+def _rule_applicable_for_matches(rule_doc, pricing_args):
+    """Whether a rule scoped by ``applicable_for`` matches this transaction.
+
+    ERPNext enforces this inside get_pricing_rules() before its engine ever sees
+    the rule. The POS forced-discount path below never reaches that engine, so it
+    has to check for itself — otherwise a promo restricted to one customer is
+    handed to every customer.
+
+    When the scope cannot be verified from the POS payload (Sales Partner,
+    Campaign — the cart never carries them) we refuse rather than guess: granting
+    money on an unverifiable condition is the one outcome we must not risk.
+    """
+    applicable_for = rule_doc.get("applicable_for")
+    if not applicable_for:
+        return True
+
+    fieldname = frappe.scrub(applicable_for)
+    expected = rule_doc.get(fieldname)
+    if not expected:
+        return True
+
+    actual = pricing_args.get(fieldname)
+    if not actual:
+        return False
+
+    if cstr(actual) == cstr(expected):
+        return True
+
+    # Customer Group and Territory are trees: a rule on the parent covers children.
+    if fieldname in ("customer_group", "territory"):
+        doctype = "Customer Group" if fieldname == "customer_group" else "Territory"
+        try:
+            from frappe.utils.nestedset import get_descendants_of
+
+            return cstr(actual) in (get_descendants_of(doctype, expected) or [])
+        except Exception:
+            return False
+
+    return False
+
+
+def _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args):
+    """Whether the cart satisfies the rule's own min/max qty and amount.
+
+    ERPNext checks this in filter_pricing_rules_for_qty_amount() while its engine
+    walks each line. A rule the engine deliberately refused must not then be paid
+    out invoice-wide — without this a "buy 2-3 get 20%" rule pays out at qty 1 and
+    at qty 5 alike (PM-TASK-00031 follow-up).
+
+    Aggregation follows the rule's own semantics: mixed_conditions / is_cumulative
+    / Transaction rules measure the whole matching set, everything else is judged
+    per line exactly as the engine judges it.
+    """
+    from erpnext.accounts.doctype.pricing_rule.utils import (
+        filter_pricing_rules_for_qty_amount,
+    )
+
+    if not (
+        flt(rule_doc.min_qty)
+        or flt(rule_doc.max_qty)
+        or flt(rule_doc.min_amt)
+        or flt(rule_doc.max_amt)
+    ):
+        return True
+
+    rows = _rule_scoped_cart_rows(rule_doc, prepared_items)
+    if not rows:
+        return False
+
+    rule_args = [
+        frappe._dict(
+            {
+                "name": rule_doc.name,
+                "min_qty": flt(rule_doc.min_qty),
+                "max_qty": flt(rule_doc.max_qty),
+                "min_amt": flt(rule_doc.min_amt),
+                "max_amt": flt(rule_doc.max_amt),
+            }
+        )
+    ]
+
+    def _qty_amt(row):
+        qty = flt(row.get("qty") or row.get("quantity") or 0)
+        stock_qty = qty * (flt(row.get("conversion_factor") or 1) or 1)
+        rate = flt(row.get("price_list_rate") or row.get("rate") or 0)
+        return stock_qty, stock_qty * rate
+
+    aggregate = (
+        rule_doc.apply_on == "Transaction"
+        or rule_doc.mixed_conditions
+        or rule_doc.is_cumulative
+    )
+
+    if aggregate:
+        total_qty = total_amt = 0
+        for row in rows:
+            qty, amt = _qty_amt(row)
+            total_qty += qty
+            total_amt += amt
+
+        if rule_doc.is_cumulative:
+            # Cumulative rules also count qty already invoiced in the valid period.
+            from erpnext.accounts.doctype.pricing_rule.utils import (
+                get_qty_amount_data_for_cumulative,
+                get_pricing_rule_items,
+            )
+
+            past = get_qty_amount_data_for_cumulative(
+                rule_doc, pricing_args, get_pricing_rule_items(rule_doc) or []
+            )
+            if past:
+                total_qty += flt(past[0])
+                total_amt += flt(past[1])
+
+        return bool(
+            filter_pricing_rules_for_qty_amount(total_qty, total_amt, rule_args)
+        )
+
+    for row in rows:
+        qty, amt = _qty_amt(row)
+        if filter_pricing_rules_for_qty_amount(qty, amt, rule_args):
+            return True
+
+    return False
+
+
+def _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
+    """Gate for the two paths that hand a rule's discount to the whole invoice
+    without ERPNext's engine having agreed to it."""
+    try:
+        if not _rule_applicable_for_matches(rule_doc, pricing_args):
+            return False
+        return _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Apply Offers Rule Eligibility")
+        # Cannot verify -> do not grant the discount.
+        return False
+
+
 def _supplement_additional_discount_for_unapplied(
     pricing_args,
     prepared_items,
@@ -3462,6 +3731,12 @@ def _supplement_additional_discount_for_unapplied(
             continue
 
         if not _cart_matches_pricing_rule(rule_doc, prepared_items):
+            continue
+
+        # ERPNext refused this rule at item level. That can mean "lost on
+        # priority" (fine to fall back to an invoice discount) or "cart does not
+        # qualify" (must NOT be paid out). Only the second case is filtered here.
+        if not _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
             continue
 
         doc_items = []

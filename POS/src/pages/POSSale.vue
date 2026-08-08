@@ -2097,6 +2097,17 @@ function handleRemoveColdStorageFeeLine(count = 1) {
 	}
 }
 
+/**
+ * Whether an item really offers a choice of unit.
+ *
+ * `item_uoms` is meant to hold the alternative units only, but payloads coming
+ * from different endpoints have disagreed on that, so check rather than trust
+ * the length (PM-TASK-00048).
+ */
+function hasAlternateUoms(item) {
+	return (item?.item_uoms || []).some((u) => u?.uom && u.uom !== item.stock_uom);
+}
+
 async function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
@@ -2177,8 +2188,10 @@ async function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
-	// Check for UOMs
-	if (item.item_uoms && item.item_uoms.length > 0) {
+	// Check for UOMs. Only worth asking when there is a unit OTHER than the stock
+	// one — a payload listing just the stock UOM would otherwise make the cashier
+	// pick from a single option on every scan (PM-TASK-00048).
+	if (hasAlternateUoms(item)) {
 		cartStore.setPendingItem(item, 1, "uom");
 		uiStore.showItemSelectionDialog = true;
 		return;
@@ -2530,7 +2543,7 @@ async function handleOptionSelected(option) {
 				}
 			}
 
-			if (variant.item_uoms && variant.item_uoms.length > 0) {
+			if (hasAlternateUoms(variant)) {
 				cartStore.setPendingItem(variant, cartStore.pendingItemQty, "uom");
 				return;
 			}

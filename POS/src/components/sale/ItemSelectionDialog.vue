@@ -505,9 +505,12 @@ function buildUomOptions() {
 		priceLabel: __('per {0}', [props.item.stock_uom]),
 	})
 
-	// Additional UOMs
+	// Additional UOMs. The stock UOM is already listed above, so skip it if a
+	// payload still carries it in item_uoms — otherwise it shows up twice
+	// (PM-TASK-00048).
 	if (props.item.item_uoms && props.item.item_uoms.length > 0) {
 		props.item.item_uoms.forEach((uomData) => {
+			if (uomData.uom === props.item.stock_uom) return
 			uomOptions.push({
 				type: "uom",
 				uom: uomData.uom,
@@ -533,7 +536,11 @@ function getUomPrice(uom, conversionFactor) {
 
 	// Calculate price based on conversion factor
 	// If 1 Gram = 0.001 Kg, then price per Gram = price per Kg * 0.001
-	const baseRate = props.item.rate || 0
+	//
+	// Fall back to price_list_rate: some payloads reach this dialog with rate
+	// still at 0 because no pricing rule has run, and quoting 0 to the cashier is
+	// the worst possible failure here (PM-TASK-00048).
+	const baseRate = props.item.rate || props.item.price_list_rate || 0
 	return baseRate * conversionFactor
 }
 

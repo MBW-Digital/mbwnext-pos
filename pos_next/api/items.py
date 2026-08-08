@@ -351,19 +351,30 @@ def get_item_detail(
 	res["item_group"] = item_data.get("item_group")
 	res["brand"] = item_data.get("brand")
 
-	# Add UOMs data
-	uoms = frappe.get_all(
-		"UOM Conversion Detail",
-		filters={"parent": item_code},
-		fields=["uom", "conversion_factor"],
-	)
+	# ERPNext leaves `rate` at 0 until a pricing rule or a manual price fills it —
+	# the selling price lives in `price_list_rate`. get_items() sets `rate` itself,
+	# so without this the same item costs 0 when it arrives through this function
+	# instead of the item list (PM-TASK-00048).
+	if not flt(res.get("rate")) and flt(res.get("price_list_rate")):
+		res["rate"] = flt(res.get("price_list_rate"))
 
-	# Add stock UOM if not already in uoms list
+	# Add UOMs data.
+	#
+	# `item_uoms` carries the ALTERNATIVE units only — the whole POS front end
+	# renders the stock UOM itself and then appends this list (see
+	# ItemSelectionDialog.buildUomOptions and the cart's UOM dropdown), so leaving
+	# the stock UOM in here shows it twice and pops the unit picker for items that
+	# only have one unit. get_items() already excludes it; match that.
 	stock_uom = item_data.get("stock_uom")
-	if stock_uom and not any(u.get("uom") == stock_uom for u in uoms):
-		uoms.append({"uom": stock_uom, "conversion_factor": 1.0})
-
-	res["item_uoms"] = uoms
+	res["item_uoms"] = [
+		u
+		for u in frappe.get_all(
+			"UOM Conversion Detail",
+			filters={"parent": item_code},
+			fields=["uom", "conversion_factor"],
+		)
+		if u.get("uom") != stock_uom
+	]
 
 	return res
 

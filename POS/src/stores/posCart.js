@@ -692,6 +692,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		return parts.join('::')
 	}
 
+	/**
+	 * Khuyến mại của giỏ hàng HIỆN TẠI đã được tính xong chưa.
+	 *
+	 * Việc áp khuyến mại chạy bất đồng bộ và xếp hàng sau các tác vụ nặng lúc mở
+	 * trang (nạp danh mục hàng, lấy danh sách offer ~200KB). Trong khoảng đó giỏ
+	 * hàng hiển thị GIÁ GỐC dù mặt hàng có khuyến mại — đo thực tế mất tới ~20
+	 * giây sau khi tải lại trang (PM-TASK-00060). Thu ngân bấm Thanh toán lúc đó
+	 * là bán mất phần khuyến mại mà không có cảnh báo nào.
+	 *
+	 * `lastCartHash` được ghi lại sau mỗi lần xử lý xong; hash khác nghĩa là giỏ
+	 * hiện tại chưa được tính.
+	 */
+	const offersSettled = computed(() => {
+		if (!invoiceItems.value.length) return true
+		if (offerProcessingState.value.isProcessing) return false
+		return offerProcessingState.value.lastCartHash === generateCartHash()
+	})
+
 	// Toast composable
 	const { showSuccess, showError, showWarning } = useToast()
 
@@ -2889,12 +2907,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		// === ONLINE MODE ===
-		// Get current profile from posProfile
+		// `posProfile.value` chỉ là TÊN POS Profile (chuỗi), không phải bản ghi —
+		// trước đây đọc .company/.selling_price_list/.currency thẳng từ đó nên cả
+		// ba luôn undefined. Bản ghi POS Profile nằm ở shiftStore.currentProfile.
+		const profileDoc = shiftStore.currentProfile || {}
 		const currentProfile = {
 			customer: customer.value?.name || customer.value,
-			company: posProfile.value.company,
-			selling_price_list: posProfile.value.selling_price_list,
-			currency: posProfile.value.currency,
+			company: profileDoc.company,
+			selling_price_list: profileDoc.selling_price_list,
+			currency: profileDoc.currency,
 		}
 
 		// Re-apply existing offers (includes newly eligible ones) or auto-apply fresh
@@ -3112,6 +3133,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		suppressOfferReapply,
 		currentDraftId,
 		offerProcessingState, // Offer processing state for UI feedback
+		offersSettled, // Giỏ hiện tại đã tính xong khuyến mại chưa (khoá Thanh toán khi chưa)
 		bundleMatchChoices,
 		showBundleChoiceDialog,
 		bundleSuggestions,

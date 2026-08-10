@@ -1311,10 +1311,10 @@
 				<button
 					type="button"
 					@click="handleProceedToPayment"
-					:disabled="items.length === 0"
+					:disabled="items.length === 0 || offersPending"
 					:class="[
 						'flex-1 py-2.5 px-3 rounded-lg font-bold text-xs text-white transition-all flex items-center justify-center touch-manipulation',
-						items.length === 0
+						items.length === 0 || offersPending
 							? 'bg-gray-300 cursor-not-allowed'
 							: 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 shadow-lg hover:shadow-xl active:scale-[0.98]',
 					]"
@@ -1333,7 +1333,7 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{ __("Checkout") }}</span>
+					<span>{{ offersPending ? __("Đang tính khuyến mại...") : __("Checkout") }}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
@@ -1406,6 +1406,20 @@ const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
 const { formatQuantity } = useFormatters(); // Quantity formatting utilities
+
+/**
+ * Khuyến mại của giỏ hiện tại chưa tính xong → khoá Thanh toán.
+ *
+ * Ngay sau khi tải lại trang POS, việc áp khuyến mại xếp hàng sau các tác vụ
+ * nặng và có thể mất hàng chục giây. Trước khi có chốt chặn này, thu ngân quét
+ * hàng rồi bấm Thanh toán ngay là bán ĐÚNG GIÁ GỐC, mất phần khuyến mại mà
+ * không có cảnh báo nào (PM-TASK-00060).
+ */
+const offersPending = computed(() => {
+	if (!props.items?.length) return false;
+	if (!offersStore.hasFetched) return true;
+	return !cartStore.offersSettled;
+});
 
 function handleProceedToPayment() {
 	emit("proceed-to-payment");

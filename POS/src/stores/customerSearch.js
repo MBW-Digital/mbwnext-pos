@@ -384,6 +384,58 @@ export const useCustomerSearchStore = defineStore("customerSearch", () => {
 		} catch (e) {
 			log.warn("Failed to load customer history:", e)
 		}
+
+		refreshFrequentCustomerDetails()
+	}
+
+	/**
+	 * Lấy lại tên/SĐT mới nhất cho danh sách khách hay dùng.
+	 *
+	 * `frequentCustomerDetails` là bản CHỤP lúc chọn khách, nằm trong
+	 * localStorage nên sống vĩnh viễn trên máy. Khi ô khách hàng còn trống,
+	 * danh sách "Khách hàng thường xuyên" hiển thị thẳng từ bản chụp này — nên
+	 * khách đổi tên trên ERP thì POS vẫn hiện tên cũ mãi mãi, tải lại trang
+	 * cũng không sửa được (PM-TASK-00066: khách đổi tên 4 tuần trước, POS vẫn
+	 * hiện tên gốc). Hoá đơn lưu xuống thì đúng vì máy chủ tự lấy tên hiện tại,
+	 * nên chỉ lệch ở màn hình — thu ngân tưởng chọn nhầm khách.
+	 *
+	 * Chỉ tối đa 20 khách nên một lượt hỏi máy chủ là đủ, chạy nền không chặn
+	 * giao diện. Offline thì giữ nguyên bản chụp để còn có cái mà hiển thị.
+	 */
+	async function refreshFrequentCustomerDetails() {
+		const ids = frequentCustomers.value.slice()
+		if (!ids.length || isOffline()) return
+
+		try {
+			const response = await call("frappe.client.get_list", {
+				doctype: "Customer",
+				filters: [["name", "in", ids]],
+				fields: ["name", "customer_name", "mobile_no", "email_id"],
+				limit_page_length: 0,
+			})
+			const rows = response?.message || response || []
+			if (!rows.length) return
+
+			const fresh = { ...frequentCustomerDetails.value }
+			for (const row of rows) {
+				fresh[row.name] = {
+					name: row.name,
+					customer_name: row.customer_name,
+					mobile_no: row.mobile_no,
+					email_id: row.email_id,
+				}
+			}
+			frequentCustomerDetails.value = fresh
+
+			// Ghi đè bản chụp cũ trong localStorage, nếu không lần mở sau lại đọc
+			// đúng cái tên cũ vừa thay
+			localStorage.setItem(
+				"pos_frequent_customer_details",
+				JSON.stringify(fresh),
+			)
+		} catch (e) {
+			log.warn("Failed to refresh frequent customer details:", e)
+		}
 	}
 
 	function getFrequentCustomerObjects(limit = 5) {

@@ -2224,6 +2224,8 @@ function quickAddPayment(method) {
 		amt = maxAllowed
 	}
 
+	if (laDongThanhToanTrungLap(method.mode_of_payment, amt)) return
+
 	paymentEntries.value.push({
 		mode_of_payment: method.mode_of_payment,
 		amount: roundCurrency(amt),
@@ -2262,6 +2264,50 @@ function onPaymentMethodUp(method) {
 
 function onPaymentMethodCancel() {
 	handlePointerCancel()
+}
+
+/**
+ * Chặn thêm một dòng thanh toán TRÙNG HỆT dòng vừa nhập.
+ *
+ * Trùng cả hình thức lẫn số tiền gần như luôn là bấm nhầm hai lần, không phải
+ * ý định thật: khách trả hai lần đúng bằng nhau cùng một hình thức là chuyện
+ * hiếm, mà hậu quả thì nặng — hoá đơn 7.038.009 bị ghi thu 14.076.018 qua 2
+ * lần quẹt Payoo giống hệt nhau, phần dư bị ghi thành tiền thối dù thẻ không
+ * thối được, và sau đó không trả hàng được nữa (PM-TASK-00072).
+ *
+ * Chỉ cảnh báo và chặn lần bấm thứ hai; thu ngân thật sự muốn thu hai lần bằng
+ * nhau thì bấm lại lần nữa là vào, nên không khoá cứng nghiệp vụ.
+ *
+ * @returns {boolean} true nếu nên CHẶN lần thêm này
+ */
+let vuaCanhBaoTrung = null
+function laDongThanhToanTrungLap(modeOfPayment, amount) {
+	const amt = roundCurrency(amount)
+	const daCo = paymentEntries.value.some(
+		(entry) =>
+			entry.mode_of_payment === modeOfPayment &&
+			roundCurrency(entry.amount) === amt,
+	)
+	if (!daCo) {
+		vuaCanhBaoTrung = null
+		return false
+	}
+
+	// Đã cảnh báo đúng dòng này rồi mà thu ngân vẫn bấm lại → cho qua
+	const khoa = `${modeOfPayment}::${amt}`
+	if (vuaCanhBaoTrung === khoa) {
+		vuaCanhBaoTrung = null
+		return false
+	}
+
+	vuaCanhBaoTrung = khoa
+	showWarning(
+		__("Đã có dòng {0} với số tiền {1}. Bấm lần nữa nếu thật sự muốn thu thêm.", [
+			__(modeOfPayment),
+			formatCurrency(amt),
+		]),
+	)
+	return true
 }
 
 // Add custom amount for a method
@@ -2334,6 +2380,8 @@ function addCustomPayment(method, amount) {
 			return
 		}
 	}
+
+	if (laDongThanhToanTrungLap(method.mode_of_payment, amt)) return
 
 	paymentEntries.value.push({
 		mode_of_payment: method.mode_of_payment,

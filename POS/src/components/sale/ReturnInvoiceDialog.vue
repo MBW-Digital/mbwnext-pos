@@ -1039,6 +1039,7 @@ const fetchInvoiceResource = createResource({
 				posting_date: origInvoice.posting_date,
 				grand_total: origInvoice.grand_total,
 				paid_amount: origInvoice.paid_amount,
+				change_amount: origInvoice.change_amount,
 				outstanding_amount: origInvoice.outstanding_amount,
 				payments: origInvoice.payments || [],
 				docstatus: 1, // Already validated by backend
@@ -1665,10 +1666,41 @@ function initializePaymentsFromInvoice() {
 
 	const invoicePayments = originalInvoice.value?.payments
 	if (invoicePayments?.length) {
-		refundPayments.value = invoicePayments.map((payment) => ({
-			mode_of_payment: payment.mode_of_payment,
-			amount: isPartiallyPaid.value ? 0 : Math.abs(payment.amount),
-		}))
+		// Số tiền CỬA HÀNG THỰC NHẬN, không phải tổng các dòng thanh toán.
+		//
+		// Khi thu ngân lỡ nhập thừa dòng thanh toán (bấm hai lần, hoặc sửa giá
+		// rồi bấm lại), tổng các dòng lớn hơn tiền hàng và phần dư nằm ở
+		// `change_amount` (tiền thối). Trước đây màn hình này cộng hết các dòng
+		// làm số tiền hoàn, ra số lớn hơn tiền cần hoàn nên nút Tạo phiếu trả
+		// bị khoá vĩnh viễn — đơn nào từng thu vượt là không trả hàng được
+		// (PM-TASK-00072: đơn 6.630.000 cho hoá đơn 2.730.000).
+		const paid = Math.abs(Number(originalInvoice.value?.paid_amount) || 0)
+		const change = Math.abs(Number(originalInvoice.value?.change_amount) || 0)
+		const thucNhan = roundCurrency(Math.max(0, paid - change))
+
+		// Gộp các dòng trùng hình thức để thu ngân không phải nhìn 3 dòng Payoo
+		const gopTheoHinhThuc = []
+		for (const payment of invoicePayments) {
+			const mode = payment.mode_of_payment
+			const amount = Math.abs(Number(payment.amount) || 0)
+			const existing = gopTheoHinhThuc.find((r) => r.mode_of_payment === mode)
+			if (existing) {
+				existing.amount = roundCurrency(existing.amount + amount)
+			} else {
+				gopTheoHinhThuc.push({ mode_of_payment: mode, amount })
+			}
+		}
+
+		// Cắt tổng xuống đúng số thực nhận, trừ dần từ dòng đầu
+		let conLai = thucNhan
+		refundPayments.value = gopTheoHinhThuc.map((row) => {
+			const capped = roundCurrency(Math.min(row.amount, Math.max(0, conLai)))
+			conLai = roundCurrency(conLai - capped)
+			return {
+				mode_of_payment: row.mode_of_payment,
+				amount: isPartiallyPaid.value ? 0 : capped,
+			}
+		})
 	} else {
 		refundPayments.value = [
 			{

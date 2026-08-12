@@ -2621,6 +2621,10 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=Non
         si.customer, si.customer_name, si.company, si.net_total,
         si.total_taxes_and_charges, si.discount_amount,
         si.additional_discount_percentage,
+        # Cần để màn hình trả hàng biết cửa hàng THỰC NHẬN bao nhiêu: hoá đơn
+        # từng bị nhập thừa dòng thanh toán thì phần dư nằm ở đây, cộng hết các
+        # dòng thanh toán sẽ ra số lớn hơn tiền cần hoàn (PM-TASK-00072)
+        si.change_amount,
     ]
     if has_tpr_field:
         select_fields.append(si.posa_transaction_pricing_rule)
@@ -2730,6 +2734,7 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=Non
         "name": invoice_name,
         "grand_total": invoice_info.grand_total,
         "paid_amount": invoice_info.paid_amount,
+        "change_amount": flt(invoice_info.get("change_amount") or 0),
         "outstanding_amount": invoice_info.outstanding_amount,
         "customer": invoice_info.customer,
         "customer_name": invoice_info.customer_name,

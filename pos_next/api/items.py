@@ -30,6 +30,31 @@ ITEM_RESULT_FIELDS = [
 ITEM_RESULT_COLUMNS = ",\n\t".join(ITEM_RESULT_FIELDS)
 
 
+def _filter_item_price_by_date(query, ItemPrice, on_date=None, with_order=True):
+	"""Chỉ lấy Item Price đang có hiệu lực tại ngày bán.
+
+	Bảng giá của Hạ Vàng để sẵn giá của đợt sau với `valid_from` là ngày tương
+	lai. Trước đây các truy vấn giá của POS không lọc theo ngày, nên bản ghi
+	chưa tới hạn vẫn được nạp và GHI ĐÈ giá hiện hành trong bảng tra
+	(cùng item + cùng đơn vị tính) — POS bán ra bằng giá của đợt chưa bắt đầu
+	(PM-TASK-00068: giá 14/08 đã áp từ 12/08).
+
+	Sắp xếp tăng dần theo `valid_from` để bản ghi ghi sau là bản có ngày hiệu
+	lực GẦN NHẤT còn hợp lệ — đúng thứ tự ưu tiên của ERPNext. MariaDB xếp NULL
+	lên trước nên giá không ghi hạn luôn bị giá có hạn cụ thể ghi đè, đúng ý.
+	"""
+	today = on_date or nowdate()
+	query = query.where(
+		(ItemPrice.valid_from.isnull()) | (ItemPrice.valid_from <= today)
+	).where((ItemPrice.valid_upto.isnull()) | (ItemPrice.valid_upto >= today))
+
+	# Truy vấn gộp (Min/Max) không kèm ORDER BY được — MySQL bật
+	# ONLY_FULL_GROUP_BY sẽ báo lỗi vì cột sắp xếp không nằm trong hàm gộp
+	if with_order:
+		query = query.orderby(ItemPrice.valid_from)
+	return query
+
+
 def get_stock_availability(item_code, warehouse):
 	"""Return total available quantity for an item in the given warehouse."""
 	if not warehouse:
@@ -469,15 +494,27 @@ def search_by_barcode(barcode, pos_profile):
 		)
 
 		if resolved_barcode_data:
+			today = nowdate()
 			prices = frappe.get_all(
 				"Item Price",
 				filters={
 					"item_code": item_code,
 					"price_list": pos_profile_doc.selling_price_list,
 				},
-				fields=["uom", "price_list_rate"],
+				fields=["uom", "price_list_rate", "valid_from", "valid_upto"],
+				order_by="valid_from asc",
 			)
-			uom_prices = {p["uom"]: p["price_list_rate"] for p in prices if p.get("uom")}
+			# Bỏ giá của đợt chưa tới hạn hoặc đã hết hạn; giá có ngày hiệu lực
+			# gần nhất ghi đè giá không ghi hạn (PM-TASK-00068)
+			uom_prices = {}
+			for p in prices:
+				if not p.get("uom"):
+					continue
+				if p.get("valid_from") and str(p["valid_from"]) > today:
+					continue
+				if p.get("valid_upto") and str(p["valid_upto"]) < today:
+					continue
+				uom_prices[p["uom"]] = p["price_list_rate"]
 			enrich_item = {
 				"name": item_code,
 				"item_code": item_code,
@@ -666,16 +703,17 @@ def get_item_variants(template_item, pos_profile):
 		if variant_codes:
 			ItemPrice = DocType("Item Price")
 			prices = (
-				frappe.qb.from_(ItemPrice)
-				.select(
-					ItemPrice.item_code,
-					ItemPrice.uom,
-					ItemPrice.price_list_rate
+				_filter_item_price_by_date(
+					frappe.qb.from_(ItemPrice)
+					.select(
+						ItemPrice.item_code,
+						ItemPrice.uom,
+						ItemPrice.price_list_rate
+					)
+					.where(ItemPrice.item_code.isin(variant_codes))
+					.where(ItemPrice.price_list == pos_profile_doc.selling_price_list),
+					ItemPrice,
 				)
-				.where(ItemPrice.item_code.isin(variant_codes))
-				.where(ItemPrice.price_list == pos_profile_doc.selling_price_list)
-				.orderby(ItemPrice.item_code)
-				.orderby(ItemPrice.uom)
 				.run(as_dict=True)
 			)
 			for price in prices:
@@ -1236,16 +1274,17 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 		if item_codes:
 			ItemPrice = DocType("Item Price")
 			prices = (
-				frappe.qb.from_(ItemPrice)
-				.select(
-					ItemPrice.item_code,
-					ItemPrice.uom,
-					ItemPrice.price_list_rate
+				_filter_item_price_by_date(
+					frappe.qb.from_(ItemPrice)
+					.select(
+						ItemPrice.item_code,
+						ItemPrice.uom,
+						ItemPrice.price_list_rate
+					)
+					.where(ItemPrice.item_code.isin(item_codes))
+					.where(ItemPrice.price_list == pos_profile_doc.selling_price_list),
+					ItemPrice,
 				)
-				.where(ItemPrice.item_code.isin(item_codes))
-				.where(ItemPrice.price_list == pos_profile_doc.selling_price_list)
-				.orderby(ItemPrice.item_code)
-				.orderby(ItemPrice.uom)
 				.run(as_dict=True)
 			)
 			for price in prices:
@@ -1337,12 +1376,16 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 				ItemPrice = DocType("Item Price")
 				Item = DocType("Item")
 				variant_prices = (
-					frappe.qb.from_(ItemPrice)
-					.inner_join(Item).on(Item.name == ItemPrice.item_code)
-					.select(fn.Min(ItemPrice.price_list_rate).as_("min_price"))
-					.where(Item.variant_of == item["item_code"])
-					.where(ItemPrice.price_list == pos_profile_doc.selling_price_list)
-					.where(Item.disabled == 0)
+					_filter_item_price_by_date(
+						frappe.qb.from_(ItemPrice)
+						.inner_join(Item).on(Item.name == ItemPrice.item_code)
+						.select(fn.Min(ItemPrice.price_list_rate).as_("min_price"))
+						.where(Item.variant_of == item["item_code"])
+						.where(ItemPrice.price_list == pos_profile_doc.selling_price_list)
+						.where(Item.disabled == 0),
+						ItemPrice,
+						with_order=False,
+					)
 					.run(as_dict=True)
 				)
 				derived_price = (

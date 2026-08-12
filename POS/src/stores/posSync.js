@@ -293,6 +293,26 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 				// Continue with other data loading
 			}
 
+			// Mã giảm giá dùng khi mất mạng (PM-TASK-00071). Nạp mỗi lần mở POS
+			// cho nhẹ: danh sách chỉ vài chục mã, và mã mới khai trong ngày cũng
+			// cần tới được máy sớm.
+			log.info('Loading coupons for offline use')
+			try {
+				const company = currentProfile?.company
+				if (company) {
+					const response = await call("pos_next.api.offers.get_offline_coupons", {
+						company,
+					})
+					const coupons = response?.message || response || []
+					await offlineWorker.cacheCoupons(coupons, company)
+					log.success(`Cached ${coupons.length} coupons`)
+				}
+			} catch (error) {
+				// Mất danh sách này chỉ làm coupon không áp được khi offline,
+				// không được để nó chặn các bước nạp còn lại
+				log.error('Failed to load coupons', error)
+			}
+
 			// Load customers if cache needs refresh
 			if (!cacheReady || needsRefresh) {
 				showSuccess(__("Loading customers for offline use..."))

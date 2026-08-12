@@ -540,6 +540,25 @@ class OfflineWorkerClient {
 	}
 
 	/**
+	 * Lưu mã giảm giá lên máy để áp được khi mất mạng (PM-TASK-00071)
+	 * @param {Array} coupons - Danh sách mã từ máy chủ
+	 * @param {string} company - Công ty
+	 */
+	async cacheCoupons(coupons, company) {
+		return this.sendMessage("CACHE_COUPONS", { coupons, company })
+	}
+
+	/**
+	 * Tra một mã giảm giá trong bộ nhớ máy (dùng khi mất mạng)
+	 * @param {string} couponCode - Mã thu ngân gõ vào
+	 * @param {string} company - Công ty của ca đang bán
+	 * @returns {Promise<Object>} Cùng dạng với API validate_coupon
+	 */
+	async getCachedCoupon(couponCode, company) {
+		return this.sendMessage("GET_CACHED_COUPON", { couponCode, company })
+	}
+
+	/**
 	 * Clear cached offers
 	 * @param {string} posProfile - POS Profile name (optional, clears all if not provided)
 	 * @returns {Promise<{success: boolean}>}

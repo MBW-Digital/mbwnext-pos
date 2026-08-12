@@ -1091,6 +1091,95 @@ async function getCachedOffers(posProfile) {
 }
 
 /**
+ * Lưu mã giảm giá lên máy để áp được khi mất mạng (PM-TASK-00071).
+ *
+ * Máy chủ chỉ trả về mã tự kiểm tra được offline (không giới hạn lượt dùng,
+ * không gán riêng khách, không phải thẻ quà tặng) — xem get_offline_coupons().
+ * Khoá lưu là mã đã VIẾT HOA để lúc tra khỏi phải quét cả bảng, vì thu ngân gõ
+ * chữ thường hay chữ hoa đều phải nhận.
+ *
+ * @param {Array} coupons - Danh sách mã từ máy chủ
+ * @param {string} company - Công ty, để xoá đúng phần cũ của công ty đó
+ */
+async function cacheCoupons(coupons, company) {
+	try {
+		if (!Array.isArray(coupons) || !company) {
+			return { success: false, count: 0 }
+		}
+
+		const db = await initDB()
+
+		const rows = coupons
+			.filter((c) => c.coupon_code)
+			.map((c) => ({
+				...c,
+				coupon_code: String(c.coupon_code).toUpperCase(),
+				company,
+				_cached_at: Date.now(),
+			}))
+
+		await db.transaction('rw', db.table('coupons'), async () => {
+			await db.table('coupons').where('company').equals(company).delete()
+			if (rows.length > 0) {
+				await db.table('coupons').bulkPut(rows)
+			}
+		})
+
+		await db.table('settings').put({
+			key: `coupons_last_sync_${company}`,
+			value: Date.now(),
+		})
+
+		log.success(`Cached ${rows.length} coupons for company ${company}`)
+		return { success: true, count: rows.length }
+	} catch (error) {
+		log.error('Error caching coupons', error)
+		return { success: false, count: 0, error: error.message }
+	}
+}
+
+/**
+ * Tra một mã giảm giá trong bộ nhớ máy, dùng khi mất mạng.
+ *
+ * Trả về cùng dạng kết quả với API validate_coupon của máy chủ để màn hình nhập
+ * mã không phải xử lý hai kiểu dữ liệu khác nhau.
+ *
+ * @param {string} couponCode - Mã thu ngân gõ vào
+ * @param {string} company - Công ty của ca đang bán
+ * @returns {Promise<Object>} { valid, coupon } hoặc { valid: false, message }
+ */
+async function getCachedCoupon(couponCode, company) {
+	try {
+		if (!couponCode || !company) {
+			return { valid: false, message: 'Invalid coupon code' }
+		}
+
+		const db = await initDB()
+		const code = String(couponCode).trim().toUpperCase()
+		const coupon = await db.table('coupons').get(code)
+
+		if (!coupon || coupon.company !== company) {
+			return { valid: false, message: 'Invalid coupon code' }
+		}
+
+		// Ngày hiệu lực được lưu nguyên, lọc tại thời điểm dùng — danh sách nằm
+		// trên máy nhiều ngày nên không thể lọc sẵn lúc tải về
+		const today = new Date().toISOString().split('T')[0]
+		if (coupon.valid_from && coupon.valid_from > today) {
+			return { valid: false, message: 'This coupon is not yet valid' }
+		}
+		if (coupon.valid_upto && coupon.valid_upto < today) {
+			return { valid: false, message: 'This coupon has expired' }
+		}
+
+		return { valid: true, coupon }
+	} catch (error) {
+		log.error('Error reading cached coupon', error)
+		return { valid: false, message: 'Invalid coupon code' }
+	}
+}
+
+/**
  * Clear cached offers for a POS profile
  * @param {string} posProfile - POS Profile name (optional, clears all if not provided)
  */
@@ -1620,6 +1709,15 @@ self.onmessage = async (event) => {
 
 			case "CLEAR_OFFERS_CACHE":
 				result = await clearOffersCache(payload.posProfile)
+				break
+
+			// ===== COUPON CACHE OPERATIONS (PM-TASK-00071) =====
+			case "CACHE_COUPONS":
+				result = await cacheCoupons(payload.coupons, payload.company)
+				break
+
+			case "GET_CACHED_COUPON":
+				result = await getCachedCoupon(payload.couponCode, payload.company)
 				break
 
 			case "CACHE_PRODUCT_BUNDLES":

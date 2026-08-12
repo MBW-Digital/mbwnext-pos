@@ -929,3 +929,46 @@ def validate_coupon(coupon_code: str, customer: str, company: str) -> Dict:
 		"valid": True,
 		"coupon": coupon
 	}
+
+
+@frappe.whitelist()
+def get_offline_coupons(company: str) -> List[Dict]:
+	"""Mã giảm giá được phép áp khi POS mất mạng (PM-TASK-00071).
+
+	Chỉ trả về mã mà máy POS có thể tự kiểm tra ĐÚNG khi không hỏi được máy chủ:
+
+	- Không giới hạn số lượt dùng (`maximum_use = 0`): mã có giới hạn thì phải
+	  biết đã dùng bao nhiêu lần trên TOÀN hệ thống mới kết luận được, mà con số
+	  đó chỉ máy chủ có. Cho áp offline là mở đường cho một mã bị dùng vượt hạn
+	  ở nhiều cửa hàng cùng lúc.
+	- Không gán riêng khách (`customer` trống): mã gán riêng cần đối chiếu khách
+	  đang chọn, mà POS offline có thể đang dùng khách lưu sẵn không còn đúng.
+	- Không phải Gift Card: thẻ quà tặng dùng một lần, cũng cần máy chủ chốt.
+
+	Ngày hiệu lực thì trả kèm để máy POS tự lọc theo ngày bán, không lọc sẵn ở
+	đây — danh sách được lưu trên máy nhiều ngày, lọc sẵn theo hôm nay sẽ sai
+	vào những ngày sau.
+	"""
+	if not frappe.db.table_exists("POS Coupon"):
+		return []
+
+	return frappe.get_all(
+		"POS Coupon",
+		filters={
+			"company": company,
+			"disabled": 0,
+			"coupon_type": "Promotional",
+			"maximum_use": 0,
+		},
+		or_filters=[
+			["customer", "is", "not set"],
+			["customer", "=", ""],
+		],
+		fields=[
+			"name", "coupon_name", "coupon_code", "coupon_type", "company",
+			"discount_type", "discount_percentage", "discount_amount",
+			"min_amount", "max_amount", "apply_on",
+			"valid_from", "valid_upto", "pricing_rule",
+		],
+		limit_page_length=0,
+	)

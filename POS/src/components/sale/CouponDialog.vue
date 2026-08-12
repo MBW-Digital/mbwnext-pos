@@ -146,6 +146,8 @@
 
 <script setup>
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
+import { isOffline } from "@/utils/offline"
+import { offlineWorker } from "@/utils/offline/workerClient"
 import { Button, Dialog, Input, createResource } from "frappe-ui"
 import { ref, watch } from "vue"
 import { useInvoice } from "@/composables/useInvoice"
@@ -272,12 +274,32 @@ async function applyCoupon() {
 	errorMessage.value = ""
 
 	try {
-		await couponResource.reload()
-		// Frappe wraps response in { message: {...} }
-		const result = couponResource.data?.message || couponResource.data
+		let validationData
 
-		// Handle if result is the actual response object
-		const validationData = typeof result === 'object' && result.valid !== undefined ? result : couponResource.data
+		if (isOffline()) {
+			// Mất mạng: tra danh sách mã đã lưu trên máy. Chỉ những mã tự kiểm
+			// tra được offline mới nằm trong đó — mã có giới hạn lượt dùng hoặc
+			// gán riêng khách không được lưu, nên sẽ báo không hợp lệ và thu ngân
+			// biết là phải chờ có mạng (PM-TASK-00071).
+			validationData = await offlineWorker.getCachedCoupon(
+				couponCode.value,
+				props.company,
+			)
+			if (!validationData?.valid) {
+				errorMessage.value =
+					validationData?.message ||
+					__("Mã này cần có mạng mới áp được. Vui lòng thử lại khi có mạng.")
+				showError(errorMessage.value)
+				return
+			}
+		} else {
+			await couponResource.reload()
+			// Frappe wraps response in { message: {...} }
+			const result = couponResource.data?.message || couponResource.data
+
+			// Handle if result is the actual response object
+			validationData = typeof result === 'object' && result.valid !== undefined ? result : couponResource.data
+		}
 
 		if (!validationData || !validationData.valid) {
 			errorMessage.value =

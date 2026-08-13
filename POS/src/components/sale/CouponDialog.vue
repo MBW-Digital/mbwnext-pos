@@ -277,18 +277,19 @@ async function applyCoupon() {
 		let validationData
 
 		if (isOffline()) {
-			// Mất mạng: tra danh sách mã đã lưu trên máy. Chỉ những mã tự kiểm
-			// tra được offline mới nằm trong đó — mã có giới hạn lượt dùng hoặc
-			// gán riêng khách không được lưu, nên sẽ báo không hợp lệ và thu ngân
-			// biết là phải chờ có mạng (PM-TASK-00071).
+			// Mất mạng: tra danh sách mã đã lưu trên máy. Mã có giới hạn lượt
+			// dùng / dùng-một-lần / gán riêng khách vẫn nằm trong danh sách nhưng
+			// bị đánh dấu phải hỏi máy chủ, nên câu báo là "chờ có mạng" chứ
+			// không phải "mã không hợp lệ" (PM-TASK-00071).
 			validationData = await offlineWorker.getCachedCoupon(
 				couponCode.value,
 				props.company,
 			)
 			if (!validationData?.valid) {
-				errorMessage.value =
-					validationData?.message ||
-					__("Mã này cần có mạng mới áp được. Vui lòng thử lại khi có mạng.")
+				// Worker trả câu tiếng Anh giống hệt máy chủ để chỉ phải dịch một chỗ
+				errorMessage.value = validationData?.message
+					? __(validationData.message)
+					: __("This coupon can only be applied when the POS is online")
 				showError(errorMessage.value)
 				return
 			}

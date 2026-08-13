@@ -1162,9 +1162,20 @@ async function getCachedCoupon(couponCode, company) {
 			return { valid: false, message: 'Invalid coupon code' }
 		}
 
+		// Mã có giới hạn lượt dùng / dùng-một-lần / gán riêng khách chỉ được gửi
+		// xuống dưới dạng mã trơn. Nói thẳng là phải chờ có mạng, đừng báo "mã
+		// không hợp lệ" — thu ngân sẽ tưởng khách đưa nhầm mã
+		if (coupon.requires_server) {
+			return { valid: false, message: 'This coupon can only be applied when the POS is online' }
+		}
+
 		// Ngày hiệu lực được lưu nguyên, lọc tại thời điểm dùng — danh sách nằm
-		// trên máy nhiều ngày nên không thể lọc sẵn lúc tải về
-		const today = new Date().toISOString().split('T')[0]
+		// trên máy nhiều ngày nên không thể lọc sẵn lúc tải về.
+		// Lấy ngày theo GIỜ MÁY: toISOString() cho ra giờ quốc tế, ở UTC+7 thì
+		// trước 7h sáng nó trả về ngày HÔM QUA — mã bắt đầu hiệu lực hôm nay sẽ
+		// bị từ chối, mã hết hạn hôm qua thì vẫn áp được
+		const now = new Date()
+		const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 		if (coupon.valid_from && coupon.valid_from > today) {
 			return { valid: false, message: 'This coupon is not yet valid' }
 		}

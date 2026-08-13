@@ -961,7 +961,15 @@ def get_offline_coupons(company: str) -> List[Dict]:
 	  ở nhiều cửa hàng cùng lúc.
 	- Không gán riêng khách (`customer` trống): mã gán riêng cần đối chiếu khách
 	  đang chọn, mà POS offline có thể đang dùng khách lưu sẵn không còn đúng.
+	- Không phải "dùng một lần mỗi khách" (`one_use`): điều kiện này chỉ trả lời
+	  được bằng cách đếm hoá đơn cũ của khách trên toàn hệ thống.
 	- Không phải Gift Card: thẻ quà tặng dùng một lần, cũng cần máy chủ chốt.
+
+	Mã KHÔNG đủ điều kiện vẫn được liệt kê, nhưng chỉ có mã trơn kèm cờ
+	`requires_server` — đủ để POS báo thu ngân "chờ có mạng" thay vì báo nhầm là
+	"mã không hợp lệ", mà không đẩy giá trị chiết khấu xuống máy. Riêng Gift Card
+	thì không liệt kê: mã thẻ là chuỗi ngẫu nhiên phát cho từng khách, không có lý
+	do gì để nằm trên mọi máy POS, và đằng nào cũng không dùng offline được.
 
 	Ngày hiệu lực thì trả kèm để máy POS tự lọc theo ngày bán, không lọc sẵn ở
 	đây — danh sách được lưu trên máy nhiều ngày, lọc sẵn theo hôm nay sẽ sai
@@ -970,23 +978,44 @@ def get_offline_coupons(company: str) -> List[Dict]:
 	if not frappe.db.table_exists("POS Coupon"):
 		return []
 
-	return frappe.get_all(
+	rows = frappe.get_all(
 		"POS Coupon",
 		filters={
 			"company": company,
 			"disabled": 0,
 			"coupon_type": "Promotional",
-			"maximum_use": 0,
 		},
-		or_filters=[
-			["customer", "is", "not set"],
-			["customer", "=", ""],
-		],
 		fields=[
 			"name", "coupon_name", "coupon_code", "coupon_type", "company",
 			"discount_type", "discount_percentage", "discount_amount",
 			"min_amount", "max_amount", "apply_on",
 			"valid_from", "valid_upto", "pricing_rule",
+			"customer", "maximum_use", "one_use",
 		],
 		limit_page_length=0,
 	)
+
+	coupons = []
+	for row in rows:
+		self_validatable = (
+			not row.get("customer")
+			and not cint(row.get("maximum_use"))
+			and not cint(row.get("one_use"))
+		)
+
+		if not self_validatable:
+			coupons.append({
+				"coupon_code": row.get("coupon_code"),
+				"coupon_name": row.get("coupon_name"),
+				"company": row.get("company"),
+				"requires_server": 1,
+			})
+			continue
+
+		# Bỏ 3 trường chỉ dùng để phân loại, máy POS không cần tới
+		for field in ("customer", "maximum_use", "one_use"):
+			row.pop(field, None)
+		row["requires_server"] = 0
+		coupons.append(row)
+
+	return coupons

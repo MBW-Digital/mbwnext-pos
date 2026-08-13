@@ -863,9 +863,17 @@ def _get_standalone_pricing_rule_offers(
 # ============================================================================
 
 @frappe.whitelist()
-def get_active_coupons(customer: str, company: str) -> List[Dict]:
-	"""Get active gift card coupons for a customer"""
+def get_active_coupons(customer: str = None, company: str = None) -> List[Dict]:
+	"""Get active gift card coupons for a customer.
+
+	Both arguments are optional on purpose: a cart with no customer picked yet sends
+	null, and a bare ``customer: str`` annotation makes Frappe reject the call with
+	FrappeTypeError before this function ever runs.
+	"""
 	if not frappe.db.table_exists("POS Coupon"):
+		return []
+
+	if not customer or not company:
 		return []
 
 	coupons = frappe.get_all(
@@ -883,10 +891,20 @@ def get_active_coupons(customer: str, company: str) -> List[Dict]:
 
 
 @frappe.whitelist()
-def validate_coupon(coupon_code: str, customer: str, company: str) -> Dict:
-	"""Validate a coupon code and return its details"""
+def validate_coupon(coupon_code: str, customer: str = None, company: str = None) -> Dict:
+	"""Validate a coupon code and return its details.
+
+	``customer`` is optional: a walk-in sale reaches the coupon dialog with no
+	customer picked and the POS then sends null. With a bare ``customer: str``
+	annotation Frappe rejected that call with FrappeTypeError, which the dialog
+	showed the cashier as the generic "Failed to apply coupon" — the same wording
+	as the offline failure, so the two got mistaken for one bug.
+	"""
 	if not frappe.db.table_exists("POS Coupon"):
 		return {"valid": False, "message": _("Coupons are not enabled")}
+
+	if not company:
+		company = frappe.defaults.get_user_default("Company")
 
 	date = getdate()
 

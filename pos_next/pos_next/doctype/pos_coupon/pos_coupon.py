@@ -57,6 +57,46 @@ class POSCoupon(Document):
 
 
 
+def customer_has_used_coupon(customer, coupon_code):
+    """Đã có hoá đơn nào của khách này dùng mã đó chưa (dùng cho luật one_use).
+
+    Chỗ DUY NHẤT ghi lại một mã đã được dùng là bảng con `POS Coupon Applied`
+    trên Sales Invoice. Bản cũ đếm doctype `POS Invoice` — doctype mà app này
+    KHÔNG BAO GIỜ ghi vào (0 bản ghi, trong khi POS đã xuất 203 hoá đơn Sales
+    Invoice) — nên luật "một lần mỗi khách" chưa từng chặn ai. Cũng không lọc
+    thẳng trên Sales Invoice được vì bảng đó không hề có cột `coupon_code`;
+    invoices.py có gán `invoice_doc.coupon_code` nhưng không có cột nên giá trị
+    đó rơi mất khi lưu.
+
+    Nối bảng bằng query builder thay vì get_all trên bảng con, vì truy vấn bảng
+    con mà không kèm doctype cha bị Frappe chặn.
+
+    Hoá đơn trả hàng (`is_return`) không tính: trả hàng thì coi như chưa dùng mã.
+    """
+    if not customer or not coupon_code:
+        return False
+
+    sales_invoice = frappe.qb.DocType("Sales Invoice")
+    coupon_applied = frappe.qb.DocType("POS Coupon Applied")
+
+    rows = (
+        frappe.qb.from_(coupon_applied)
+        .join(sales_invoice)
+        .on(coupon_applied.parent == sales_invoice.name)
+        .select(sales_invoice.name)
+        .where(
+            (coupon_applied.coupon_code == coupon_code)
+            & (coupon_applied.parenttype == "Sales Invoice")
+            & (sales_invoice.customer == customer)
+            & (sales_invoice.docstatus == 1)
+            & (sales_invoice.is_return == 0)
+        )
+        .limit(1)
+    ).run()
+
+    return bool(rows)
+
+
 def check_coupon_code(coupon_code, customer=None, company=None):
     """Validate and return coupon details"""
     res = {"coupon": None}
@@ -101,13 +141,7 @@ def check_coupon_code(coupon_code, customer=None, company=None):
 
     # Check one-time use per customer
     if coupon.one_use and customer:
-        # Check if customer has already used this coupon
-        used_count = frappe.db.count("POS Invoice", filters={
-            "customer": customer,
-            "coupon_code": coupon.coupon_code,
-            "docstatus": 1
-        })
-        if used_count > 0:
+        if customer_has_used_coupon(customer, coupon.coupon_code):
             res["msg"] = _("Sorry, you have already used this coupon code")
             return res
 

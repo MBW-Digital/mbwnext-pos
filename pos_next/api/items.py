@@ -472,6 +472,35 @@ def search_by_barcode(barcode, pos_profile):
 		if not item_doc.is_sales_item:
 			frappe.throw(_("Item {0} is not allowed for sales").format(item_code))
 
+		# Cửa hàng bật "ẩn hàng hết tồn" thì QUÉT MÃ VẠCH cũng phải chặn.
+		#
+		# Trước đây bộ lọc này chỉ áp cho danh sách mặt hàng, nên hàng hết tồn
+		# tuy biến mất khỏi danh sách nhưng quét tem vẫn thêm được vào giỏ — thu
+		# ngân bán bình thường tới lúc lưu hoá đơn mới biết (PM-TASK-00073: đơn
+		# AP2608080001 bán mã đã hết tồn, kho thành -1).
+		if (
+			cint(
+				frappe.db.get_value(
+					"POS Settings", {"pos_profile": pos_profile}, "hide_out_of_stock_items"
+				)
+			)
+			and item_doc.is_stock_item
+			and not item_doc.has_variants
+		):
+			ton_hien_co = flt(
+				frappe.db.get_value(
+					"Bin",
+					{"item_code": item_code, "warehouse": pos_profile_doc.warehouse},
+					"actual_qty",
+				)
+			)
+			if ton_hien_co <= 0:
+				frappe.throw(
+					_("Mặt hàng {0} đã hết tồn tại kho {1}").format(
+						item_code, pos_profile_doc.warehouse
+					)
+				)
+
 		# Prepare item dict for get_item_detail
 		item = {
 			"item_code": item_code,

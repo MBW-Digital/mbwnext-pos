@@ -266,11 +266,29 @@ def _validate_stock_on_invoice(invoice_doc):
     ):
         return
 
-    # Collect all stock items to check
+    # Mặt hàng nào là hàng quản lý tồn kho phải TRA TỪ DANH MỤC HÀNG.
+    #
+    # Dòng hàng của hoá đơn KHÔNG có trường `is_stock_item` — trước đây lọc
+    # thẳng `d.get("is_stock_item")` nên danh sách cần kiểm tra LUÔN RỖNG và
+    # chốt chặn tồn kho chưa từng chạy, dù cấu hình đã bật. Hàng bán quá tồn
+    # vẫn submit bình thường, tồn kho âm mà không ai được cảnh báo
+    # (PM-TASK-00073: mã 200770042263 tồn 0 vẫn bán tiếp, còn -1).
+    ma_hang = [d.item_code for d in invoice_doc.items if d.get("item_code")]
+    hang_ton_kho = set()
+    if ma_hang:
+        hang_ton_kho = {
+            row.name
+            for row in frappe.get_all(
+                "Item",
+                filters={"name": ["in", ma_hang], "is_stock_item": 1},
+                fields=["name"],
+            )
+        }
+
     items_to_check = [
         d.as_dict()
         for d in invoice_doc.items
-        if d.get("is_stock_item")
+        if d.get("item_code") in hang_ton_kho
         and not cint(getattr(d, "is_free_item", 0))
         and not cint(getattr(d, "pos_skip_stock_deduction", 0))
     ]

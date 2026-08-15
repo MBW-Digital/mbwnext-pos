@@ -14,6 +14,7 @@ from erpnext.accounts.doctype.loyalty_program.loyalty_program import (
 )
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from erpnext.accounts.utils import get_account_currency
+from erpnext.controllers import taxes_and_totals as _taxes_and_totals
 
 from pos_next.api.loyalty_exclusion import (
 	get_loyalty_eligible_amount,
@@ -332,3 +333,60 @@ class CustomSalesInvoice(SalesInvoice):
 			),
 			self.precision("base_net_total"),
 		)
+
+
+# ==========================================================================
+# Vá ERPNext: đừng xoá bảng thanh toán của phiếu trả vì lệch vài đồng
+# ==========================================================================
+
+# Lệch tối đa (VND) được coi là sai số làm tròn, không phải sai số liệu. Mỗi
+# dòng hoá đơn góp tối đa ~0,5 đồng nên 10 đồng đủ cho hoá đơn rất nhiều dòng,
+# mà vẫn nhỏ hơn mọi sai lệch thật một khoảng rất xa.
+NGUONG_LECH_LAM_TRON = 10
+
+_set_total_amount_to_default_mop_goc = (
+	_taxes_and_totals.calculate_taxes_and_totals.set_total_amount_to_default_mop
+)
+
+
+def _set_total_amount_to_default_mop(self, total_amount_to_pay):
+	"""Chênh lệch làm tròn thì cộng vào dòng thanh toán cuối, đừng thay cả bảng.
+
+	Bản gốc của ERPNext thấy tổng thanh toán chưa đủ `total_amount_to_pay` là
+	XOÁ SẠCH bảng payments rồi thay bằng đúng MỘT dòng bằng phần còn thiếu.
+	Với phiếu trả POS, phần còn thiếu thường chỉ là chênh lệch làm tròn: POS
+	cộng tiền hoàn theo từng dòng (`net_rate` + thuế, mỗi dòng làm tròn riêng),
+	còn ERPNext phân bổ chiết khấu bill một lần trên tổng.
+
+	Hậu quả rất nặng: phiếu trả 4.638.272 bị ghi thành hoàn 1 đồng, treo công
+	nợ 4.638.271 trên cả phiếu trả lẫn đơn gốc, trong khi thu ngân đã đưa khách
+	đủ tiền. Đã tái hiện trên hoá đơn 3 dòng có coupon 15%.
+
+	Lệch lớn thì vẫn để bản gốc xử lý — đó là sai số liệu thật, không được che.
+	"""
+	tong_da_tra = sum(
+		flt(p.amount) if self.doc.party_account_currency == self.doc.currency else flt(p.base_amount)
+		for p in self.doc.get("payments") or []
+	)
+	con_thieu = flt(total_amount_to_pay) - flt(tong_da_tra)
+
+	if self.doc.get("payments") and 0 < abs(con_thieu) <= NGUONG_LECH_LAM_TRON:
+		dong_cuoi = self.doc.payments[-1]
+		dong_cuoi.amount = flt(dong_cuoi.amount + con_thieu)
+		dong_cuoi.base_amount = flt(dong_cuoi.amount * flt(self.doc.conversion_rate or 1))
+
+		# ERPNext tính outstanding_amount TRƯỚC khi gọi hàm này rồi không tính
+		# lại, nên phần chênh vừa cộng vào sẽ treo nguyên trên công nợ. Bảng
+		# thanh toán giờ đã bằng đúng total_amount_to_pay nên công nợ phải về 0.
+		self.doc.outstanding_amount = flt(
+			flt(total_amount_to_pay) - flt(tong_da_tra) - flt(con_thieu),
+			self.doc.precision("outstanding_amount"),
+		)
+		return
+
+	return _set_total_amount_to_default_mop_goc(self, total_amount_to_pay)
+
+
+_taxes_and_totals.calculate_taxes_and_totals.set_total_amount_to_default_mop = (
+	_set_total_amount_to_default_mop
+)

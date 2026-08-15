@@ -1038,6 +1038,9 @@ const fetchInvoiceResource = createResource({
 				company: data.company,
 				posting_date: origInvoice.posting_date,
 				grand_total: origInvoice.grand_total,
+				total: origInvoice.total,
+				discount_amount: origInvoice.discount_amount,
+				apply_discount_on: origInvoice.apply_discount_on,
 				paid_amount: origInvoice.paid_amount,
 				change_amount: origInvoice.change_amount,
 				outstanding_amount: origInvoice.outstanding_amount,
@@ -1186,6 +1189,33 @@ const createReturnResource = createResource({
 			remarks:
 				returnReason.value ||
 				__("Return against {0}", [originalInvoice.value.name]),
+		}
+
+		// Chiết khấu bill của đơn gốc phải theo hàng trả về, PHÂN BỔ THEO TỈ LỆ.
+		//
+		// Coupon phần trăm (vd CK15 giảm 15%) áp trên tổng đơn, nên trả bớt hàng
+		// thì phần giảm cũng phải bớt theo. Trước đây phiếu trả không mang chiết
+		// khấu nào, nên chứng từ ghi hoàn NGUYÊN giá dòng trong khi cửa hàng chỉ
+		// trả khách 85% — hai số lệch nhau và để lại công nợ treo trên cả đơn gốc
+		// lẫn phiếu trả (PM-TASK-00100: ghi hoàn 3.148.850 / thực hoàn 2.676.522,
+		// treo 472.328).
+		//
+		// Không lấy nguyên chiết khấu của đơn gốc: trả 1 trong 3 món mà trừ cả
+		// khoản giảm của cả đơn thì hoàn thiếu cho khách.
+		const ckBillGoc = Math.abs(Number(originalInvoice.value?.discount_amount) || 0)
+		const tongDongGoc = Math.abs(Number(originalInvoice.value?.total) || 0)
+		if (ckBillGoc > 0 && tongDongGoc > 0) {
+			const tongDongTra = selectedItems.value.reduce(
+				(sum, item) =>
+					sum + roundCurrency(Number(item.return_qty || 0) * Number(item.rate || 0)),
+				0,
+			)
+			const ckPhanBo = roundCurrency((ckBillGoc * tongDongTra) / tongDongGoc)
+			if (ckPhanBo > 0) {
+				invoiceData.apply_discount_on =
+					originalInvoice.value?.apply_discount_on || "Grand Total"
+				invoiceData.discount_amount = -ckPhanBo
+			}
 		}
 
 		// KM reclaim: gửi write_off_amount và write_off_account

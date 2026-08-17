@@ -1916,22 +1916,45 @@ def delete_invoice(invoice):
 @frappe.whitelist()
 def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
     """
-    Clean up old draft invoices to prevent stock reservation issues.
+    Clean up old draft POS invoices to prevent stock reservation issues.
     Deletes drafts older than max_age_hours (default 24 hours).
+
+    Scope is deliberately narrow - see the two guards below. The delete itself
+    runs with ignore_permissions because cashiers hold no delete permission on
+    Sales Invoice, so anything this function is allowed to see, it WILL delete.
     """
     from datetime import datetime, timedelta
 
     doctype = "Sales Invoice"
+
+    # pos_profile is mandatory. Without it the filters below match EVERY draft
+    # Sales Invoice in the system - manually entered and Data Import ones
+    # included - and the elevated delete happily wipes them (PM-TASK-00109: 43
+    # imported drafts of another user destroyed in one logout). A missing value
+    # is normal rather than exceptional: clearCart() also runs on the login
+    # screen, where posProfile is still null.
+    if not pos_profile:
+        return {"deleted": 0, "message": "POS Profile is required"}
+
+    # The caller must actually operate this till, otherwise any logged-in user
+    # could clear another store's drafts just by passing its profile name.
+    # Same access rule as get_pos_profile_data() in pos_next/api/pos_profile.py.
+    if not frappe.db.exists(
+        "POS Profile User", {"parent": pos_profile, "user": frappe.session.user}
+    ):
+        frappe.throw(_("You don't have access to POS Profile {0}").format(pos_profile))
+
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
     filters = {
         "docstatus": 0,  # Draft only
+        # is_pos is set unconditionally on every invoice this app creates (see
+        # update_invoice()), so POS drafts are never missed - but invoices typed
+        # into the desk are, and they are none of this function's business.
+        "is_pos": 1,
+        "pos_profile": pos_profile,
         "modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
     }
-
-    # Optionally filter by POS profile
-    if pos_profile:
-        filters["pos_profile"] = pos_profile
 
     # Get old drafts
     old_drafts = frappe.get_all(

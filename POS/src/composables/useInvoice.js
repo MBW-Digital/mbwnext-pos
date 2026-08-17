@@ -1440,8 +1440,12 @@ export function useInvoice() {
 		setDefaultCustomer()
 
 		// Cleanup old draft invoices (older than 1 hour) in background
-		// Skip if offline to avoid network errors
-		if (!isOffline()) {
+		// Skip if offline to avoid network errors.
+		// posProfile must be set: clearCart() also runs from Login.vue's
+		// onMounted right after a logout, when posProfile is back to its
+		// initial null - and a null profile used to make the server delete
+		// every stale draft in the system (PM-TASK-00109).
+		if (!isOffline() && posProfile.value) {
 			try {
 				await cleanupDraftsResource.submit({
 					pos_profile: posProfile.value,

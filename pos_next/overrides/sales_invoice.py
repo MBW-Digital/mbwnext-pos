@@ -245,78 +245,20 @@ class CustomSalesInvoice(SalesInvoice):
 			"default_discount_account"
 		)
 
-	def get_tax_amounts(self, tax, enable_discount_accounting):
-		"""Thuế đầu ra luôn hạch toán theo Tax Amount After Discount Amount.
-
-		ERPNext gốc (accounts_controller.get_tax_amounts) cố ý dùng `tax_amount`
-		— tức số thuế TRƯỚC khi trừ chiết khấu tổng đơn — khi hoá đơn vừa bật
-		discount accounting, vừa có `additional_discount_account`, vừa
-		`apply_discount_on = "Grand Total"`. Lý do của ERPNext: coi khoản chiết
-		khấu là chi phí riêng nên giữ thuế trên giá gộp.
-
-		Kế toán VAS thì ngược lại: 33311 phải bằng đúng số thuế thực kê khai
-		(`tax_amount_after_discount_amount`). Phần chênh giữa hai con số được
-		dồn vào tài khoản doanh thu ở `make_discount_gl_entries` bên dưới, nên
-		bút toán vẫn cân.
-		"""
-		return tax.tax_amount_after_discount_amount, tax.base_tax_amount_after_discount_amount
-
 	def get_gl_entries(self, warehouse_account=None):
 		gl_entries = super().get_gl_entries(warehouse_account)
-		self.book_tax_discount_difference_to_income(gl_entries)
+		self.tach_thue_khoi_khuyen_mai(gl_entries)
 		return gl_entries
 
-	def book_tax_discount_difference_to_income(self, gl_entries):
-		"""Dồn phần chênh thuế (do get_tax_amounts ở trên) vào tài khoản doanh thu.
+	def thue_cua_khuyen_mai(self):
+		"""Phần thuế GTGT nằm trong khoản khuyến mại tổng đơn.
 
-		ERPNext gốc ghi 33311 theo `tax_amount`; ta ghi theo
-		`tax_amount_after_discount_amount` nên bên Có hụt đúng bằng phần chênh
-		giữa hai số. Bên Nợ (131 và 521) không đổi, nên phải cộng phần chênh đó
-		vào doanh thu thì bút toán mới cân — đây chính là "511 = giá trị cũ +
-		phần chênh lệch tính sai thuế".
+		Bằng `tax_amount - tax_amount_after_discount_amount`: chênh giữa thuế tính
+		trên giá trước khuyến mại và thuế tính sau khuyến mại.
 
-		Cộng đúng phần LỆCH THỰC TẾ của bộ bút toán chứ không cộng phần chênh
-		tính từ bảng thuế: từng dòng bút toán được làm tròn riêng nên hai số có
-		thể lệch nhau 1–2 đồng, cộng theo bảng thuế sẽ để lại chênh lệch nợ/có
-		(đã gặp ở 11/40 hoá đơn khi thử).
-		"""
-		expected = self.get_tax_discount_difference()
-		if not expected:
-			return
-
-		precision = self.precision("base_net_total")
-		residual = flt(
-			sum(flt(gle.get("debit")) for gle in gl_entries)
-			- sum(flt(gle.get("credit")) for gle in gl_entries),
-			precision,
-		)
-		if not residual:
-			return
-
-		# Chỉ hấp thụ phần lệch đúng bằng chênh thuế (cộng/trừ vài đồng làm tròn).
-		# Lệch nhiều hơn nghĩa là có nguyên nhân khác — để nguyên cho ERPNext báo
-		# "Debit and Credit not equal" thay vì che mất một lỗi thật.
-		if abs(residual - expected) > 5:
-			return
-
-		income_accounts = {item.income_account for item in self.get("items") if item.income_account}
-		income_entries = [gle for gle in gl_entries if gle.get("account") in income_accounts]
-		if not income_entries:
-			return
-
-		# Cộng vào dòng doanh thu lớn nhất: hoá đơn nhiều dòng hàng vẫn chỉ có
-		# một bút toán chênh lệch, không rải nhỏ ra từng dòng.
-		target = max(income_entries, key=lambda gle: flt(gle.get("credit")))
-		for field in ("credit", "credit_in_account_currency", "credit_in_transaction_currency"):
-			if target.get(field):
-				target[field] = flt(flt(target[field]) + residual, precision)
-
-	def get_tax_discount_difference(self):
-		"""Phần thuế ERPNext gốc sẽ ghi thừa, = tax_amount - tax_amount_after_discount_amount.
-
-		Chỉ phát sinh đúng trong điều kiện mà ERPNext đổi sang `tax_amount`
-		(xem get_tax_amounts): bật discount accounting + có chiết khấu tổng đơn +
-		có tài khoản chiết khấu + áp trên Grand Total.
+		Chỉ có ý nghĩa đúng trong điều kiện ERPNext dùng `tax_amount` để hạch toán
+		— bật discount accounting, có khuyến mại tổng đơn, có tài khoản chiết khấu,
+		và áp trên Grand Total.
 		"""
 		if not (
 			self.enable_discount_accounting
@@ -333,6 +275,148 @@ class CustomSalesInvoice(SalesInvoice):
 			),
 			self.precision("base_net_total"),
 		)
+
+	def tach_thue_khoi_khuyen_mai(self, gl_entries):
+		"""Tách phần thuế ra khỏi khoản khuyến mại, và cho khuyến mại chạy qua 131.
+
+		ERPNext gốc ghi toàn bộ khuyến mại tổng đơn vào tài khoản giảm trừ doanh
+		thu (521), kể cả phần thuế GTGT nằm trong đó, rồi ghi phải thu theo số đã
+		trừ khuyến mại. Kết quả: 521 bị thổi lên đúng phần thuế, và sổ chi tiết
+		công nợ không thấy khoản khuyến mại đã giảm cho khách.
+
+		Kế toán Hạ Vàng yêu cầu (PM-TASK-00023, chị Hằng chốt 17/08 — "Cách 2"):
+		  521 ghi phần chưa thuế, phần thuế ghi giảm 33311,
+		  và khuyến mại hiện thành một dòng ghi Có 131.
+
+		Ví dụ hoá đơn AM2607290001 — khuyến mại 590.697 gồm 43.755 tiền thuế:
+		  131      Nợ 3.937.980   (giá trước khuyến mại, thay cho 3.347.283)
+		  131      Có   590.697   (khuyến mại, dòng thêm mới)
+		  521      Nợ   546.942   (thay cho 590.697)
+		  33311    Nợ    43.755   (dòng thêm mới)
+		Thuế thực nộp còn 247.947, doanh thu thuần và số phải thu không đổi.
+		"""
+		thue = self.thue_cua_khuyen_mai()
+		if not thue:
+			return
+
+		khuyen_mai = flt(self.base_discount_amount)
+		precision = self.precision("base_net_total")
+
+		# Số phải thu ERPNext đã ghi, cộng lại khuyến mại để ra giá trước khuyến
+		# mại. KHÔNG dùng base_total: khi thuế không nằm trong giá bán thì
+		# base_total chưa gồm thuế, đặt vào đây sẽ lệch sổ đúng phần thuế đó.
+		phai_thu_da_ghi = flt(self.base_rounded_total) or flt(self.base_grand_total)
+		truoc_khuyen_mai = flt(phai_thu_da_ghi + khuyen_mai, precision)
+
+		dong_521 = self._tim_dong(gl_entries, self.additional_discount_account, "debit", khuyen_mai)
+		dong_131 = self._tim_dong(gl_entries, self.debit_to, "debit", phai_thu_da_ghi)
+		if not dong_521 or not dong_131:
+			# Bộ bút toán không như mong đợi (ERPNext đổi cách dựng, hoặc hoá đơn
+			# có tình huống lạ). Để nguyên còn hơn sửa mù.
+			frappe.log_error(
+				title="Khong tach duoc thue khuyen mai khoi 521",
+				message=f"Hoa don {self.name}: khong tim thay dong 521 hoac dong phai thu can sua.",
+			)
+			return
+
+		tai_khoan_thue = self._tai_khoan_thue()
+		if not tai_khoan_thue:
+			return
+
+		# 521 chỉ còn phần chưa thuế
+		self._doi_so_tien(dong_521, "debit", flt(khuyen_mai - thue, precision), precision)
+
+		# Phải thu ghi theo giá TRƯỚC khuyến mại, rồi khuyến mại ghi Có một dòng
+		self._doi_so_tien(dong_131, "debit", truoc_khuyen_mai, precision)
+
+		gl_entries.append(
+			self.get_gl_dict(
+				{
+					"account": self.debit_to,
+					"party_type": "Customer",
+					"party": self.customer,
+					"against": self.additional_discount_account,
+					"credit": khuyen_mai,
+					"credit_in_account_currency": khuyen_mai,
+					# Phải trỏ về chính hoá đơn, nếu không công nợ sẽ treo đúng
+					# bằng khoản khuyến mại (đã gặp ở PM-TASK-00106).
+					"against_voucher": self.return_against
+					if self.is_return and self.return_against
+					else self.name,
+					"against_voucher_type": self.doctype,
+					"cost_center": self.cost_center,
+				},
+				self.party_account_currency,
+				item=self,
+			)
+		)
+
+		# Phần thuế được giảm nhờ khuyến mại
+		gl_entries.append(
+			self.get_gl_dict(
+				{
+					"account": tai_khoan_thue,
+					"against": self.customer,
+					"debit": thue,
+					"debit_in_account_currency": thue,
+					"cost_center": self.cost_center,
+				},
+				item=self,
+			)
+		)
+
+		self._hap_thu_lech_lam_tron(gl_entries, precision)
+
+	def _hap_thu_lech_lam_tron(self, gl_entries, precision):
+		"""Dồn phần lệch nợ/có do làm tròn vào dòng doanh thu.
+
+		Từng con số trên đây (thuế trước/sau khuyến mại, phần khuyến mại chưa
+		thuế) đều được làm tròn riêng, nên bộ bút toán thường lệch 1–2 đồng.
+
+		Chỉ hấp thụ phần lệch rất nhỏ. Lệch lớn hơn nghĩa là có nguyên nhân
+		khác — để ERPNext báo "Debit and Credit not equal" còn hơn lấy doanh
+		thu che mất một lỗi thật.
+		"""
+		lech = flt(
+			sum(flt(g.get("debit")) for g in gl_entries)
+			- sum(flt(g.get("credit")) for g in gl_entries),
+			precision,
+		)
+		if not lech or abs(lech) > 5:
+			return
+
+		tai_khoan_doanh_thu = {it.income_account for it in self.get("items") if it.income_account}
+		dong_doanh_thu = [g for g in gl_entries if g.get("account") in tai_khoan_doanh_thu]
+		if not dong_doanh_thu:
+			return
+
+		# Cộng vào dòng doanh thu lớn nhất: hoá đơn nhiều dòng hàng vẫn chỉ có
+		# một bút toán chênh lệch, không rải nhỏ ra từng dòng.
+		muc_tieu = max(dong_doanh_thu, key=lambda g: flt(g.get("credit")))
+		for hau_to in ("", "_in_account_currency", "_in_transaction_currency"):
+			ten = "credit" + hau_to
+			if muc_tieu.get(ten):
+				muc_tieu[ten] = flt(flt(muc_tieu[ten]) + lech, precision)
+
+	def _tai_khoan_thue(self):
+		for tax in self.get("taxes"):
+			if flt(tax.base_tax_amount) - flt(tax.base_tax_amount_after_discount_amount):
+				return tax.account_head
+		return None
+
+	@staticmethod
+	def _tim_dong(gl_entries, account, field, so_tien):
+		for gle in gl_entries:
+			if gle.get("account") == account and flt(gle.get(field)) == flt(so_tien):
+				return gle
+		return None
+
+	@staticmethod
+	def _doi_so_tien(gle, field, so_moi, precision):
+		for hau_to in ("", "_in_account_currency", "_in_transaction_currency"):
+			ten = field + hau_to
+			if gle.get(ten):
+				gle[ten] = flt(so_moi, precision)
 
 
 # ==========================================================================

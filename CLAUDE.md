@@ -287,24 +287,84 @@ qua `write_off_amount` — đó mới là chỗ duy nhất trừ CK bill khỏi 
    theo `Company.discount_account` (TK 521 khai ở tab Accounts). Khi Selling Settings bật
    `enable_discount_accounting`, ERPNext đặt trường này là **bắt buộc** mỗi khi hoá đơn có
    `discount_amount`, thu ngân phải gõ tay từng hoá đơn.
-2. `get_tax_amounts()` — thuế đầu ra **luôn** lấy `tax_amount_after_discount_amount`.
-   ERPNext gốc cố ý đổi sang `tax_amount` (số thuế TRƯỚC khi trừ chiết khấu tổng đơn) khi
-   hội đủ: bật discount accounting + có `additional_discount_account` +
-   `apply_discount_on = "Grand Total"`. VAS thì 33311 phải bằng số thuế thực kê khai.
-   Phần chênh được `book_tax_discount_difference_to_income()` dồn vào tài khoản doanh thu
-   (511) để bút toán vẫn cân — đúng yêu cầu "511 = giá trị cũ + phần chênh lệch tính sai thuế".
+2. `tach_thue_khoi_khuyen_mai()` — gọi từ `get_gl_entries()`, tách phần thuế GTGT ra khỏi
+   khoản khuyến mại tổng đơn.
 
-⚠ **Hai phần này phải đi cùng nhau.** Chỉ bật (1) mà thiếu (2) thì thuế đầu ra nhảy lên số
-TRƯỚC chiết khấu — sai nặng hơn hiện trạng.
+**Vì sao cần (2).** ERPNext gốc đưa NGUYÊN khoản khuyến mại (đã gồm thuế) vào TK 521 rồi
+ghi phải thu theo số đã trừ khuyến mại. Kết quả: 511 và 521 mỗi bên bị thổi lên đúng phần
+thuế nằm trong chiết khấu — riêng tháng 08/2026 của Hạ Vàng là **232 triệu mỗi bên**. Doanh
+thu thuần vẫn đúng vì hai khoản triệt tiêu, nhưng doanh thu gộp và các khoản giảm trừ trên
+báo cáo đều sai, và sổ chi tiết công nợ không thấy khoản khuyến mại đã giảm cho khách.
 
-⚠ `book_tax_discount_difference_to_income()` cộng **phần lệch nợ/có thực tế** của bộ bút
-toán, KHÔNG cộng phần chênh tính từ bảng thuế: mỗi dòng bút toán làm tròn riêng nên hai số
-lệch nhau 1–2 đồng (đã gặp ở 11/40 hoá đơn khi thử). Nếu độ lệch vượt 5 đồng thì hàm không
-can thiệp, để ERPNext báo "Debit and Credit not equal" thay vì che mất lỗi thật.
+**Cách hạch toán (chị Hằng chốt 18/08 — "Cách 2").** Ví dụ hoá đơn AM2607290001, khuyến mại
+590.697 gồm 43.755 tiền thuế:
+
+```
+131    Nợ 3.937.980   (giá TRƯỚC khuyến mại, thay cho grand_total 3.347.283)
+131    Có   590.697   (khuyến mại — dòng thêm mới, phải có against_voucher)
+521    Nợ   546.942   (phần chưa thuế, thay cho 590.697)
+33311  Nợ    43.755   (dòng thêm mới) — cùng Có 291.702 → thực nộp 247.947
+```
+
+⚠ Số phải thu lấy từ **số ERPNext đã ghi cộng lại khuyến mại**, KHÔNG lấy `base_total`: khi
+thuế không nằm trong giá bán thì `base_total` chưa gồm thuế, đặt vào đây lệch sổ đúng phần
+thuế đó (đã gặp ở 7/40 hoá đơn khi thử).
+
+⚠ Dòng Có 131 **bắt buộc có `against_voucher`** trỏ về chính hoá đơn. Thiếu là công nợ treo
+đúng bằng khoản khuyến mại — cùng loại lỗi với PM-TASK-00106.
+
+⚠ `_hap_thu_lech_lam_tron()` dồn phần lệch nợ/có ≤ 5 đồng vào dòng doanh thu lớn nhất: mỗi
+con số (thuế trước/sau, phần chưa thuế) làm tròn riêng nên bộ bút toán thường lệch 1–2 đồng.
+Lệch lớn hơn thì để ERPNext báo "Debit and Credit not equal" thay vì lấy doanh thu che lỗi.
+
+⚠ Bản cũ dùng `get_tax_amounts()` + `book_tax_discount_difference_to_income()` (ghi thuế
+sau chiết khấu rồi dồn chênh vào 511) **đã bị gỡ** ở commit `aae7632`. Đừng khôi phục.
 
 ⚠ Đặt ở `pos_next` vì Frappe 15 chưa có `extend_doctype_class`, mà `override_doctype_class`
 của Sales Invoice đã do app này giữ. Đây là **logic kế toán VAS nằm nhờ trong app POS** —
 nếu sau này muốn áp dụng cho mọi khách thì chuyển sang `mbwnext_advanced_accounting`.
+
+### Phiếu trả POS: đừng để ERPNext xoá bảng thanh toán (PM-TASK-00100)
+
+`set_total_amount_to_default_mop()` của ERPNext thấy tổng thanh toán của phiếu trả POS lệch
+`grand_total` là **XOÁ SẠCH bảng payments** rồi thay bằng đúng MỘT dòng bằng phần chênh.
+
+Với phiếu trả, phần chênh thường chỉ là sai số làm tròn: POS cộng tiền hoàn theo TỪNG DÒNG
+(`net_rate` + thuế, mỗi dòng làm tròn riêng), còn ERPNext phân bổ chiết khấu bill một lần
+trên tổng. Hoá đơn 3 dòng có coupon 15% lệch đúng 1 đồng.
+
+Hậu quả đã tái hiện: phiếu trả **4.638.272 bị ghi thành hoàn 1 đồng**, treo công nợ
+4.638.271 trên cả phiếu trả lẫn đơn gốc, trong khi thu ngân đã đưa khách đủ tiền.
+
+Bản vá (`overrides/sales_invoice.py`, cuối file) thay hàm đó: lệch ≤ `NGUONG_LECH_LAM_TRON`
+(10 đồng) thì cộng vào dòng thanh toán cuối **và đặt lại `outstanding_amount`** — ERPNext
+tính outstanding TRƯỚC khi gọi hàm này rồi không tính lại, nên không đặt lại thì phần chênh
+treo nguyên trên công nợ. Lệch lớn hơn vẫn để bản gốc xử lý.
+
+⚠ Hàm gốc chỉ được gọi ở đúng MỘT chỗ (`taxes_and_totals.py`), và chỉ cho phiếu trả POS
+chưa consolidated — nên bản vá không đụng gì tới đơn bán thường.
+
+### Tài khoản ví phải thuộc đúng công ty (PM-TASK-00059)
+
+`POS Settings.wallet_account` từng nhận cả tài khoản của công ty khác. Ví sinh ra theo đó
+mang tài khoản sai, nên **ERPNext chặn HUỶ mọi hoá đơn có phát sinh ví**. Ở Hạ Vàng: 34/36
+Cài đặt POS khai nhầm, kéo theo 887 ví và 1.139 bút toán.
+
+Hai chốt chặn: `POSSettings.validate_wallet_account_company()` không cho lưu tài khoản khác
+công ty; `api/wallet.py` bỏ qua tài khoản sai và ghi nhật ký thay vì tạo ví hỏng.
+
+Dữ liệu cũ do patch `v1_14_1/sua_but_toan_vi_sai_cong_ty.py` xử lý — dò theo công ty chứ
+không gắn cứng tên tài khoản, tự bỏ qua khi sổ đang khoá hoặc đã lệch từ trước, tự hoàn tác
+nếu sổ lệch sau khi sửa. Đã chạy production 17/08.
+
+⚠ **Chưa tới nơi.** Ví vẫn dùng chung TK 131 với công nợ bán hàng, nên số dư ví bị trộn với
+tiền hàng khách còn nợ (749 ví hiển thị 0) và đơn thanh toán bằng điểm vẫn treo tiền đúng
+bằng số điểm dùng — xem PM-TASK-00106. Hướng đang chờ kế toán chốt: bỏ hạch toán lúc TÍCH
+điểm, chỉ ghi `Nợ 6418 / Có 131` khi khách TIÊU điểm.
+
+⚠ `get_customer_wallet_balance()` tính số dư bằng `get_balance_on()` trên tài khoản ví. Nếu
+bỏ bút toán lúc tích điểm thì phải đổi sang tính từ bảng `Wallet Transaction`, nếu không số
+dư về 0 hết và khách không tiêu điểm được.
 
 - Frontend Vue 3 nằm trong `POS/` — build riêng bằng `yarn build`, output vào `pos_next/public/`
 - **Dùng yarn**, không dùng npm (.clauderc)

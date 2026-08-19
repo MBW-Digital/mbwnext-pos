@@ -1224,9 +1224,23 @@ async function handleBarcodeSearch(forceAutoAdd = false) {
 			return
 		}
 	} catch (error) {
-		const errMsg = String(error?.message || error?.messages?.[0] || "")
+		// frappe-ui đặt câu thông báo của máy chủ trong `messages`, còn `message`
+		// chỉ là "/api/method/... ValidationError". Đọc mỗi `message` thì luôn
+		// trúng chuỗi vô nghĩa đó và không bao giờ khớp được điều kiện bên dưới.
+		const serverMsg = (error?.messages || []).filter(Boolean)[0] || ""
+		const errMsg = [error?.message, serverMsg].filter(Boolean).join(" | ")
 		if (errMsg.includes("khóa kinh doanh")) {
 			showError(getPosStopSellingMessage())
+			if (shouldAutoAdd) {
+				itemStore.clearSearch()
+			}
+			return
+		}
+		// Máy chủ chặn vì hết tồn: hiện đúng lý do. Nếu để rơi xuống dưới, thu ngân
+		// nhận câu "không tìm thấy mã vạch" và tưởng tem in lỗi, quét đi quét lại
+		// (PM-TASK-00073).
+		if (errMsg.includes("hết tồn") || errMsg.includes("out of stock")) {
+			showError(serverMsg || errMsg)
 			if (shouldAutoAdd) {
 				itemStore.clearSearch()
 			}

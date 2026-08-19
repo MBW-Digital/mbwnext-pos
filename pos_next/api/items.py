@@ -570,6 +570,11 @@ def search_by_barcode(barcode, pos_profile):
 				item_details.update(extra)
 
 		return item_details
+	except frappe.ValidationError:
+		# Lỗi nghiệp vụ (hết tồn, cấm bán...) đã có câu thông báo rõ ràng rồi.
+		# Bọc thêm "Error searching by barcode" chỉ làm thu ngân đọc không hiểu,
+		# lại ghi một dòng Error Log cho mỗi lần quét nhầm — để nguyên mà ném lên.
+		raise
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Search by Barcode Error")
 		frappe.throw(_("Error searching by barcode: {0}").format(str(e)))

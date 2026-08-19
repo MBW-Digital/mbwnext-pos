@@ -472,21 +472,34 @@ def search_by_barcode(barcode, pos_profile):
 		if not item_doc.is_sales_item:
 			frappe.throw(_("Item {0} is not allowed for sales").format(item_code))
 
-		# Cửa hàng bật "ẩn hàng hết tồn" thì QUÉT MÃ VẠCH cũng phải chặn.
+		# Quét mã vạch cũng phải chặn hàng hết tồn — theo HAI cờ, không phải một.
 		#
-		# Trước đây bộ lọc này chỉ áp cho danh sách mặt hàng, nên hàng hết tồn
-		# tuy biến mất khỏi danh sách nhưng quét tem vẫn thêm được vào giỏ — thu
-		# ngân bán bình thường tới lúc lưu hoá đơn mới biết (PM-TASK-00073: đơn
+		# Bộ lọc này ban đầu chỉ áp cho danh sách mặt hàng, nên hàng hết tồn tuy
+		# biến mất khỏi danh sách nhưng quét tem vẫn thêm được vào giỏ — thu ngân
+		# bán bình thường tới lúc lưu hoá đơn mới biết (PM-TASK-00073: đơn
 		# AP2608080001 bán mã đã hết tồn, kho thành -1).
-		if (
-			cint(
-				frappe.db.get_value(
-					"POS Settings", {"pos_profile": pos_profile}, "hide_out_of_stock_items"
-				)
-			)
-			and item_doc.is_stock_item
-			and not item_doc.has_variants
-		):
+		#
+		# ⚠ Bản vá đầu chỉ đọc `hide_out_of_stock_items` và bỏ sót 7 cửa hàng khai
+		# `allow_negative_stock = 0` mà KHÔNG bật ẩn hàng hết tồn — cấu hình hoàn
+		# toàn hợp lệ: vẫn muốn nhìn thấy hàng trong danh sách, chỉ không cho bán
+		# quá tồn. HCM_EVENT68 rơi đúng ca đó và tái phát y hệt sau khi task đã Pass.
+		#
+		# Hai cờ nói hai chuyện khác nhau, đừng lẫn:
+		#   hide_out_of_stock_items — chuyện HIỂN THỊ, có ẩn khỏi danh sách không
+		#   allow_negative_stock    — chuyện NGHIỆP VỤ, có cho bán quá tồn không
+		# Cấm bán quá tồn thì phải chặn ngay khi thêm vào giỏ, bất kể có ẩn hay không.
+		cai_dat_pos = frappe.db.get_value(
+			"POS Settings",
+			{"pos_profile": pos_profile},
+			["hide_out_of_stock_items", "allow_negative_stock"],
+			as_dict=True,
+		) or frappe._dict()
+
+		phai_chan_het_ton = cint(cai_dat_pos.get("hide_out_of_stock_items")) or not cint(
+			cai_dat_pos.get("allow_negative_stock")
+		)
+
+		if phai_chan_het_ton and item_doc.is_stock_item and not item_doc.has_variants:
 			ton_hien_co = flt(
 				frappe.db.get_value(
 					"Bin",

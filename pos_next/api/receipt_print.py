@@ -462,13 +462,6 @@ def ha_vang_receipt_meta_for_jinja(doc):
 	)
 
 
-def receipt_logo_url_for_print() -> str:
-	"""URL logo phiếu in (Bách Hóa Bưu Điện) — dùng absolute URL cho PDF/print."""
-	from frappe.utils import get_url
-
-	return get_url("/assets/pos_next/images/bhbuudien-logo.png")
-
-
 def invoice_meta_for_jinja(doc):
 	"""Print Format (Jinja): invoice_meta_for_jinja(doc) — registered via pos_next hooks jinja.methods."""
 	return enrich_invoice_dict_for_print(doc.as_dict())

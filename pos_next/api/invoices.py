@@ -1730,9 +1730,21 @@ def get_print_receipt_data(invoice_name, include_sepay_qr=True):
 	Receipt for thermal print, optional SePay VietQR for bank transfer.
 	"""
 	data = get_invoice(invoice_name)
-	from pos_next.api.receipt_print import enrich_invoice_dict_for_print
+	from pos_next.api.receipt_print import (
+		enrich_invoice_dict_for_print,
+		ha_vang_receipt_meta_for_jinja,
+	)
 
 	data.update(enrich_invoice_dict_for_print(data))
+
+	# Bổ sung đúng bộ trường mà mẫu in "HÓA ĐƠN BÁN LẺ" dùng, để phiếu in thẳng
+	# xuống máy in nhiệt lấy chung một nguồn số liệu với mẫu in của hệ thống.
+	# Thiếu bộ này thì bản in USB tự bịa lấy nhãn và tổng tiền riêng — đó là gốc
+	# của chuyện một cửa hàng in ra hai mẫu khác nhau (PM-TASK-00116).
+	try:
+		data.update(ha_vang_receipt_meta_for_jinja(frappe.get_doc("Sales Invoice", invoice_name)))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "get_print_receipt_data: ha_vang_receipt_meta")
 
 	try:
 		from pos_next.api.einvoice_self_service import get_self_service_qr_payload

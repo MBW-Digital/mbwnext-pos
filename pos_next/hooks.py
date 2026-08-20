@@ -126,8 +126,9 @@ fixtures = [
 				"name",
 				"in",
 				[
-					"POS Next Receipt",
-					"POS HA Vang Receipt",
+					# Nhánh ha_vang chỉ phục vụ Hạ Vàng. Mẫu "POS Next Receipt"
+					# là mẫu của dự án Bách Hóa Bưu Điện, đã gỡ (PM-TASK-00116).
+					"POS Ha Vang Receipt",
 				]
 			]
 		]

@@ -293,6 +293,7 @@ function receiptHeaderFields(inv) {
 		),
 		cashPaid: Number.parseFloat(inv.cash_paid ?? 0),
 		bankPaid: Number.parseFloat(inv.bank_paid ?? 0),
+		walletPaid: Number.parseFloat(inv.wallet_paid ?? 0),
 	}
 }
 
@@ -382,6 +383,8 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.dblOff().boldOff()
 	b.twoCol('Chuyển khoản:', fmtAmt(R.bankPaid))
 	b.twoCol('Tiền mặt:', fmtAmt(R.cashPaid))
+	// Chỉ in khi khách thực sự tiêu điểm, để phiếu thường không thêm dòng thừa
+	if (R.walletPaid > 0) b.twoCol('Tiêu điểm:', fmtAmt(R.walletPaid))
 	b.twoCol('Tiền mặt phải trả:', fmtAmt(outstanding))
 	b.twoCol('Thối lại:', fmtAmt(invoiceData.change_amount || 0))
 
@@ -730,6 +733,7 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	b.twoCol('Tổng thanh toán:', fmtAmt(invoiceData.grand_total))
 	b.twoCol('Chuyển khoản:', fmtAmt(R.bankPaid))
 	b.twoCol('Tiền mặt:', fmtAmt(R.cashPaid))
+	if (R.walletPaid > 0) b.twoCol('Tiêu điểm:', fmtAmt(R.walletPaid))
 	b.twoCol('Tiền mặt phải trả:', fmtAmt(outstandingBmp))
 	b.twoCol('Thối lại:', fmtAmt(invoiceData.change_amount || 0))
 

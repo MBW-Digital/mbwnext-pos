@@ -517,6 +517,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					)
 					const cashPaid = Number(invoiceData.cash_paid ?? 0)
 					const bankPaid = Number(invoiceData.bank_paid ?? 0)
+					const walletPaid = Number(invoiceData.wallet_paid ?? 0)
 					const nv =
 						invoiceData.salesperson || invoiceData.receipt_salesperson || ""
 					const custPhone =
@@ -525,8 +526,6 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 						invoiceData.mobile_no ||
 						invoiceData.pos_einvoice_buyer_phone ||
 						""
-					const lyEarn = Number(invoiceData.receipt_loyalty_earned ?? 0)
-					const lyBal = Number(invoiceData.receipt_loyalty_balance ?? 0)
 					let taxPct = null
 					for (const row of invoiceData.taxes || []) {
 						const r = Number.parseFloat(row.rate || 0)
@@ -624,6 +623,11 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					</div>
 					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Chuyển khoản</span><span>${formatVN(bankPaid, 0)}</span></div>
 					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiền mặt</span><span>${formatVN(cashPaid, 0)}</span></div>
+					${
+						walletPaid > 0
+							? `<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiêu điểm</span><span>${formatVN(walletPaid, 0)}</span></div>`
+							: ""
+					}
 					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiền mặt phải trả</span><span>${formatVN(invoiceData.outstanding_amount || 0, 0)}</span></div>
 					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Thối lại</span><span>${formatVN(invoiceData.change_amount || 0, 0)}</span></div>
 					<div style="border-top:1px dashed #000;margin:8px 0;"></div>
@@ -685,7 +689,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 				}
 
 				<div style="font-size:9px;margin:12px 0;line-height:1.45;border-top:1px dashed #000;padding-top:8px;">
-					Điểm tích lũy: Hóa đơn hiện tại được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; Tổng điểm sau hóa đơn là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
+					Điểm tích lũy: Hóa đơn này được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; điểm còn dùng được là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
 				</div>
 
 				${

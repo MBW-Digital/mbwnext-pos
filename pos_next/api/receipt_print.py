@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 import frappe
-from frappe.utils import cint, flt, fmt_money, format_datetime, getdate, now_datetime, today
+from frappe.utils import cint, flt, fmt_money, format_datetime, now_datetime
 
 
 def format_receipt_amount(value, precision: int = 0) -> str:
@@ -166,20 +166,34 @@ def receipt_loyalty_earned_for_invoice(inv) -> float:
 
 
 def receipt_loyalty_balance_for_invoice(inv) -> float:
-	"""Customer loyalty balance after invoice — same logic as Customer Dashboard (by company)."""
+	"""Số điểm khách TIÊU ĐƯỢC sau hoá đơn này — lấy từ ví (PM-TASK-00120).
+
+	Trước đây số này cộng từ `Loyalty Point Entry` và lọc `expiry_date >= today`.
+	Sai ở hai đầu, và sai ngược chiều nhau:
+
+	  - Chương trình NEW-2026 đặt hạn dùng 0 ngày, mà ERPNext tính
+	    `add_days(posting_date, 0)` chứ không coi 0 là vô hạn, nên điểm hết hạn
+	    ngay cuối ngày. Phiếu in ra 0 trong khi ví khách còn 2.283 điểm.
+	  - Ngược lại, tiêu điểm KHÔNG sinh dòng âm bên `Loyalty Point Entry` (khách
+	    tiêu bằng hình thức thanh toán ví, không qua đường redeem của ERPNext).
+	    Nên chỉ cần khách bắt đầu tiêu là sổ điểm cao hơn số tiêu được.
+
+	Đặt lại hạn dùng chỉ chữa được vế đầu. Số duy nhất luôn đúng với câu hỏi
+	"khách còn tiêu được bao nhiêu" là số dư ví, nên phiếu đọc thẳng từ đó.
+	"""
 	cust = getattr(inv, "customer", None) if not isinstance(inv, dict) else inv.get("customer")
 	company = getattr(inv, "company", None) if not isinstance(inv, dict) else inv.get("company")
-	if not cust or not company or not frappe.db.table_exists("Loyalty Point Entry"):
+	if not cust or not company or not frappe.db.table_exists("Wallet Transaction"):
 		return 0.0
-	res = frappe.db.sql(
-		"""
-		select coalesce(sum(loyalty_points), 0)
-		from `tabLoyalty Point Entry`
-		where customer = %(c)s and company = %(company)s and expiry_date >= %(today)s
-		""",
-		{"c": cust, "company": company, "today": getdate(today())},
-	)
-	return flt(res[0][0]) if res else 0.0
+
+	from pos_next.pos_next.doctype.wallet.wallet import tinh_so_du_vi
+
+	try:
+		return flt(tinh_so_du_vi(cust, company))
+	except Exception:
+		# Phiếu in không được chết vì một con số phụ. Ghi log rồi in 0.
+		frappe.log_error(frappe.get_traceback(), "Receipt wallet balance error")
+		return 0.0
 
 
 def enrich_invoice_dict_for_print(inv: dict[str, Any]) -> dict[str, Any]:
@@ -233,18 +247,38 @@ def _is_cash_mode_of_payment(mode_of_payment: str | None) -> bool:
 	return label in {"cash", "tiền mặt", "tien mat", "tiền mặt vnđ"} or "cash" in label
 
 
+def _la_hinh_thuc_vi(mode_of_payment: str | None) -> bool:
+	"""Hình thức thanh toán bằng ví điểm thưởng (PM-TASK-00120).
+
+	Đọc cờ `is_wallet_payment` chứ không đoán theo tên, vì đó là tín hiệu cả
+	phần còn lại của POS đang dùng (PaymentDialog loại hình thức ví ra trước khi
+	xét loại tài khoản). Đoán theo tên thì hình thức tên "đổi điểm" rơi vào rổ
+	"còn lại" và in ra thành Chuyển khoản; đọc theo `type` cũng sai, vì hình
+	thức đó khai type = Cash nên sẽ in thành Tiền mặt.
+	"""
+	if not mode_of_payment:
+		return False
+	return bool(
+		cint(frappe.db.get_value("Mode of Payment", mode_of_payment, "is_wallet_payment"))
+	)
+
+
 def _payment_totals_by_type(doc) -> dict[str, float]:
 	cash_paid = 0.0
 	bank_paid = 0.0
+	wallet_paid = 0.0
 	for row in receipt_payments_for_invoice(doc):
 		amount = flt(row.get("amount"))
 		if amount <= 0:
 			continue
-		if _is_cash_mode_of_payment(row.get("mode_of_payment")):
+		mode = row.get("mode_of_payment")
+		if _la_hinh_thuc_vi(mode):
+			wallet_paid += amount
+		elif _is_cash_mode_of_payment(mode):
 			cash_paid += amount
 		else:
 			bank_paid += amount
-	return {"cash_paid": cash_paid, "bank_paid": bank_paid}
+	return {"cash_paid": cash_paid, "bank_paid": bank_paid, "wallet_paid": wallet_paid}
 
 
 def _pos_profile_store_fields(pos_profile: str | None) -> dict[str, Any]:
@@ -462,6 +496,7 @@ def ha_vang_receipt_meta_for_jinja(doc):
 		),
 		cash_paid=pay["cash_paid"],
 		bank_paid=pay["bank_paid"],
+		wallet_paid=pay["wallet_paid"],
 		vip_label=inv.get("customer_category") or "",
 		store_hours="9h00 - 22h00",
 		salesperson=salesperson,

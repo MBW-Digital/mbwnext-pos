@@ -314,13 +314,12 @@ class CustomSalesInvoice(SalesInvoice):
 		truoc_khuyen_mai = flt(phai_thu_da_ghi + khuyen_mai, precision)
 
 		dong_521 = self._tim_dong(gl_entries, self.additional_discount_account, "debit", khuyen_mai)
-		dong_131 = self._tim_dong(gl_entries, self.debit_to, "debit", phai_thu_da_ghi)
-		if not dong_521 or not dong_131:
+		if not dong_521:
 			# Bộ bút toán không như mong đợi (ERPNext đổi cách dựng, hoặc hoá đơn
 			# có tình huống lạ). Để nguyên còn hơn sửa mù.
 			frappe.log_error(
 				title="Khong tach duoc thue khuyen mai khoi 521",
-				message=f"Hoa don {self.name}: khong tim thay dong 521 hoac dong phai thu can sua.",
+				message=f"Hoa don {self.name}: khong tim thay dong 521 can sua.",
 			)
 			return
 
@@ -330,6 +329,47 @@ class CustomSalesInvoice(SalesInvoice):
 
 		# 521 chỉ còn phần chưa thuế
 		self._doi_so_tien(dong_521, "debit", flt(khuyen_mai - thue, precision), precision)
+
+		if not phai_thu_da_ghi:
+			# Khuyến mại ăn hết hoá đơn (coupon 100%): khách không trả đồng nào
+			# nên ERPNext KHÔNG tạo dòng phải thu. Không có dòng phải thu thì
+			# không có gì để ghi lại theo giá trước khuyến mại, và cũng không
+			# được thêm dòng Có 131 — làm vậy là bịa ra một khoản phải thu.
+			#
+			# Còn thuế thì chỉ được đảo đúng phần ERPNext ĐÃ ghi Có. Thuế sau
+			# khuyến mại bằng 0 nghĩa là chưa đồng thuế nào vào sổ, đảo thêm là
+			# tạo ra một khoản thuế chưa từng phát sinh.
+			#
+			# ⚠ Đừng gộp ca này vào nhánh dưới bằng cách tìm "dòng 131 có debit
+			# = 0": hoá đơn POS có dòng 131 ghi Có của tiền khách trả, dòng đó
+			# không mang khoá debit nên khớp nhầm rất dễ.
+			#
+			# Ca này làm thu ngân KHÔNG LƯU ĐƯỢC hoá đơn, báo "Nợ và có không
+			# bằng, sự khác biệt là <đúng phần thuế>" (PM-TASK-00115).
+			thue_da_vao_so = min(thue, self._thue_da_ghi_co(gl_entries, tai_khoan_thue))
+			if thue_da_vao_so:
+				gl_entries.append(
+					self.get_gl_dict(
+						{
+							"account": tai_khoan_thue,
+							"against": self.customer,
+							"debit": thue_da_vao_so,
+							"debit_in_account_currency": thue_da_vao_so,
+							"cost_center": self.cost_center,
+						},
+						item=self,
+					)
+				)
+			self._hap_thu_lech_lam_tron(gl_entries, precision)
+			return
+
+		dong_131 = self._tim_dong(gl_entries, self.debit_to, "debit", phai_thu_da_ghi)
+		if not dong_131:
+			frappe.log_error(
+				title="Khong tach duoc thue khuyen mai khoi 521",
+				message=f"Hoa don {self.name}: khong tim thay dong phai thu can sua.",
+			)
+			return
 
 		# Phải thu ghi theo giá TRƯỚC khuyến mại, rồi khuyến mại ghi Có một dòng
 		self._doi_so_tien(dong_131, "debit", truoc_khuyen_mai, precision)
@@ -402,6 +442,19 @@ class CustomSalesInvoice(SalesInvoice):
 			ten = "credit" + hau_to
 			if muc_tieu.get(ten):
 				muc_tieu[ten] = flt(flt(muc_tieu[ten]) + lech, precision)
+
+	@staticmethod
+	def _thue_da_ghi_co(gl_entries, tai_khoan_thue):
+		"""Số thuế ERPNext thực sự đã ghi Có trên tài khoản thuế đầu ra.
+
+		Chỉ đảo được phần đã vào sổ. Hoá đơn khuyến mại 100% có khi ERPNext bỏ
+		hẳn dòng thuế (thuế sau khuyến mại bằng 0), có khi vẫn ghi (thuế sau
+		khuyến mại lệch vài đồng do làm tròn) — hai ca đó cần hai cách xử lý
+		khác nhau, đọc thẳng bộ bút toán mới biết được đang ở ca nào.
+		"""
+		return flt(
+			sum(flt(g.get("credit")) for g in gl_entries if g.get("account") == tai_khoan_thue)
+		)
 
 	def _tai_khoan_thue(self):
 		for tax in self.get("taxes"):

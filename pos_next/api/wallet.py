@@ -209,92 +209,24 @@ def get_wallet_amount_from_payments(payments):
 
 @frappe.whitelist()
 def get_customer_wallet_balance(customer, company=None, exclude_invoice=None):
+	"""Số dư ví khách còn tiêu được.
+
+	⚠ Chỉ gọi lại bản trong doctype Wallet, đừng chép logic sang đây. Trước đây
+	hai file giữ hai bản giống hệt nhau; sửa cách tính số dư ở một bên là bên kia
+	lệch ngay, mà lỗi lại hiện ra ở tận màn hình POS nên rất khó lần (PM-TASK-00106).
 	"""
-	Get customer's available wallet balance.
+	from pos_next.pos_next.doctype.wallet.wallet import (
+		get_customer_wallet_balance as _tinh_so_du,
+	)
 
-	For receivable accounts:
-	- Negative GL balance = customer has credit (we owe them) = positive wallet balance
-	- Positive GL balance = customer owes us = no wallet balance
-
-	Args:
-		customer: Customer ID
-		company: Company (optional)
-		exclude_invoice: Invoice name to exclude from pending calculations
-
-	Returns:
-		float: Available wallet balance
-	"""
-	try:
-		from erpnext.accounts.utils import get_balance_on
-
-		filters = {"customer": customer, "status": "Active"}
-		if company:
-			filters["company"] = company
-
-		wallet = frappe.db.get_value("Wallet", filters, ["name", "account"], as_dict=True)
-
-		if not wallet:
-			return 0.0
-
-		# Get balance from GL entries
-		gl_balance = get_balance_on(
-			account=wallet.account,
-			party_type="Customer",
-			party=customer
-		)
-
-		# Negate because negative receivable balance = positive wallet credit
-		wallet_balance = -flt(gl_balance)
-
-		# Subtract pending wallet payments from open POS invoices
-		pending_wallet_amount = get_pending_wallet_payments(customer, exclude_invoice)
-
-		available_balance = flt(wallet_balance) - flt(pending_wallet_amount)
-
-		return available_balance if available_balance > 0 else 0.0
-
-	except Exception:
-		frappe.log_error(frappe.get_traceback(), "Wallet Balance Error")
-		return 0.0
+	return _tinh_so_du(customer, company, exclude_invoice)
 
 
 def get_pending_wallet_payments(customer, exclude_invoice=None):
-	"""
-	Get total wallet payments from unconsolidated/pending POS invoices.
-	"""
-	filters = {
-		"customer": customer,
-		"docstatus": ["in", [0, 1]],
-		"outstanding_amount": [">", 0],
-		"is_pos": 1
-	}
+	"""Tổng tiền ví khách đã dùng trả hàng — gọi lại bản trong doctype Wallet."""
+	from pos_next.pos_next.doctype.wallet.wallet import tong_tien_vi_da_tieu
 
-	invoices = frappe.get_all(
-		"Sales Invoice",
-		filters=filters,
-		fields=["name"]
-	)
-
-	pending_amount = 0.0
-
-	for invoice in invoices:
-		if exclude_invoice and invoice.name == exclude_invoice:
-			continue
-
-		payments = frappe.get_all(
-			"Sales Invoice Payment",
-			filters={"parent": invoice.name},
-			fields=["mode_of_payment", "amount"]
-		)
-
-		for payment in payments:
-			is_wallet = frappe.db.get_value(
-				"Mode of Payment", payment.mode_of_payment, "is_wallet_payment"
-			)
-			if is_wallet:
-				pending_amount += flt(payment.amount)
-
-	return pending_amount
+	return tong_tien_vi_da_tieu(customer, None, exclude_invoice)
 
 
 @frappe.whitelist()

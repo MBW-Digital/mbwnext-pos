@@ -357,14 +357,49 @@ Dữ liệu cũ do patch `v1_14_1/sua_but_toan_vi_sai_cong_ty.py` xử lý — d
 không gắn cứng tên tài khoản, tự bỏ qua khi sổ đang khoá hoặc đã lệch từ trước, tự hoàn tác
 nếu sổ lệch sau khi sửa. Đã chạy production 17/08.
 
-⚠ **Chưa tới nơi.** Ví vẫn dùng chung TK 131 với công nợ bán hàng, nên số dư ví bị trộn với
-tiền hàng khách còn nợ (749 ví hiển thị 0) và đơn thanh toán bằng điểm vẫn treo tiền đúng
-bằng số điểm dùng — xem PM-TASK-00106. Hướng đang chờ kế toán chốt: bỏ hạch toán lúc TÍCH
-điểm, chỉ ghi `Nợ 6418 / Có 131` khi khách TIÊU điểm.
+Phần còn lại (ví dùng chung TK 131) đã xử lý ở PM-TASK-00106 — xem mục ngay dưới.
 
-⚠ `get_customer_wallet_balance()` tính số dư bằng `get_balance_on()` trên tài khoản ví. Nếu
-bỏ bút toán lúc tích điểm thì phải đổi sang tính từ bảng `Wallet Transaction`, nếu không số
-dư về 0 hết và khách không tiêu điểm được.
+### Ví là sổ theo dõi, không phải sổ kế toán (PM-TASK-00106)
+
+Kế toán chốt (Thắng + chị Hằng, 19/08): **điểm tích chưa tiêu thì không ghi sổ**. Điểm có
+thể không bao giờ được dùng, ghi chi phí lúc tích là ghi cho khoản chưa chắc phát sinh.
+
+Vòng đời đúng, chi phí chỉ xuất hiện MỘT lần:
+
+```
+Khách mua hàng, được tích điểm  → chỉ tạo Wallet Transaction, KHÔNG bút toán
+Khách tiêu điểm để trả tiền hàng → hoá đơn ghi Nợ 6418 - Chi phí bán hàng / Có 131
+```
+
+Ba chỗ trong mã phải khớp nhau, sửa một chỗ mà quên chỗ khác là hỏng ngay:
+
+1. `WalletTransaction.on_submit()` không sinh bút toán nữa. `on_cancel()` vẫn đảo bút toán
+   **cũ** nếu chứng từ đó còn dấu vết trên sổ — đảo theo những gì đã ghi
+   (`make_reverse_gl_entries`) chứ không dựng lại từ cấu hình hiện tại, vì cấu hình đã đổi.
+2. `tinh_so_du_vi()` (doctype `Wallet`) tính số dư = tổng `Wallet Transaction` đã ghi sổ
+   trừ tiền ví đã tiêu đọc từ hoá đơn. **Không** dùng `get_balance_on()` nữa: sổ cái không
+   còn dấu vết ví nào, đọc sổ chắc chắn ra 0.
+3. `tong_tien_vi_da_tieu()` đếm **mọi** hoá đơn có hình thức thanh toán ví, kể cả hoá đơn
+   đã thanh toán xong. Bản cũ (`get_pending_wallet_payments`) chỉ đếm hoá đơn còn nợ vì hồi
+   đó sổ cái đã trừ rồi; giữ bộ lọc đó với cách tính mới là cho khách tiêu đi tiêu lại cùng
+   một số điểm.
+
+⚠ `api/wallet.py` **gọi lại** bản trong doctype, không chép logic. Hai file từng giữ hai bản
+giống hệt nhau — sửa một bên là bên kia lệch, mà lỗi hiện ra tận màn hình POS.
+
+⚠ `get_party_and_party_type_for_pos_gl_entry()` chỉ gắn khách vào dòng bút toán khi tài
+khoản thuộc nhóm phải thu/phải trả. Hình thức "đổi điểm" nay khai 6418 - Chi phí bán hàng;
+gắn khách vào tài khoản chi phí là ERPNext chặn thẳng lúc **lưu hoá đơn**, tức thu ngân
+không bán được hàng.
+
+Hai ô cấu hình phải sửa tay, mã không tự làm:
+`Mode of Payment "đổi điểm"` → tài khoản **6418**; ô Tài khoản chi phí của Chương trình
+khách hàng thân thiết đổi khỏi 6238 (tài khoản đó nằm dưới 623 - Chi phí sử dụng máy thi
+công, và đang kiêm luôn tài khoản chênh lệch làm tròn của công ty).
+
+Bút toán tích điểm đã trót ghi do patch `v1_14_1/bo_but_toan_tich_diem.py` đảo — dò theo
+chứng từ ví còn dấu trên sổ, chỉ đụng loại `Loyalty Credit`, sao lưu ra file tạm ngoài repo
+trước khi ghi, tự hoàn tác nếu sổ lệch sau khi đảo, và tính lại số dư đã lưu trên từng ví.
 
 - Frontend Vue 3 nằm trong `POS/` — build riêng bằng `yarn build`, output vào `pos_next/public/`
 - **Dùng yarn**, không dùng npm (.clauderc)

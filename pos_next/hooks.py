@@ -51,6 +51,7 @@ _asset_version = get_build_version()
 doctype_js = {
 	"Material Request": "controllers/js/material_request.js",
 	"Loyalty Program": "public/js/loyalty_program.js",
+	"Mode of Payment": "public/js/mode_of_payment.js",
 }
 doctype_list_js = {
 	"Sales Invoice": "public/js/sales_invoice_list.js",

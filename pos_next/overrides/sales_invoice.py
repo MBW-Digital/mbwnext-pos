@@ -140,22 +140,27 @@ class CustomSalesInvoice(SalesInvoice):
 					self.make_gle_for_change_amount(gl_entries)
 
 	def get_party_and_party_type_for_pos_gl_entry(self, mode_of_payment, account):
-		"""
-		Get party type and party for wallet payment GL entries.
+		"""Khách hàng cho dòng bút toán của hình thức thanh toán bằng ví.
 
-		For wallet payments (Mode of Payment with is_wallet_payment=1),
-		returns Customer as party_type and the invoice customer as party.
-		For regular payments, returns empty strings.
+		Gắn khách vào để sổ chi tiết theo dõi được ai đã tiêu điểm.
+
+		⚠ Chỉ gắn khi tài khoản thuộc nhóm phải thu / phải trả. ERPNext chặn
+		thẳng "Party Type and Party can only be set for Receivable / Payable
+		account" — mà chặn ở đây là chặn lúc lưu hoá đơn, tức thu ngân không bán
+		được hàng. Từ PM-TASK-00106, hình thức "đổi điểm" khai tài khoản 6418 -
+		Chi phí bán hàng chứ không còn là 131, nên điều kiện này bắt buộc phải có.
 		"""
 		is_wallet_mode_of_payment = frappe.db.get_value(
 			"Mode of Payment", mode_of_payment, "is_wallet_payment"
 		)
+		if not is_wallet_mode_of_payment:
+			return "", ""
 
-		party_type, party = "", ""
-		if is_wallet_mode_of_payment:
-			party_type, party = "Customer", self.customer
+		loai_tai_khoan = frappe.get_cached_value("Account", account, "account_type")
+		if loai_tai_khoan not in ("Receivable", "Payable"):
+			return "", ""
 
-		return party_type, party
+		return "Customer", self.customer
 
 	def make_loyalty_point_entry(self):
 		excluded_item_lines = get_loyalty_excluded_item_lines(self.loyalty_program)

@@ -282,8 +282,14 @@ def attach_image_url_for_print(file_path: str | None) -> str:
 	return get_url(encoded)
 
 
-def _resize_receipt_logo_bytes(raw: bytes, disk_path: str, max_px: int = 96) -> tuple[bytes, str]:
-	"""Thu nhỏ logo (ảnh dọc/ngang) trước khi embed — phiếu in gọn hơn."""
+def _resize_receipt_logo_bytes(raw: bytes, disk_path: str, max_px: int = 512) -> tuple[bytes, str]:
+	"""Thu nhỏ logo (ảnh dọc/ngang) trước khi embed — phiếu in gọn hơn.
+
+	⚠ Ngưỡng này tính theo ĐIỂM IN của máy in nhiệt, không phải điểm màn hình.
+	Giấy 80mm in được 576 điểm ngang, mẫu in đặt logo rộng 68mm ≈ 490 điểm. Đặt
+	96px như trước là ảnh bị phóng gấp 5 lần khi in — chữ trong logo nhoè hẳn.
+	512 đủ nét cho cả giấy 58mm lẫn 80mm mà file nhúng vẫn nhỏ (PM-TASK-00116).
+	"""
 	try:
 		import io
 

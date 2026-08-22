@@ -1203,12 +1203,38 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				item.discount_percentage = discountPct
 				item.discount_amount = discountAmt
 				item.pricing_rules = serverItem.pricing_rules
+
+				// PM-TASK-00125: "Rate" pricing rules SET the selling price instead of
+				// discounting it, so the server returns a new price_list_rate and no
+				// discount at all. Without this the cart keeps the old price and the
+				// total never moves, while the offer badge still reads "Applied".
+				// recalculateItem() derives rate/amount from price_list_rate, so writing
+				// that one field is enough.
+				const serverPriceListRate =
+					Number.parseFloat(serverItem.price_list_rate) || 0
+				if (
+					serverPriceListRate > 0 &&
+					discountPct === 0 &&
+					discountAmt === 0 &&
+					serverPriceListRate !== Number.parseFloat(item.price_list_rate)
+				) {
+					// Keep the original price so removing the offer can restore it.
+					if (item._price_list_rate_before_offer === undefined) {
+						item._price_list_rate_before_offer = item.price_list_rate
+					}
+					item.price_list_rate = serverPriceListRate
+				}
+
 				hasDiscounts = discountPct > 0 || discountAmt > 0
 			} else if (hasPricingRules(item.pricing_rules)) {
 				// Server cleared promotional discount (e.g. outside time window)
 				item.discount_percentage = 0
 				item.discount_amount = 0
 				item.pricing_rules = []
+				if (item._price_list_rate_before_offer !== undefined) {
+					item.price_list_rate = item._price_list_rate_before_offer
+					delete item._price_list_rate_before_offer
+				}
 			}
 
 			recalculateItem(item)
@@ -2363,7 +2389,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				recalculateItem(item)
 				applied = true
 			} else if (discountType === 'Rate' && rate > 0) {
-				// Apply fixed rate (override price)
+				// Apply fixed rate (override price).
+				// PM-TASK-00125: must write price_list_rate too — recalculateItem()
+				// reads price_list_rate first, so setting only rate leaves the old
+				// price in place and the total never changes.
+				if (item._price_list_rate_before_offer === undefined) {
+					item._price_list_rate_before_offer = item.price_list_rate
+				}
+				item.price_list_rate = rate
 				item.rate = rate
 				item.pricing_rules = [offer.name]
 				recalculateItem(item)

@@ -4328,6 +4328,13 @@ def apply_offers(invoice_data, selected_offers=None):
                 discount_percentage = flt(result.get("discount_percentage") or 0)
                 per_unit_discount = flt(result.get("discount_amount") or 0)
 
+                # Quy tắc loại "Rate" ẤN ĐỊNH giá bán chứ không giảm giá (PM-TASK-00125).
+                # ERPNext chỉ trả về `price_list_rate` mới kèm `pricing_rule_for = "Rate"`,
+                # KHÔNG có discount_percentage/discount_amount nào — nên nếu vẫn giữ `rate`
+                # cũ trong giỏ thì tổng tiền không đổi, POS báo "Applied" mà giá y nguyên.
+                # Trên desk không lộ vì form JS tự tính lại rate từ price_list_rate.
+                an_dinh_gia = cstr(result.get("pricing_rule_for")) == "Rate"
+
                 # If ERPNext didn't calculate discount (validate_applied_rule=1),
                 # we need to fetch and apply it manually
                 if (
@@ -4361,6 +4368,7 @@ def apply_offers(invoice_data, selected_offers=None):
                         elif full_rule.rate_or_discount == "Rate" and full_rule.rate:
                             # Apply fixed rate
                             price_list_rate = flt(full_rule.rate)
+                            an_dinh_gia = True
 
                 line_discount_amount = 0
                 if discount_percentage and qty and price_list_rate:
@@ -4385,7 +4393,17 @@ def apply_offers(invoice_data, selected_offers=None):
                 item_doc.discount_percentage = discount_percentage
                 item_doc.discount_amount = line_discount_amount
                 item_doc.price_list_rate = price_list_rate
-                item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
+                if an_dinh_gia:
+                    # Giá chương trình ĐÈ lên giá thu ngân vừa gõ — khách chốt 22/08,
+                    # giống hệt cách màn Hoá đơn bán hàng đang chạy.
+                    gia_ap_dung = price_list_rate
+                    if discount_percentage:
+                        gia_ap_dung = gia_ap_dung * (1 - discount_percentage / 100.0)
+                    elif per_unit_discount:
+                        gia_ap_dung = gia_ap_dung - per_unit_discount
+                    item_doc.rate = flt(gia_ap_dung)
+                else:
+                    item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
                 # ERPNext expects pricing_rules as comma-separated string, not a list
                 item_doc.pricing_rules = (
                     ",".join(applicable_rule_names) if applicable_rule_names else ""

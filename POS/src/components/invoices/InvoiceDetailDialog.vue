@@ -145,8 +145,8 @@
 								</div>
 							</div>
 							<!-- Discount Row (if applicable) -->
-							<div v-if="item.discount_percentage" class="text-center text-xs text-orange-600 mt-2 pt-2 border-t border-gray-100">
-								{{ __('Discount:') }} {{ item.discount_percentage }}%
+							<div v-if="itemDiscountPercent(item) !== null" class="text-center text-xs text-orange-600 mt-2 pt-2 border-t border-gray-100">
+								{{ __('Discount:') }} {{ formatDiscountPercent(item) }}
 							</div>
 						</div>
 					</div>
@@ -171,7 +171,7 @@
 									<td class="px-4 py-3 text-center text-sm text-gray-900">{{ item.quantity }}</td>
 									<td class="px-4 py-3 text-center text-sm text-gray-900">{{ formatCurrency(item.rate) }}</td>
 									<td class="px-4 py-3 text-center text-sm text-gray-600">
-										{{ item.discount_percentage ? `${item.discount_percentage}%` : '-' }}
+										{{ formatDiscountPercent(item) }}
 									</td>
 									<td class="px-4 py-3 text-center text-sm font-semibold text-gray-900">{{ formatCurrency(item.amount) }}</td>
 								</tr>
@@ -298,6 +298,36 @@ const props = defineProps({
 
 function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency)
+}
+
+/**
+ * % giảm giá của một dòng hàng trong lịch sử đơn (PM-TASK-00127).
+ *
+ * Phần lớn dòng bán qua POS có `discount_percentage` bằng 0: khuyến mại từ
+ * Pricing Rule bị quy về discount_amount + rate làm tròn, nên phải suy ngược
+ * lại từ giá gốc. Dùng đúng quy tắc của phiếu in nhiệt
+ * (`receipt_print.item_discount_percent_for_receipt`) để màn hình và phiếu in
+ * không ra hai con số khác nhau cho cùng một hoá đơn.
+ *
+ * Trả null khi dòng không có giảm giá, hoặc khi số tính ra nằm ngoài (0, 100]:
+ * vài dòng dữ liệu cũ có rate âm, quy ra thành hơn 100% — thà để trống như
+ * hiện nay còn hơn hiện một con số sai.
+ */
+function itemDiscountPercent(item) {
+	const pct = Number.parseFloat(item?.discount_percentage) || 0
+	if (pct > 0) return pct <= 100 ? pct : null
+
+	const priceListRate = Number.parseFloat(item?.price_list_rate) || 0
+	const rate = Number.parseFloat(item?.rate) || 0
+	if (priceListRate <= 0 || rate >= priceListRate) return null
+
+	const computed = ((priceListRate - rate) / priceListRate) * 100
+	return computed > 0 && computed <= 100 ? computed : null
+}
+
+function formatDiscountPercent(item) {
+	const pct = itemDiscountPercent(item)
+	return pct === null ? "-" : `${Number(pct.toFixed(2))}%`
 }
 
 const emit = defineEmits(["update:modelValue", "print-invoice"])

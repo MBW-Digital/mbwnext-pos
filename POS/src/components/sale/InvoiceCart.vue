@@ -959,7 +959,7 @@
 									<input
 										:value="formatQuantity(item.quantity)"
 										@click.stop
-										@input="updateQuantity(item, $event.target.value)"
+										@input="updateQuantity(item, $event.target.value, $event.target)"
 										@blur="handleQuantityBlur(item)"
 										@keydown.enter="$event.target.blur()"
 										type="text"
@@ -1382,6 +1382,8 @@
  */
 import { usePOSCartStore } from "@/stores/posCart";
 import { usePOSSettingsStore } from "@/stores/posSettings";
+import { useStockStore } from "@/stores/stock";
+import { useToast } from "@/composables/useToast";
 import { usePOSOffersStore } from "@/stores/posOffers";
 import { useCustomerSearchStore } from "@/stores/customerSearch";
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency";
@@ -1403,6 +1405,8 @@ import EditItemDialog from "./EditItemDialog.vue";
  */
 const cartStore = usePOSCartStore(); // Pinia store for cart state management
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
+const stockStore = useStockStore(); // Tồn kho theo thời gian thực, dùng để chặn sửa số lượng vượt tồn
+const { showError } = useToast();
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
 const { formatQuantity } = useFormatters(); // Quantity formatting utilities
@@ -2094,6 +2098,8 @@ function incrementQuantity(item) {
 
 	const step = getSmartStep(item.quantity);
 	const newQty = Math.round((item.quantity + step) * 10000) / 10000;
+	if (exceedsAvailableStock(item, newQty)) return;
+
 	emit("update-quantity", item.item_code, newQty, item.uom);
 }
 
@@ -2126,7 +2132,50 @@ function decrementQuantity(item) {
  * @param {String} value - New quantity value from input
  */
   
-function updateQuantity(item, value) {
+/**
+ * Số lượng mới có vượt tồn kho không (PM-TASK-00136).
+ *
+ * Trước đây chỉ hai đường vào giỏ được chặn: chọn từ danh sách mặt hàng
+ * (ItemsSelector) và quét mã vạch (đã vá ở PM-TASK-00073). Đường thứ ba — sửa
+ * thẳng số lượng trên dòng giỏ hàng — không kiểm gì cả, nên thu ngân gõ số
+ * lượng vượt tồn vẫn nhận, màn hình hiện tồn âm, tới lúc bấm Thanh toán mới bị
+ * máy chủ chặn. Không sinh dữ liệu sai nhưng cảnh báo đến quá muộn.
+ *
+ * Dùng ĐÚNG công thức của máy chủ (_collect_stock_errors trong api/invoices.py):
+ * quy số lượng về đơn vị tồn kho rồi so với tồn thực trên máy chủ. So với tồn
+ * MÁY CHỦ chứ không phải tồn hiển thị, vì tồn hiển thị đã trừ phần đang giữ
+ * trong giỏ — lấy nó thì mỗi lần sửa lại trừ thêm một lần nữa.
+ *
+ * @param {Object} item - Dòng trong giỏ hàng
+ * @param {number} newQty - Số lượng mới người dùng muốn đặt
+ * @returns {boolean} true nếu vượt tồn (đã hiện thông báo cho người dùng)
+ */
+function exceedsAvailableStock(item, newQty) {
+	if (!settingsStore.shouldEnforceStockValidation()) return false;
+
+	// Hàng serial và hàng lô có hộp thoại chọn lô/serial lo phần kiểm tồn riêng.
+	if (item.has_serial_no) return false;
+	if (item.has_batch_no && !settingsStore.allowSkipManualBatchSelection) return false;
+
+	// Không có dữ liệu tồn (hàng dịch vụ, gói hàng, mã chưa nạp vào bộ nhớ tồn)
+	// thì không đoán — để máy chủ quyết như trước.
+	if (!stockStore.server.has(item.item_code)) return false;
+
+	const info = stockStore.getStockInfo(item.item_code);
+	const required = newQty * (item.conversion_factor || 1);
+	if (required <= info.server) return false;
+
+	showError(
+		__('Only {0} left in stock for "{1}". Cannot set quantity to {2}.', [
+			info.server,
+			item.item_name,
+			newQty,
+		])
+	);
+	return true;
+}
+
+function updateQuantity(item, value, inputEl = null) {
 	// Prevent editing resolved barcode items
 	if (item.is_resolved_barcode) return;
 
@@ -2137,6 +2186,14 @@ function updateQuantity(item, value) {
 
 	// If quantity is zero or negative, remove the item from the cart
 	if (qty <= 0) return emit("remove-item", item.item_code, item.uom);
+
+	if (exceedsAvailableStock(item, qty)) {
+		// Trả ô nhập về số lượng thật. Vue không tự vẽ lại được: giá trị ràng buộc
+		// (item.quantity) không đổi nên vdom coi như không có gì để cập nhật, và
+		// người dùng sẽ nhìn thấy con số vừa bị từ chối nằm lại trong ô.
+		if (inputEl) inputEl.value = formatQuantity(item.quantity);
+		return;
+	}
 
 	// For positive numbers, update quantity immediately (no rounding here while typing)
 	emit("update-quantity", item.item_code, qty, item.uom);

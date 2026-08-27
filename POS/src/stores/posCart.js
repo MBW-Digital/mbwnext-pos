@@ -2,6 +2,7 @@ import { useInvoice } from "@/composables/useInvoice"
 import { usePOSOffersStore } from "@/stores/posOffers"
 import { usePOSSettingsStore } from "@/stores/posSettings"
 import { usePOSShiftStore } from "@/stores/posShift"
+import { useBootstrapStore } from "@/stores/bootstrap"
 import { parseError } from "@/utils/errorHandler"
 import {
 	assertCanSellInPos,
@@ -97,6 +98,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		invoiceItems,
 		customer,
 		subtotal,
+		netTotal,
 		totalTax,
 		totalDiscount,
 		grandTotal,
@@ -106,6 +108,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		couponDiscountAmount,
 		remarks,
 		transactionPricingRule,
 		taxInclusive,
@@ -134,6 +137,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const offersStore = usePOSOffersStore()
 	const settingsStore = usePOSSettingsStore()
 	const shiftStore = usePOSShiftStore()
+	const bootstrapStore = useBootstrapStore()
 	const itemSearchStore = useItemSearchStore()
 
 	function invoiceSubmissionExtras() {
@@ -152,6 +156,26 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	const pendingItemQty = ref(1)
 	const appliedOffers = ref([])
 	const appliedCoupon = ref(null)
+
+	/**
+	 * Discount contributed by the applied coupon alone.
+	 *
+	 * additionalDiscount also carries offer / transaction pricing rule discounts, so it
+	 * cannot stand in for the coupon. Clamped to the discount actually applied so the
+	 * coupon line can never claim more than the cart was really discounted by.
+	 */
+	const couponDiscount = computed(() => {
+		if (!appliedCoupon.value) return 0
+		const fromCoupon = Number(couponDiscountAmount.value) || 0
+		const applied = Number(additionalDiscount.value) || 0
+		return roundCurrency(Math.max(0, Math.min(fromCoupon, applied)))
+	})
+
+	/** Total discount excluding the coupon — the coupon gets its own line in the cart. */
+	const discountExcludingCoupon = computed(() =>
+		roundCurrency(Math.max(0, (Number(totalDiscount.value) || 0) - couponDiscount.value)),
+	)
+
 	const selectionMode = ref("uom") // 'uom' or 'variant'
 	const suppressOfferReapply = ref(false)
 	const currentDraftId = ref(null)
@@ -668,6 +692,24 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		return parts.join('::')
 	}
 
+	/**
+	 * Khuyến mại của giỏ hàng HIỆN TẠI đã được tính xong chưa.
+	 *
+	 * Việc áp khuyến mại chạy bất đồng bộ và xếp hàng sau các tác vụ nặng lúc mở
+	 * trang (nạp danh mục hàng, lấy danh sách offer ~200KB). Trong khoảng đó giỏ
+	 * hàng hiển thị GIÁ GỐC dù mặt hàng có khuyến mại — đo thực tế mất tới ~20
+	 * giây sau khi tải lại trang (PM-TASK-00060). Thu ngân bấm Thanh toán lúc đó
+	 * là bán mất phần khuyến mại mà không có cảnh báo nào.
+	 *
+	 * `lastCartHash` được ghi lại sau mỗi lần xử lý xong; hash khác nghĩa là giỏ
+	 * hiện tại chưa được tính.
+	 */
+	const offersSettled = computed(() => {
+		if (!invoiceItems.value.length) return true
+		if (offerProcessingState.value.isProcessing) return false
+		return offerProcessingState.value.lastCartHash === generateCartHash()
+	})
+
 	// Toast composable
 	const { showSuccess, showError, showWarning } = useToast()
 
@@ -1015,6 +1057,66 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		customer.value = selectedCustomer
 	}
 
+	/**
+	 * Customer group / territory confirmed with the server for the customer
+	 * currently on the cart. Shape: { customer, customer_group, territory }.
+	 */
+	const verifiedCustomerScope = ref(null)
+
+	/**
+	 * Re-read the selected customer's group and territory from the server.
+	 *
+	 * The cart cannot trust the copy it holds: recent/frequent lists live in
+	 * localStorage, the offline cache holds whole customer rows, and the saved
+	 * cart restores the object it was saved with. Any of those can carry a group
+	 * that was edited since. Offers limited by customer group are judged against
+	 * this value, and hiding a promotion the customer does qualify for is the
+	 * failure we must avoid — so on any doubt we clear it and let the server,
+	 * which always reads the live record, decide.
+	 */
+	async function refreshCustomerScope(customerName) {
+		if (!customerName || offlineState.isOffline) {
+			verifiedCustomerScope.value = null
+			// Removing the customer puts the cart back on the site defaults, which
+			// changes which offers qualify — rebuild the snapshot for that.
+			if (invoiceItems.value.length > 0) {
+				triggerOfferProcessing(true)
+			}
+			return
+		}
+
+		try {
+			const response = await call("pos_next.api.customers.get_customer_scope", {
+				customer: customerName,
+			})
+			const scope = response?.message || response
+			// The cashier may have switched customer while this was in flight.
+			const current = customer.value?.name || customer.value || null
+			if (!scope?.name || current !== customerName) return
+
+			verifiedCustomerScope.value = {
+				customer: customerName,
+				customer_group: scope.customer_group || null,
+				territory: scope.territory || null,
+			}
+			triggerOfferProcessing(true)
+		} catch (error) {
+			console.error("Error refreshing customer scope:", error)
+			verifiedCustomerScope.value = null
+		}
+	}
+
+	// Covers every way a customer reaches the cart: picked in the UI, restored
+	// from a saved cart, or cleared.
+	watch(
+		() => customer.value?.name || customer.value || null,
+		(customerName) => {
+			verifiedCustomerScope.value = null
+			refreshCustomerScope(customerName)
+		},
+		{ immediate: true },
+	)
+
 	function setPendingItem(item, qty = 1, mode = "uom") {
 		pendingItem.value = item
 		pendingItemQty.value = qty
@@ -1101,12 +1203,38 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				item.discount_percentage = discountPct
 				item.discount_amount = discountAmt
 				item.pricing_rules = serverItem.pricing_rules
+
+				// PM-TASK-00125: "Rate" pricing rules SET the selling price instead of
+				// discounting it, so the server returns a new price_list_rate and no
+				// discount at all. Without this the cart keeps the old price and the
+				// total never moves, while the offer badge still reads "Applied".
+				// recalculateItem() derives rate/amount from price_list_rate, so writing
+				// that one field is enough.
+				const serverPriceListRate =
+					Number.parseFloat(serverItem.price_list_rate) || 0
+				if (
+					serverPriceListRate > 0 &&
+					discountPct === 0 &&
+					discountAmt === 0 &&
+					serverPriceListRate !== Number.parseFloat(item.price_list_rate)
+				) {
+					// Keep the original price so removing the offer can restore it.
+					if (item._price_list_rate_before_offer === undefined) {
+						item._price_list_rate_before_offer = item.price_list_rate
+					}
+					item.price_list_rate = serverPriceListRate
+				}
+
 				hasDiscounts = discountPct > 0 || discountAmt > 0
 			} else if (hasPricingRules(item.pricing_rules)) {
 				// Server cleared promotional discount (e.g. outside time window)
 				item.discount_percentage = 0
 				item.discount_amount = 0
 				item.pricing_rules = []
+				if (item._price_list_rate_before_offer !== undefined) {
+					item.price_list_rate = item._price_list_rate_before_offer
+					delete item._price_list_rate_before_offer
+				}
 			}
 
 			recalculateItem(item)
@@ -1768,6 +1896,21 @@ export const usePOSCartStore = defineStore("posCart", () => {
 						}
 					})
 					rebuildIncrementalCache()
+
+					// The cart may now qualify for a DIFFERENT slab of the same scheme:
+					// e.g. buy-1 => 15% stops at qty 2, buy-2-to-3 => 20% takes over.
+					// Without re-evaluating here the cart stays undiscounted until the
+					// next cart change, because lastCartHash is updated on the way out.
+					if (signal?.aborted) return true
+					offersStore.updateCartSnapshot(buildCartSnapshot())
+					if (offersStore.allEligibleOffers.length > 0) {
+						await autoApplyEligibleOffers(currentProfile, signal)
+						if (appliedOffers.value.length > 0) {
+							// Replacement offers applied — autoApplyEligibleOffers already
+							// announced them; don't also warn about the superseded slab.
+							return true
+						}
+					}
 				} else {
 					offersStore.updateCartSnapshot(buildCartSnapshot())
 					const eligibleCodes = offersStore.allEligibleOffers.map((o) => o.name)
@@ -2246,7 +2389,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				recalculateItem(item)
 				applied = true
 			} else if (discountType === 'Rate' && rate > 0) {
-				// Apply fixed rate (override price)
+				// Apply fixed rate (override price).
+				// PM-TASK-00125: must write price_list_rate too — recalculateItem()
+				// reads price_list_rate first, so setting only rate leaves the old
+				// price in place and the total never changes.
+				if (item._price_list_rate_before_offer === undefined) {
+					item._price_list_rate_before_offer = item.price_list_rate
+				}
+				item.price_list_rate = rate
 				item.rate = rate
 				item.pricing_rules = [offer.name]
 				recalculateItem(item)
@@ -2430,7 +2580,56 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// New: quantity maps for accurate min_qty/max_qty validation
 			itemQuantities,
 			itemGroupQuantities,
-			brandQuantities
+			brandQuantities,
+			lines: buildCartLines(),
+			...buildCustomerScope()
+		}
+	}
+
+	/**
+	 * Per-line view of the cart. The aggregate quantity maps cannot express a rule
+	 * with mixed_conditions = 0, which ERPNext judges one line at a time
+	 * (PM-TASK-00035). Quantities are in stock UOM, as ERPNext compares them.
+	 */
+	function buildCartLines() {
+		return invoiceItems.value.map((item) => ({
+			item_code: item.item_code,
+			item_group: item.item_group || null,
+			brand: item.brand || null,
+			qty: (item.quantity || 0) * (item.conversion_factor || 1),
+		}))
+	}
+
+	/**
+	 * Customer scope used to judge offers limited via applicable_for.
+	 *
+	 * Only a scope we can vouch for is reported: the site defaults when nobody is
+	 * selected (apply_offers() substitutes the same ones server-side), or a
+	 * group/territory just confirmed with the server. Anything else stays null,
+	 * which makes the offer store skip the customer check and leave the decision
+	 * to apply_offers — better than hiding a promotion on a stale cached group.
+	 */
+	function buildCustomerScope() {
+		const cust = customer.value
+		const sellingDefaults = bootstrapStore.data?.selling_defaults || {}
+		const customerName = cust?.name || (typeof cust === "string" ? cust : null)
+		const verified = verifiedCustomerScope.value
+		const scopeVerified = Boolean(
+			customerName && verified && verified.customer === customerName,
+		)
+
+		if (!customerName) {
+			return {
+				customer: null,
+				customerGroup: sellingDefaults.customer_group || null,
+				territory: sellingDefaults.territory || null,
+			}
+		}
+
+		return {
+			customer: customerName,
+			customerGroup: scopeVerified ? verified.customer_group : null,
+			territory: scopeVerified ? verified.territory : null,
 		}
 	}
 
@@ -2655,6 +2854,11 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				return sum + (item.quantity || 0)
 			}, 0)
 
+			// updateCartSnapshot() replaces the whole snapshot, so every field
+			// buildCartSnapshot() sets has to be repeated here. Leaving the customer
+			// scope or the per-line view out blanks them until the next full
+			// rebuild, which silently disables the customer-scope and
+			// mixed_conditions checks in between.
 			offersStore.updateCartSnapshot({
 				subtotal: subtotal.value,
 				itemCount: totalQty, // Total quantity, not number of line items
@@ -2664,6 +2868,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 				itemQuantities: cachedItemQuantities,
 				itemGroupQuantities: cachedItemGroupQuantities,
 				brandQuantities: cachedBrandQuantities,
+				lines: buildCartLines(),
+				warehouse:
+					shiftStore.profileWarehouse ||
+					invoiceItems.value.find((item) => item.warehouse)?.warehouse ||
+					null,
+				...buildCustomerScope(),
 			})
 		}
 	}
@@ -2730,12 +2940,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		}
 
 		// === ONLINE MODE ===
-		// Get current profile from posProfile
+		// `posProfile.value` chỉ là TÊN POS Profile (chuỗi), không phải bản ghi —
+		// trước đây đọc .company/.selling_price_list/.currency thẳng từ đó nên cả
+		// ba luôn undefined. Bản ghi POS Profile nằm ở shiftStore.currentProfile.
+		const profileDoc = shiftStore.currentProfile || {}
 		const currentProfile = {
 			customer: customer.value?.name || customer.value,
-			company: posProfile.value.company,
-			selling_price_list: posProfile.value.selling_price_list,
-			currency: posProfile.value.currency,
+			company: profileDoc.company,
+			selling_price_list: profileDoc.selling_price_list,
+			currency: profileDoc.currency,
 		}
 
 		// Re-apply existing offers (includes newly eligible ones) or auto-apply fresh
@@ -2930,6 +3143,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		freeGiftItems,
 		customer,
 		subtotal,
+		netTotal,
 		totalTax,
 		totalDiscount,
 		grandTotal,
@@ -2939,6 +3153,9 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		salesTeam,
 		additionalDiscount,
 		additionalDiscountPercentage,
+		couponDiscountAmount,
+		couponDiscount,
+		discountExcludingCoupon,
 		remarks,
 		taxInclusive,
 		pendingItem,
@@ -2949,6 +3166,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		suppressOfferReapply,
 		currentDraftId,
 		offerProcessingState, // Offer processing state for UI feedback
+		offersSettled, // Giỏ hiện tại đã tính xong khuyến mại chưa (khoá Thanh toán khi chưa)
 		bundleMatchChoices,
 		showBundleChoiceDialog,
 		bundleSuggestions,

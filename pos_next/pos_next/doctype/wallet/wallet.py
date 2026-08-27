@@ -5,7 +5,6 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
-from erpnext.accounts.utils import get_balance_on
 
 
 class Wallet(Document):
@@ -34,29 +33,17 @@ class Wallet(Document):
 			))
 
 	def get_balance(self):
-		"""Get current wallet balance from GL entries.
-
-		For receivable accounts:
-		- Negative balance = customer has credit (we owe them) = positive wallet balance
-		- Positive balance = customer owes us = negative wallet balance (shouldn't happen)
-		"""
-		if not self.account or not self.customer:
-			return 0.0
-
-		balance = get_balance_on(
-			account=self.account,
-			party_type="Customer",
-			party=self.customer
-		)
-		# Negate because negative receivable balance = positive wallet credit
-		return -flt(balance)
+		"""Số dư ví = tổng điểm đã tích trừ phần khách đã tiêu."""
+		return tinh_so_du_vi(self.customer, self.company)
 
 	def get_available_balance(self):
-		"""Get available balance (current balance minus pending wallet payments)"""
-		current = self.get_balance()
-		pending = get_pending_wallet_payments(self.customer)
-		available = flt(current) - flt(pending)
-		return available if available > 0 else 0.0
+		"""Số dư còn tiêu được.
+
+		Bằng đúng số dư: `tinh_so_du_vi` đã trừ cả hoá đơn nháp đang giữ điểm,
+		nên không trừ thêm lần nữa. Giữ hai trường vì giao diện POS đang đọc cả
+		hai.
+		"""
+		return self.get_balance()
 
 	def update_balance(self):
 		"""Update the current_balance and available_balance fields"""
@@ -85,93 +72,109 @@ def get_customer_wallet(customer, company=None):
 
 @frappe.whitelist()
 def get_customer_wallet_balance(customer, company=None, exclude_invoice=None):
-	"""
-	Get customer's available wallet balance.
-
-	For receivable accounts:
-	- Negative GL balance = customer has credit (we owe them) = positive wallet balance
-	- Positive GL balance = customer owes us = no wallet balance
+	"""Số dư ví khách còn tiêu được.
 
 	Args:
-		customer: Customer ID
-		company: Company (optional)
-		exclude_invoice: Invoice name to exclude from pending calculations
+		customer: mã khách
+		company: công ty (tuỳ chọn)
+		exclude_invoice: hoá đơn đang lập — không tính phần điểm chính nó đang giữ,
+			nếu không thì lúc kiểm tra số dư hoá đơn tự trừ chính mình
 
 	Returns:
-		float: Available wallet balance
+		float: số dư, không bao giờ âm
 	"""
 	try:
 		filters = {"customer": customer, "status": "Active"}
 		if company:
 			filters["company"] = company
 
-		wallet = frappe.db.get_value("Wallet", filters, ["name", "account"], as_dict=True)
-
-		if not wallet:
+		if not frappe.db.exists("Wallet", filters):
 			return 0.0
 
-		# Get balance from GL entries
-		gl_balance = get_balance_on(
-			account=wallet.account,
-			party_type="Customer",
-			party=customer
-		)
-
-		# Negate because negative receivable balance = positive wallet credit
-		wallet_balance = -flt(gl_balance)
-
-		# Subtract pending wallet payments from open POS invoices
-		pending_wallet_amount = get_pending_wallet_payments(customer, exclude_invoice)
-
-		available_balance = flt(wallet_balance) - flt(pending_wallet_amount)
-
-		return available_balance if available_balance > 0 else 0.0
+		so_du = tinh_so_du_vi(customer, company, exclude_invoice)
+		return so_du if so_du > 0 else 0.0
 
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "Wallet Balance Error")
 		return 0.0
 
 
-def get_pending_wallet_payments(customer, exclude_invoice=None):
-	"""
-	Get total wallet payments from unconsolidated/pending POS invoices.
-	This prevents double-spending of wallet balance.
-	"""
-	# Get open Sales Invoices (draft or unconsolidated POS invoices)
-	filters = {
-		"customer": customer,
-		"docstatus": ["in", [0, 1]],  # Draft or Submitted
-		"outstanding_amount": [">", 0],
-		"is_pos": 1
-	}
+def tinh_so_du_vi(customer, company=None, exclude_invoice=None):
+	"""Số dư ví, tính từ bảng Wallet Transaction chứ KHÔNG từ sổ cái.
 
-	invoices = frappe.get_all(
-		"Sales Invoice",
-		filters=filters,
-		fields=["name"]
+	Trước đây số dư đọc bằng `get_balance_on()` trên tài khoản ví. Cách đó chỉ
+	đúng khi ví có tài khoản riêng — mà ở Hạ Vàng ví dùng chung 131 với công nợ
+	bán hàng, nên điểm bị tiền hàng khách còn nợ lấn át và 749 ví hiển thị số dư
+	0 (PM-TASK-00106). Từ khi bỏ bút toán lúc tích điểm thì sổ cái không còn dấu
+	vết nào của ví nữa, đọc sổ chắc chắn ra 0.
+
+	Nguồn sự thật giờ là hai bảng:
+	  Wallet Transaction — điểm đã tích (và điểm bị điều chỉnh giảm, nếu có)
+	  hoá đơn có hình thức thanh toán ví — điểm khách đã tiêu
+	"""
+	da_tich = tong_diem_da_tich(customer, company)
+	da_tieu = tong_tien_vi_da_tieu(customer, company, exclude_invoice)
+	return flt(da_tich) - flt(da_tieu)
+
+
+def tong_diem_da_tich(customer, company=None):
+	"""Cộng dồn phiếu ví đã ghi sổ: loại cộng thì cộng vào, loại trừ thì trừ ra."""
+	dieu_kien = {"customer": customer, "docstatus": 1}
+	if company:
+		dieu_kien["company"] = company
+
+	rows = frappe.get_all(
+		"Wallet Transaction",
+		filters=dieu_kien,
+		fields=["transaction_type", "amount"],
 	)
 
-	pending_amount = 0.0
+	tong = 0.0
+	for row in rows:
+		if row.transaction_type in ("Credit", "Loyalty Credit"):
+			tong += flt(row.amount)
+		else:
+			tong -= flt(row.amount)
+	return tong
 
-	for invoice in invoices:
-		if exclude_invoice and invoice.name == exclude_invoice:
-			continue
 
-		# Get wallet payments from this invoice
-		payments = frappe.get_all(
-			"Sales Invoice Payment",
-			filters={"parent": invoice.name},
-			fields=["mode_of_payment", "amount"]
-		)
+def tong_tien_vi_da_tieu(customer, company=None, exclude_invoice=None):
+	"""Tiền ví khách đã dùng để trả hàng, đọc thẳng từ hoá đơn.
 
-		for payment in payments:
-			is_wallet = frappe.db.get_value(
-				"Mode of Payment", payment.mode_of_payment, "is_wallet_payment"
-			)
-			if is_wallet:
-				pending_amount += flt(payment.amount)
+	⚠ Tính CẢ hoá đơn đã thanh toán xong, không chỉ hoá đơn còn nợ. Bản cũ lọc
+	`outstanding_amount > 0` vì hồi đó số dư lấy từ sổ cái — hoá đơn ghi sổ rồi
+	thì sổ đã trừ, đếm lại là trừ hai lần. Nay số dư đếm từ Wallet Transaction,
+	mà bảng đó KHÔNG có dòng nào khi khách tiêu điểm, nên bỏ sót hoá đơn đã
+	thanh toán là cho khách tiêu đi tiêu lại cùng một số điểm.
 
-	return pending_amount
+	Hoá đơn trả hàng mang số tiền âm nên tự cộng điểm trả lại cho khách.
+	"""
+	dieu_kien = ["si.customer = %(customer)s", "si.docstatus in (0, 1)"]
+	tham_so = {"customer": customer}
+	if company:
+		dieu_kien.append("si.company = %(company)s")
+		tham_so["company"] = company
+	if exclude_invoice:
+		dieu_kien.append("si.name != %(exclude_invoice)s")
+		tham_so["exclude_invoice"] = exclude_invoice
+
+	tong = frappe.db.sql(
+		"""
+		select coalesce(sum(p.amount), 0)
+		from `tabSales Invoice Payment` p
+		join `tabSales Invoice` si on si.name = p.parent
+		join `tabMode of Payment` mp on mp.name = p.mode_of_payment
+		where mp.is_wallet_payment = 1 and {dieu_kien}
+		""".format(dieu_kien=" and ".join(dieu_kien)),
+		tham_so,
+	)[0][0]
+
+	return flt(tong)
+
+
+def get_pending_wallet_payments(customer, exclude_invoice=None):
+	"""Giữ tên cũ cho chỗ nào còn gọi tới — nay là tổng tiền ví ĐÃ TIÊU."""
+	return tong_tien_vi_da_tieu(customer, None, exclude_invoice)
 
 
 @frappe.whitelist()

@@ -592,11 +592,12 @@ async function searchCachedItems(searchTerm = "", limit = 50) {
 	}
 }
 
-// Search cached customers
+// Search cached customers — early-exit + VN phone digit normalization
 async function searchCachedCustomers(searchTerm = "", limit = 20) {
 	try {
 		const db = await initDB()
-		const term = searchTerm.toLowerCase()
+		const term = (searchTerm || "").toLowerCase().trim()
+		const max = limit > 0 ? limit : Number.POSITIVE_INFINITY
 
 		if (!term) {
 			return limit > 0
@@ -604,19 +605,48 @@ async function searchCachedCustomers(searchTerm = "", limit = 20) {
 				: await db.table("customers").toArray()
 		}
 
-		// Get all customers and filter in memory for 'includes' behavior
-		// This is fast because IndexedDB is already in-memory for small datasets
-		const allCustomers = await db.table("customers").toArray()
+		const termDigits = term.replace(/\D/g, "")
+		const results = []
 
-		const results = allCustomers
-			.filter((cust) => {
+		const matchesMobile = (mobile) => {
+			if (!mobile) return false
+			const lower = mobile.toLowerCase()
+			if (lower.includes(term)) return true
+			if (!termDigits) return false
+			const digits = mobile.replace(/\D/g, "")
+			if (!digits) return false
+			if (digits.includes(termDigits)) return true
+			if (termDigits.startsWith("0") && termDigits.length > 1) {
+				const rest = termDigits.slice(1)
+				return digits.includes(rest) || digits.includes(`84${rest}`)
+			}
+			if (termDigits.startsWith("84") && termDigits.length > 2) {
+				const rest = termDigits.slice(2)
+				return digits.includes(rest) || digits.includes(`0${rest}`)
+			}
+			return false
+		}
+
+		const STOP = Symbol("stop-customer-search")
+		try {
+			await db.table("customers").each((cust) => {
+				if (results.length >= max) throw STOP
+
 				const name = (cust.customer_name || "").toLowerCase()
-				const mobile = (cust.mobile_no || "").toLowerCase()
 				const id = (cust.name || "").toLowerCase()
 
-				return name.includes(term) || mobile.includes(term) || id.includes(term)
+				if (
+					name.includes(term) ||
+					id.includes(term) ||
+					matchesMobile(cust.mobile_no)
+				) {
+					results.push(cust)
+					if (results.length >= max) throw STOP
+				}
 			})
-			.slice(0, limit || allCustomers.length)
+		} catch (e) {
+			if (e !== STOP) throw e
+		}
 
 		return results
 	} catch (error) {
@@ -1057,6 +1087,106 @@ async function getCachedOffers(posProfile) {
 	} catch (error) {
 		log.error('Error getting cached offers', error)
 		return []
+	}
+}
+
+/**
+ * Lưu mã giảm giá lên máy để áp được khi mất mạng (PM-TASK-00071).
+ *
+ * Máy chủ chỉ trả về mã tự kiểm tra được offline (không giới hạn lượt dùng,
+ * không gán riêng khách, không phải thẻ quà tặng) — xem get_offline_coupons().
+ * Khoá lưu là mã đã VIẾT HOA để lúc tra khỏi phải quét cả bảng, vì thu ngân gõ
+ * chữ thường hay chữ hoa đều phải nhận.
+ *
+ * @param {Array} coupons - Danh sách mã từ máy chủ
+ * @param {string} company - Công ty, để xoá đúng phần cũ của công ty đó
+ */
+async function cacheCoupons(coupons, company) {
+	try {
+		if (!Array.isArray(coupons) || !company) {
+			return { success: false, count: 0 }
+		}
+
+		const db = await initDB()
+
+		const rows = coupons
+			.filter((c) => c.coupon_code)
+			.map((c) => ({
+				...c,
+				coupon_code: String(c.coupon_code).toUpperCase(),
+				company,
+				_cached_at: Date.now(),
+			}))
+
+		await db.transaction('rw', db.table('coupons'), async () => {
+			await db.table('coupons').where('company').equals(company).delete()
+			if (rows.length > 0) {
+				await db.table('coupons').bulkPut(rows)
+			}
+		})
+
+		await db.table('settings').put({
+			key: `coupons_last_sync_${company}`,
+			value: Date.now(),
+		})
+
+		log.success(`Cached ${rows.length} coupons for company ${company}`)
+		return { success: true, count: rows.length }
+	} catch (error) {
+		log.error('Error caching coupons', error)
+		return { success: false, count: 0, error: error.message }
+	}
+}
+
+/**
+ * Tra một mã giảm giá trong bộ nhớ máy, dùng khi mất mạng.
+ *
+ * Trả về cùng dạng kết quả với API validate_coupon của máy chủ để màn hình nhập
+ * mã không phải xử lý hai kiểu dữ liệu khác nhau.
+ *
+ * @param {string} couponCode - Mã thu ngân gõ vào
+ * @param {string} company - Công ty của ca đang bán
+ * @returns {Promise<Object>} { valid, coupon } hoặc { valid: false, message }
+ */
+async function getCachedCoupon(couponCode, company) {
+	try {
+		if (!couponCode || !company) {
+			return { valid: false, message: 'Invalid coupon code' }
+		}
+
+		const db = await initDB()
+		const code = String(couponCode).trim().toUpperCase()
+		const coupon = await db.table('coupons').get(code)
+
+		if (!coupon || coupon.company !== company) {
+			return { valid: false, message: 'Invalid coupon code' }
+		}
+
+		// Mã có giới hạn lượt dùng / dùng-một-lần / gán riêng khách chỉ được gửi
+		// xuống dưới dạng mã trơn. Nói thẳng là phải chờ có mạng, đừng báo "mã
+		// không hợp lệ" — thu ngân sẽ tưởng khách đưa nhầm mã
+		if (coupon.requires_server) {
+			return { valid: false, message: 'This coupon can only be applied when the POS is online' }
+		}
+
+		// Ngày hiệu lực được lưu nguyên, lọc tại thời điểm dùng — danh sách nằm
+		// trên máy nhiều ngày nên không thể lọc sẵn lúc tải về.
+		// Lấy ngày theo GIỜ MÁY: toISOString() cho ra giờ quốc tế, ở UTC+7 thì
+		// trước 7h sáng nó trả về ngày HÔM QUA — mã bắt đầu hiệu lực hôm nay sẽ
+		// bị từ chối, mã hết hạn hôm qua thì vẫn áp được
+		const now = new Date()
+		const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+		if (coupon.valid_from && coupon.valid_from > today) {
+			return { valid: false, message: 'This coupon is not yet valid' }
+		}
+		if (coupon.valid_upto && coupon.valid_upto < today) {
+			return { valid: false, message: 'This coupon has expired' }
+		}
+
+		return { valid: true, coupon }
+	} catch (error) {
+		log.error('Error reading cached coupon', error)
+		return { valid: false, message: 'Invalid coupon code' }
 	}
 }
 
@@ -1590,6 +1720,15 @@ self.onmessage = async (event) => {
 
 			case "CLEAR_OFFERS_CACHE":
 				result = await clearOffersCache(payload.posProfile)
+				break
+
+			// ===== COUPON CACHE OPERATIONS (PM-TASK-00071) =====
+			case "CACHE_COUPONS":
+				result = await cacheCoupons(payload.coupons, payload.company)
+				break
+
+			case "GET_CACHED_COUPON":
+				result = await getCachedCoupon(payload.couponCode, payload.company)
 				break
 
 			case "CACHE_PRODUCT_BUNDLES":

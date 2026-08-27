@@ -257,20 +257,22 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 			const stats = await getCacheStats()
 			const needsRefresh = !stats.lastSync || Date.now() - stats.lastSync > 24 * 60 * 60 * 1000
 
-			// Preload service surcharge item (Dịch vụ làm nóng lạnh) for offline
-			const serviceItemCode = currentProfile?.service_surcharge_item || 'Phí bảo quản lạnh'
-			try {
-				const serviceItemRes = await call("pos_next.api.items.get_item_details", {
-					item_code: serviceItemCode,
-					pos_profile: currentProfile.name,
-					qty: 1,
-				})
-				if (serviceItemRes && serviceItemRes.item_code) {
-					await cacheItems([serviceItemRes])
-					log.success(`Cached service surcharge item: ${serviceItemCode}`)
+			// Preload service surcharge item only when configured on POS Profile
+			const serviceItemCode = currentProfile?.service_surcharge_item
+			if (serviceItemCode) {
+				try {
+					const serviceItemRes = await call("pos_next.api.items.get_item_details", {
+						item_code: serviceItemCode,
+						pos_profile: currentProfile.name,
+						qty: 1,
+					})
+					if (serviceItemRes && serviceItemRes.item_code) {
+						await cacheItems([serviceItemRes])
+						log.success(`Cached service surcharge item: ${serviceItemCode}`)
+					}
+				} catch (err) {
+					log.debug('Could not preload service surcharge item', err)
 				}
-			} catch (err) {
-				log.debug('Could not preload service surcharge item', err)
 			}
 
 			// Always load payment methods for reliable offline support
@@ -289,6 +291,26 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 			} catch (error) {
 				log.error('Failed to load payment methods', error)
 				// Continue with other data loading
+			}
+
+			// Mã giảm giá dùng khi mất mạng (PM-TASK-00071). Nạp mỗi lần mở POS
+			// cho nhẹ: danh sách chỉ vài chục mã, và mã mới khai trong ngày cũng
+			// cần tới được máy sớm.
+			log.info('Loading coupons for offline use')
+			try {
+				const company = currentProfile?.company
+				if (company) {
+					const response = await call("pos_next.api.offers.get_offline_coupons", {
+						company,
+					})
+					const coupons = response?.message || response || []
+					await offlineWorker.cacheCoupons(coupons, company)
+					log.success(`Cached ${coupons.length} coupons`)
+				}
+			} catch (error) {
+				// Mất danh sách này chỉ làm coupon không áp được khi offline,
+				// không được để nó chặn các bước nạp còn lại
+				log.error('Failed to load coupons', error)
 			}
 
 			// Load customers if cache needs refresh

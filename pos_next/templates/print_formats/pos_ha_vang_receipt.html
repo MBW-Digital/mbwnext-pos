@@ -147,9 +147,10 @@
 <div class="divider"></div>
 
 {%- for item in doc.items -%}
+{%- set item_disc_pct = item_discount_percent_for_receipt(item) -%}
 <div class="item-name lr">
 	<span class="name">{{ item.item_name }}</span>
-	<span class="disc">{% if item.discount_percentage and item.discount_percentage > 0 %}-{{ "%.2f"|format(item.discount_percentage) }}%{% endif %}</span>
+	<span class="disc">{% if item_disc_pct and item_disc_pct > 0 %}-{{ "%.2f"|format(item_disc_pct) }}%{% endif %}</span>
 </div>
 <div class="item-sub lr">
 	<span>{{ item_barcode_for_receipt(item) }}</span>
@@ -166,6 +167,9 @@
 	<div class="lr grand"><span>Tổng thanh toán:</span><span>{{ fmt(doc.grand_total or 0, 0) }}</span></div>
 	<div class="lr"><span>Chuyển khoản:</span><span>{{ fmt(R.bank_paid, 0) }}</span></div>
 	<div class="lr"><span>Tiền mặt:</span><span>{{ fmt(R.cash_paid, 0) }}</span></div>
+	{%- if (R.wallet_paid or 0) > 0 %}
+	<div class="lr"><span>Tiêu điểm:</span><span>{{ fmt(R.wallet_paid, 0) }}</span></div>
+	{%- endif %}
 	<div class="lr"><span>Tiền mặt phải trả:</span><span>{{ fmt(doc.outstanding_amount or 0, 0) }}</span></div>
 	<div class="lr"><span>Thối lại:</span><span>{{ fmt(doc.change_amount or 0, 0) }}</span></div>
 </div>

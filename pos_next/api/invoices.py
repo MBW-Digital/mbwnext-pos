@@ -266,11 +266,29 @@ def _validate_stock_on_invoice(invoice_doc):
     ):
         return
 
-    # Collect all stock items to check
+    # Mặt hàng nào là hàng quản lý tồn kho phải TRA TỪ DANH MỤC HÀNG.
+    #
+    # Dòng hàng của hoá đơn KHÔNG có trường `is_stock_item` — trước đây lọc
+    # thẳng `d.get("is_stock_item")` nên danh sách cần kiểm tra LUÔN RỖNG và
+    # chốt chặn tồn kho chưa từng chạy, dù cấu hình đã bật. Hàng bán quá tồn
+    # vẫn submit bình thường, tồn kho âm mà không ai được cảnh báo
+    # (PM-TASK-00073: mã 200770042263 tồn 0 vẫn bán tiếp, còn -1).
+    ma_hang = [d.item_code for d in invoice_doc.items if d.get("item_code")]
+    hang_ton_kho = set()
+    if ma_hang:
+        hang_ton_kho = {
+            row.name
+            for row in frappe.get_all(
+                "Item",
+                filters={"name": ["in", ma_hang], "is_stock_item": 1},
+                fields=["name"],
+            )
+        }
+
     items_to_check = [
         d.as_dict()
         for d in invoice_doc.items
-        if d.get("is_stock_item")
+        if d.get("item_code") in hang_ton_kho
         and not cint(getattr(d, "is_free_item", 0))
         and not cint(getattr(d, "pos_skip_stock_deduction", 0))
     ]
@@ -760,6 +778,49 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
     return {"valid": True}
 
 
+def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
+    """Record the POS Coupon used on the invoice in the custom_pos_coupons child table.
+
+    The discount itself is already carried by the invoice's discount_amount; this table
+    only makes visible WHICH coupon produced it and how much of the discount it accounts
+    for, so the value can be reported on without re-deriving it from the coupon config.
+
+    Args:
+        invoice_doc: The Sales Invoice document being saved
+        coupon: The validated POS Coupon document (from check_coupon_code)
+        coupon_discount_amount: Amount the POS UI actually discounted for this coupon.
+            Falls back to recomputing from the coupon config when not supplied.
+    """
+    if not coupon or not invoice_doc.meta.get_field("custom_pos_coupons"):
+        return
+
+    amount = flt(coupon_discount_amount)
+    if amount <= 0:
+        # No amount from the client — recompute from the coupon config so the row is
+        # never silently zero. net_total is the base for "Net Total" coupons.
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import apply_coupon_discount
+
+        result = apply_coupon_discount(
+            coupon,
+            flt(invoice_doc.get("total")),
+            flt(invoice_doc.get("net_total")) or flt(invoice_doc.get("total")),
+        )
+        if result.get("valid"):
+            amount = flt(result.get("discount"))
+
+    invoice_doc.set("custom_pos_coupons", [])
+    invoice_doc.append(
+        "custom_pos_coupons",
+        {
+            "coupon": coupon.name,
+            "coupon_code": coupon.coupon_code,
+            "discount_type": coupon.discount_type,
+            "discount_percentage": flt(coupon.discount_percentage),
+            "discount_amount": amount,
+        },
+    )
+
+
 # ==========================================
 # Invoice Management (Two-Step Flow)
 # ==========================================
@@ -855,12 +916,15 @@ def update_invoice(data):
                     {
                         "doctype": "Customer",
                         "customer_name": customer_name,
-                        "customer_group": "All Customer Groups",
-                        "territory": "All Territories",
                         "customer_type": "Individual",
                     }
                 )
                 cust.flags.ignore_permissions = True
+                cust.flags.pos_profile = pos_profile
+                # territory/customer_group filled by
+                # pos_next.api.customers.set_default_territory_and_customer_group
+                # (before_insert hook) - avoids hardcoding a literal like "All
+                # Territories" that may not exist as a real record on every site.
                 cust.insert()
                 invoice_doc.customer = cust.name
                 invoice_doc.customer_name = cust.customer_name
@@ -877,10 +941,6 @@ def update_invoice(data):
                 _("Invalid Customer link on invoice: {0}. Open Customer master or re-select customer on POS.")
                 .format(invoice_doc.customer)
             )
-
-        # Disable automatic pricing rules (we handle discounts manually from POS)
-        invoice_doc.ignore_pricing_rule = 1
-        invoice_doc.flags.ignore_pricing_rule = True
 
         # ========================================================================
         # DISCOUNT CALCULATION - CRITICAL LOGIC
@@ -941,6 +1001,9 @@ def update_invoice(data):
             invoice_doc.is_pos = 1
             invoice_doc.update_stock = 1
 
+        if not invoice_doc.get("posting_date"):
+            invoice_doc.posting_date = nowdate()
+
         # ========================================================================
         # ROUNDING CONFIGURATION
         # ========================================================================
@@ -963,6 +1026,12 @@ def update_invoice(data):
                 frappe.log_error(f"Error loading rounding setting: {str(e)}", "POS Invoice Creation")
 
         invoice_doc.disable_rounded_total = disable_rounded
+
+        # Snapshot POS's rate/discount_amount before set_missing_values()
+        # below can corrupt them; restored by the "validate" doc-event hook
+        # (see sales_invoice_hooks.py for why).
+        from pos_next.api.sales_invoice_hooks import capture_pos_authoritative_discounts
+        capture_pos_authoritative_discounts(invoice_doc)
 
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
@@ -1035,6 +1104,12 @@ def update_invoice(data):
 
                 # Store coupon code on invoice for tracking
                 invoice_doc.coupon_code = coupon_code
+
+                _set_applied_pos_coupons(
+                    invoice_doc,
+                    coupon_result.get("coupon"),
+                    data.get("coupon_discount_amount"),
+                )
 
         # Assign FIFO batches before save (includes free-gift lines without batch)
         if doctype == "Sales Invoice":
@@ -1655,9 +1730,21 @@ def get_print_receipt_data(invoice_name, include_sepay_qr=True):
 	Receipt for thermal print, optional SePay VietQR for bank transfer.
 	"""
 	data = get_invoice(invoice_name)
-	from pos_next.api.receipt_print import enrich_invoice_dict_for_print
+	from pos_next.api.receipt_print import (
+		enrich_invoice_dict_for_print,
+		ha_vang_receipt_meta_for_jinja,
+	)
 
 	data.update(enrich_invoice_dict_for_print(data))
+
+	# Bổ sung đúng bộ trường mà mẫu in "HÓA ĐƠN BÁN LẺ" dùng, để phiếu in thẳng
+	# xuống máy in nhiệt lấy chung một nguồn số liệu với mẫu in của hệ thống.
+	# Thiếu bộ này thì bản in USB tự bịa lấy nhãn và tổng tiền riêng — đó là gốc
+	# của chuyện một cửa hàng in ra hai mẫu khác nhau (PM-TASK-00116).
+	try:
+		data.update(ha_vang_receipt_meta_for_jinja(frappe.get_doc("Sales Invoice", invoice_name)))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "get_print_receipt_data: ha_vang_receipt_meta")
 
 	try:
 		from pos_next.api.einvoice_self_service import get_self_service_qr_payload
@@ -1841,22 +1928,45 @@ def delete_invoice(invoice):
 @frappe.whitelist()
 def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
     """
-    Clean up old draft invoices to prevent stock reservation issues.
+    Clean up old draft POS invoices to prevent stock reservation issues.
     Deletes drafts older than max_age_hours (default 24 hours).
+
+    Scope is deliberately narrow - see the two guards below. The delete itself
+    runs with ignore_permissions because cashiers hold no delete permission on
+    Sales Invoice, so anything this function is allowed to see, it WILL delete.
     """
     from datetime import datetime, timedelta
 
     doctype = "Sales Invoice"
+
+    # pos_profile is mandatory. Without it the filters below match EVERY draft
+    # Sales Invoice in the system - manually entered and Data Import ones
+    # included - and the elevated delete happily wipes them (PM-TASK-00109: 43
+    # imported drafts of another user destroyed in one logout). A missing value
+    # is normal rather than exceptional: clearCart() also runs on the login
+    # screen, where posProfile is still null.
+    if not pos_profile:
+        return {"deleted": 0, "message": "POS Profile is required"}
+
+    # The caller must actually operate this till, otherwise any logged-in user
+    # could clear another store's drafts just by passing its profile name.
+    # Same access rule as get_pos_profile_data() in pos_next/api/pos_profile.py.
+    if not frappe.db.exists(
+        "POS Profile User", {"parent": pos_profile, "user": frappe.session.user}
+    ):
+        frappe.throw(_("You don't have access to POS Profile {0}").format(pos_profile))
+
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
     filters = {
         "docstatus": 0,  # Draft only
+        # is_pos is set unconditionally on every invoice this app creates (see
+        # update_invoice()), so POS drafts are never missed - but invoices typed
+        # into the desk are, and they are none of this function's business.
+        "is_pos": 1,
+        "pos_profile": pos_profile,
         "modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
     }
-
-    # Optionally filter by POS profile
-    if pos_profile:
-        filters["pos_profile"] = pos_profile
 
     # Get old drafts
     old_drafts = frappe.get_all(
@@ -1954,6 +2064,10 @@ def get_returnable_invoices(limit=50, pos_profile=None):
         .limit(cint(limit))
     )
 
+    # Only show invoices from the current POS Profile
+    if pos_profile:
+        query = query.where(si.pos_profile == pos_profile)
+
     # Add date filter if return validity is configured
     if return_validity_days > 0:
         cutoff_date = add_days(today(), -return_validity_days)
@@ -1973,15 +2087,15 @@ def get_returnable_invoices(limit=50, pos_profile=None):
 
 @frappe.whitelist()
 def search_invoice_by_number(search_term, pos_profile=None):
-    """Search for invoices by invoice number across the entire database.
-    No date restrictions - searches all returnable invoices matching the term.
+    """Search for invoices by invoice number for the current POS Profile.
+    No date restrictions - searches returnable invoices matching the term.
 
     Uses query builder with LEFT JOINs to calculate remaining returnable quantities.
     Only returns invoices that have items available for return.
 
     Args:
         search_term: Invoice number or partial number to search for (min 3 chars)
-        pos_profile: Optional POS profile for context (reserved for future use)
+        pos_profile: Current POS Profile — only invoices from this profile are returned
 
     Returns:
         List of matching invoices with return availability info (max 10 results)
@@ -2001,6 +2115,15 @@ def search_invoice_by_number(search_term, pos_profile=None):
     ret_item = frappe.qb.DocType("Sales Invoice Item").as_("ret_item")
 
     # Build query with query builder
+    conditions = (
+        (si.docstatus == 1)
+        & (si.is_return == 0)
+        & (si.is_pos == 1)
+        & (si.name.like(f"%{search_term}%"))
+    )
+    if pos_profile:
+        conditions = conditions & (si.pos_profile == pos_profile)
+
     query = (
         frappe.qb.from_(si)
         .left_join(si_item).on(si_item.parent == si.name)
@@ -2024,12 +2147,7 @@ def search_invoice_by_number(search_term, pos_profile=None):
             Coalesce(Sum(Case().when(ret_item.qty.isnotnull(), Abs(ret_item.qty)).else_(0)), 0).as_("total_returned_qty"),
             Coalesce(Sum(Case().when(si_item.qty.isnotnull(), si_item.qty).else_(0)), 0).as_("total_original_qty"),
         )
-        .where(
-            (si.docstatus == 1)
-            & (si.is_return == 0)
-            & (si.is_pos == 1)
-            & (si.name.like(f"%{search_term}%"))
-        )
+        .where(conditions)
         .groupby(si.name)
         .orderby(si.posting_date, order=frappe.qb.desc)
         .orderby(si.creation, order=frappe.qb.desc)
@@ -2048,12 +2166,12 @@ def search_invoice_by_number(search_term, pos_profile=None):
 
 
 @frappe.whitelist()
-def check_invoice_return_validity(invoice_name):
-    """Check if an invoice is within the return validity period.
+def check_invoice_return_validity(invoice_name, pos_profile=None):
+    """Check if an invoice is within the return validity period and same POS Profile.
 
     Returns detailed information for the UI to display, including:
     - valid: Boolean indicating if return is allowed
-    - error_type: 'not_found' or 'return_period_expired' if invalid
+    - error_type: 'not_found', 'wrong_pos_profile', or 'return_period_expired' if invalid
     - Additional context (invoice_date, days_since, allowed_days) for expired returns
     """
     from frappe.utils import date_diff, getdate, formatdate
@@ -2074,6 +2192,15 @@ def check_invoice_return_validity(invoice_name):
         }
 
     invoice_info = invoice_data[0]
+
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        return {
+            "valid": False,
+            "error_type": "wrong_pos_profile",
+            "message": _(
+                "Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS."
+            ).format(invoice_name, invoice_info.pos_profile),
+        }
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -2507,7 +2634,7 @@ def _build_return_transaction_rule_data(invoice_name, invoice_info, has_tpr_fiel
 
 
 @frappe.whitelist()
-def prepare_return_invoice(invoice_name, pos_opening_shift=None):
+def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=None):
     """Prepare a return invoice using ERPNext's make_sales_return.
 
     This uses ERPNext's standard return document creation which properly copies
@@ -2519,11 +2646,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     The function validates:
     - Invoice exists and is submitted (docstatus = 1)
     - Invoice is not already a return
+    - Invoice belongs to the current POS Profile (when pos_profile is provided)
     - Return is within the validity period (if configured in POS Settings)
 
     Args:
         invoice_name: The original Sales Invoice name to create return against
         pos_opening_shift: The current POS Opening Shift name
+        pos_profile: Current POS Profile — rejects invoices from other profiles
 
     Returns:
         dict: The prepared return invoice document with:
@@ -2543,8 +2672,12 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         si.docstatus, si.is_return, si.pos_profile, si.posting_date,
         si.is_pos, si.grand_total, si.paid_amount, si.outstanding_amount,
         si.customer, si.customer_name, si.company, si.net_total,
-        si.total_taxes_and_charges, si.discount_amount,
+        si.total, si.total_taxes_and_charges, si.discount_amount,
         si.additional_discount_percentage,
+        # Cần để màn hình trả hàng biết cửa hàng THỰC NHẬN bao nhiêu: hoá đơn
+        # từng bị nhập thừa dòng thanh toán thì phần dư nằm ở đây, cộng hết các
+        # dòng thanh toán sẽ ra số lớn hơn tiền cần hoàn (PM-TASK-00072)
+        si.change_amount,
     ]
     if has_tpr_field:
         select_fields.append(si.posa_transaction_pricing_rule)
@@ -2567,6 +2700,14 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     # Check if it's already a return
     if invoice_info.is_return:
         frappe.throw(_("Cannot create return against a return invoice"))
+
+    # Only allow returns for invoices from the current POS Profile
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        frappe.throw(
+            _("Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS.").format(
+                invoice_name, invoice_info.pos_profile
+            )
+        )
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -2645,7 +2786,11 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     return_dict["_original_invoice"] = {
         "name": invoice_name,
         "grand_total": invoice_info.grand_total,
+        # Tổng tiền hàng TRƯỚC chiết khấu bill — dùng làm mẫu số để phân bổ
+        # chiết khấu bill cho phần hàng trả lại (PM-TASK-00100)
+        "total": flt(invoice_info.get("total") or 0),
         "paid_amount": invoice_info.paid_amount,
+        "change_amount": flt(invoice_info.get("change_amount") or 0),
         "outstanding_amount": invoice_info.outstanding_amount,
         "customer": invoice_info.customer,
         "customer_name": invoice_info.customer_name,
@@ -2680,8 +2825,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         if remaining_qty <= 0:
             return None
 
-        # Get rate breakdown for display - use 3 decimal precision for rates
+        # item['rate'] is already the tax-inclusive gross rate charged
+        # (copied verbatim by ERPNext's make_sales_return()) - keep it as
+        # `gross_rate` for the submission. net_rate/discount_per_unit/
+        # tax_per_unit below are for display only; do NOT put net_rate back
+        # into "rate" - that silently drops the tax portion from the refund.
         price_list_rate = flt(item.get("price_list_rate") or item.get("rate"), 3)
+        gross_rate = flt(item.get("rate"), 3)
         net_rate = flt(item.get("net_rate") or item.get("rate"), 3)
         discount_per_unit = flt(price_list_rate - net_rate, 3)
         tax_per_unit = flt(item_tax_map.get(item.get("item_code"), 0) / original_qty, 3) if original_qty else 0
@@ -2693,9 +2843,10 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
             "remaining_qty": remaining_qty,
             "qty": -remaining_qty,
             "price_list_rate": price_list_rate,
-            "rate": net_rate,
+            "rate": gross_rate,
+            "net_rate": net_rate,
             "discount_per_unit": discount_per_unit,
-            "amount": flt(net_rate * -remaining_qty, 3),
+            "amount": flt(gross_rate * -remaining_qty, 3),
             "tax_per_unit": tax_per_unit,
             "rate_with_tax": flt(net_rate + tax_per_unit, 3),
         }
@@ -3179,7 +3330,18 @@ def _apply_transaction_pricing_rules(
                     if isinstance(rule_row, frappe.model.document.Document)
                     else frappe.get_cached_doc("Pricing Rule", rule_row.get("name"))
                 )
-                if rule_doc.coupon_code_based and not doc.get("coupon_code"):
+                if rule_doc.coupon_code_based and not _coupon_unlocks_rule(
+                    doc.get("coupon_code"), rule_doc, pricing_args
+                ):
+                    continue
+
+                # _fetch_transaction_pricing_rules() loads every Transaction rule of
+                # the company and the filters above only cover qty/amount/condition,
+                # so a rule limited to one customer group would otherwise be granted
+                # to everyone (PM-TASK-00033 follow-up). qty/amount is already
+                # filtered above against the real doc totals — only the customer
+                # scope is missing.
+                if not _rule_applicable_for_matches(rule_doc, pricing_args):
                     continue
 
                 pct, amt = _get_rule_discount_values(rule_doc)
@@ -3209,6 +3371,26 @@ def _apply_transaction_pricing_rules(
                 flt(doc.get("discount_amount")),
             )
 
+            # ERPNext checks the coupon-to-rule link here but not the coupon's
+            # validity, so an expired or fully-redeemed coupon still releases the
+            # discount (PM-TASK-00039). Undo it when our own check disagrees.
+            if applied_rule_name:
+                try:
+                    applied_rule = frappe.get_cached_doc("Pricing Rule", applied_rule_name)
+                except Exception:
+                    applied_rule = None
+                if (
+                    applied_rule
+                    and applied_rule.coupon_code_based
+                    and not _coupon_unlocks_rule(
+                        doc.get("coupon_code"), applied_rule, pricing_args
+                    )
+                ):
+                    doc.additional_discount_percentage = 0
+                    doc.discount_amount = 0
+                    doc.calculate_taxes_and_totals()
+                    applied_rule_name = None
+
         # Last resort: apply selected Transaction rules directly (POS preview)
         if not applied_rule_name and selected_offer_names:
             for rule_name in selected_offer_names:
@@ -3221,6 +3403,13 @@ def _apply_transaction_pricing_rules(
 
                 pct, amt = _get_rule_discount_values(rule_doc)
                 if not pct and not amt:
+                    continue
+
+                # This branch bypasses the qty/amount filtering the `candidates`
+                # path above already does, so it has to do its own.
+                if not _rule_eligible_for_forced_discount(
+                    rule_doc, prepared_items, pricing_args
+                ):
                     continue
 
                 if rule_doc.apply_discount_on:
@@ -3328,6 +3517,237 @@ def _cart_matches_pricing_rule(rule_doc, prepared_items):
     return False
 
 
+def _coupon_unlocks_rule(coupon_code, rule_doc, pricing_args=None):
+    """Whether the coupon entered on the cart actually releases this rule.
+
+    A ``coupon_code_based`` Pricing Rule is meant to stay locked until a coupon
+    that POINTS AT IT is presented. POS used to accept any non-empty string, so
+    a coupon belonging to another promotion — or a made-up code sent straight to
+    the API — handed out the rule's discount (PM-TASK-00039).
+
+    Both coupon doctypes are honoured: ERPNext's own ``Coupon Code`` (which the
+    Pricing Rule is designed around) and this app's ``POS Coupon``, whose
+    ``pricing_rule`` field expresses the same link. A coupon with no link is a
+    standalone discount and releases nothing.
+    """
+    code = cstr(coupon_code).strip()
+    if not code:
+        return False
+
+    # ERPNext Coupon Code — validate_coupon_code() checks dates and usage limits
+    # and throws when the coupon is not usable.
+    if frappe.db.table_exists("Coupon Code"):
+        linked = frappe.db.get_value(
+            "Coupon Code",
+            {"coupon_code": code},
+            ["name", "pricing_rule"],
+            as_dict=True,
+        )
+        if linked and linked.pricing_rule == rule_doc.name:
+            try:
+                from erpnext.accounts.doctype.pricing_rule.utils import (
+                    validate_coupon_code,
+                )
+
+                validate_coupon_code(linked.name)
+                return True
+            except Exception:
+                return False
+
+    # POS Coupon — reuse the app's own validation (disabled / dates / usage /
+    # company / customer) instead of re-implementing it here.
+    pos_coupon = frappe.db.get_value(
+        "POS Coupon",
+        {"coupon_code": code.upper()},
+        ["name", "pricing_rule"],
+        as_dict=True,
+    )
+    if not pos_coupon or pos_coupon.pricing_rule != rule_doc.name:
+        return False
+
+    try:
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import check_coupon_code
+
+        result = check_coupon_code(
+            code,
+            customer=(pricing_args or {}).get("customer"),
+            company=(pricing_args or {}).get("company"),
+        )
+        return bool(result.get("coupon"))
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS Coupon Rule Unlock")
+        return False
+
+
+def _rule_scoped_cart_rows(rule_doc, prepared_items):
+    """Cart lines that fall inside a rule's apply_on scope."""
+    rows = [
+        item
+        for item in prepared_items
+        if item.get("item_code") and flt(item.get("qty") or item.get("quantity") or 0) > 0
+    ]
+
+    if rule_doc.apply_on == "Transaction":
+        return rows
+
+    if rule_doc.apply_on == "Item Code":
+        codes = {cstr(row.item_code) for row in (rule_doc.items or [])}
+        return [r for r in rows if cstr(r.get("item_code")) in codes]
+
+    if rule_doc.apply_on == "Item Group":
+        from erpnext.accounts.doctype.pricing_rule.utils import get_pricing_rule_items
+
+        groups = set(get_pricing_rule_items(rule_doc) or [])
+        if not groups:
+            groups = {cstr(row.item_group) for row in (rule_doc.item_groups or [])}
+        return [r for r in rows if cstr(r.get("item_group")) in groups]
+
+    if rule_doc.apply_on == "Brand":
+        brands = {cstr(row.brand) for row in (rule_doc.brands or [])}
+        return [r for r in rows if cstr(r.get("brand")) in brands]
+
+    return []
+
+
+def _rule_applicable_for_matches(rule_doc, pricing_args):
+    """Whether a rule scoped by ``applicable_for`` matches this transaction.
+
+    ERPNext enforces this inside get_pricing_rules() before its engine ever sees
+    the rule. The POS forced-discount path below never reaches that engine, so it
+    has to check for itself — otherwise a promo restricted to one customer is
+    handed to every customer.
+
+    When the scope cannot be verified from the POS payload (Sales Partner,
+    Campaign — the cart never carries them) we refuse rather than guess: granting
+    money on an unverifiable condition is the one outcome we must not risk.
+    """
+    applicable_for = rule_doc.get("applicable_for")
+    if not applicable_for:
+        return True
+
+    fieldname = frappe.scrub(applicable_for)
+    expected = rule_doc.get(fieldname)
+    if not expected:
+        return True
+
+    actual = pricing_args.get(fieldname)
+    if not actual:
+        return False
+
+    if cstr(actual) == cstr(expected):
+        return True
+
+    # Customer Group and Territory are trees: a rule on the parent covers children.
+    if fieldname in ("customer_group", "territory"):
+        doctype = "Customer Group" if fieldname == "customer_group" else "Territory"
+        try:
+            from frappe.utils.nestedset import get_descendants_of
+
+            return cstr(actual) in (get_descendants_of(doctype, expected) or [])
+        except Exception:
+            return False
+
+    return False
+
+
+def _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args):
+    """Whether the cart satisfies the rule's own min/max qty and amount.
+
+    ERPNext checks this in filter_pricing_rules_for_qty_amount() while its engine
+    walks each line. A rule the engine deliberately refused must not then be paid
+    out invoice-wide — without this a "buy 2-3 get 20%" rule pays out at qty 1 and
+    at qty 5 alike (PM-TASK-00031 follow-up).
+
+    Aggregation follows the rule's own semantics: mixed_conditions / is_cumulative
+    / Transaction rules measure the whole matching set, everything else is judged
+    per line exactly as the engine judges it.
+    """
+    from erpnext.accounts.doctype.pricing_rule.utils import (
+        filter_pricing_rules_for_qty_amount,
+    )
+
+    if not (
+        flt(rule_doc.min_qty)
+        or flt(rule_doc.max_qty)
+        or flt(rule_doc.min_amt)
+        or flt(rule_doc.max_amt)
+    ):
+        return True
+
+    rows = _rule_scoped_cart_rows(rule_doc, prepared_items)
+    if not rows:
+        return False
+
+    rule_args = [
+        frappe._dict(
+            {
+                "name": rule_doc.name,
+                "min_qty": flt(rule_doc.min_qty),
+                "max_qty": flt(rule_doc.max_qty),
+                "min_amt": flt(rule_doc.min_amt),
+                "max_amt": flt(rule_doc.max_amt),
+            }
+        )
+    ]
+
+    def _qty_amt(row):
+        qty = flt(row.get("qty") or row.get("quantity") or 0)
+        stock_qty = qty * (flt(row.get("conversion_factor") or 1) or 1)
+        rate = flt(row.get("price_list_rate") or row.get("rate") or 0)
+        return stock_qty, stock_qty * rate
+
+    aggregate = (
+        rule_doc.apply_on == "Transaction"
+        or rule_doc.mixed_conditions
+        or rule_doc.is_cumulative
+    )
+
+    if aggregate:
+        total_qty = total_amt = 0
+        for row in rows:
+            qty, amt = _qty_amt(row)
+            total_qty += qty
+            total_amt += amt
+
+        if rule_doc.is_cumulative:
+            # Cumulative rules also count qty already invoiced in the valid period.
+            from erpnext.accounts.doctype.pricing_rule.utils import (
+                get_qty_amount_data_for_cumulative,
+                get_pricing_rule_items,
+            )
+
+            past = get_qty_amount_data_for_cumulative(
+                rule_doc, pricing_args, get_pricing_rule_items(rule_doc) or []
+            )
+            if past:
+                total_qty += flt(past[0])
+                total_amt += flt(past[1])
+
+        return bool(
+            filter_pricing_rules_for_qty_amount(total_qty, total_amt, rule_args)
+        )
+
+    for row in rows:
+        qty, amt = _qty_amt(row)
+        if filter_pricing_rules_for_qty_amount(qty, amt, rule_args):
+            return True
+
+    return False
+
+
+def _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
+    """Gate for the two paths that hand a rule's discount to the whole invoice
+    without ERPNext's engine having agreed to it."""
+    try:
+        if not _rule_applicable_for_matches(rule_doc, pricing_args):
+            return False
+        return _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Apply Offers Rule Eligibility")
+        # Cannot verify -> do not grant the discount.
+        return False
+
+
 def _supplement_additional_discount_for_unapplied(
     pricing_args,
     prepared_items,
@@ -3372,6 +3792,12 @@ def _supplement_additional_discount_for_unapplied(
             continue
 
         if not _cart_matches_pricing_rule(rule_doc, prepared_items):
+            continue
+
+        # ERPNext refused this rule at item level. That can mean "lost on
+        # priority" (fine to fall back to an invoice discount) or "cart does not
+        # qualify" (must NOT be paid out). Only the second case is filtered here.
+        if not _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
             continue
 
         doc_items = []
@@ -3709,7 +4135,8 @@ def apply_offers(invoice_data, selected_offers=None):
 
         # If still no customer_group, use default
         if not customer_group:
-            customer_group = "All Customer Groups"
+            from pos_next.api.customers import default_customer_group
+            customer_group = default_customer_group()
 
         pricing_args = frappe._dict(
             {
@@ -3901,6 +4328,13 @@ def apply_offers(invoice_data, selected_offers=None):
                 discount_percentage = flt(result.get("discount_percentage") or 0)
                 per_unit_discount = flt(result.get("discount_amount") or 0)
 
+                # Quy tắc loại "Rate" ẤN ĐỊNH giá bán chứ không giảm giá (PM-TASK-00125).
+                # ERPNext chỉ trả về `price_list_rate` mới kèm `pricing_rule_for = "Rate"`,
+                # KHÔNG có discount_percentage/discount_amount nào — nên nếu vẫn giữ `rate`
+                # cũ trong giỏ thì tổng tiền không đổi, POS báo "Applied" mà giá y nguyên.
+                # Trên desk không lộ vì form JS tự tính lại rate từ price_list_rate.
+                an_dinh_gia = cstr(result.get("pricing_rule_for")) == "Rate"
+
                 # If ERPNext didn't calculate discount (validate_applied_rule=1),
                 # we need to fetch and apply it manually
                 if (
@@ -3934,6 +4368,7 @@ def apply_offers(invoice_data, selected_offers=None):
                         elif full_rule.rate_or_discount == "Rate" and full_rule.rate:
                             # Apply fixed rate
                             price_list_rate = flt(full_rule.rate)
+                            an_dinh_gia = True
 
                 line_discount_amount = 0
                 if discount_percentage and qty and price_list_rate:
@@ -3958,7 +4393,17 @@ def apply_offers(invoice_data, selected_offers=None):
                 item_doc.discount_percentage = discount_percentage
                 item_doc.discount_amount = line_discount_amount
                 item_doc.price_list_rate = price_list_rate
-                item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
+                if an_dinh_gia:
+                    # Giá chương trình ĐÈ lên giá thu ngân vừa gõ — khách chốt 22/08,
+                    # giống hệt cách màn Hoá đơn bán hàng đang chạy.
+                    gia_ap_dung = price_list_rate
+                    if discount_percentage:
+                        gia_ap_dung = gia_ap_dung * (1 - discount_percentage / 100.0)
+                    elif per_unit_discount:
+                        gia_ap_dung = gia_ap_dung - per_unit_discount
+                    item_doc.rate = flt(gia_ap_dung)
+                else:
+                    item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
                 # ERPNext expects pricing_rules as comma-separated string, not a list
                 item_doc.pricing_rules = (
                     ",".join(applicable_rule_names) if applicable_rule_names else ""

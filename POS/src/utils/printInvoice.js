@@ -8,7 +8,6 @@ const log = logger.create('PrintInvoice')
 
 const USB_DUPLICATE_PRINT_DELAY_MS = 600
 
-const RECEIPT_LOGO_URL = "/assets/pos_next/images/bhbuudien-logo.png"
 
 /** Số liên in qua WebUSB (máy in nhiệt không dùng mẫu Jinja). */
 function getUsbPhysicalCopies(doc) {
@@ -32,12 +31,6 @@ async function markInvoicePrintedIfNeeded(invoiceName, doc) {
 	}
 }
 
-function receiptLogoUrl() {
-	if (typeof window !== "undefined" && window.location?.origin) {
-		return `${window.location.origin}${RECEIPT_LOGO_URL}`
-	}
-	return RECEIPT_LOGO_URL
-}
 
 /** Định dạng số kiểu vi-VN (dùng cho phiếu in HTML fallback). */
 function formatVN(amount, decimals = 0) {
@@ -174,7 +167,9 @@ async function printInvoiceOnce(doc, printFormat = null, letterhead = null, opti
 	}
 
 	const doctype = doc.doctype || "Sales Invoice"
-	const format = printFormat || "POS Next Receipt"
+	// Mẫu mặc định là mẫu của Hạ Vàng. Trước đây mặc định trỏ vào "POS Next
+	// Receipt" — mẫu dựng cho dự án Bách Hóa Bưu Điện (PM-TASK-00116).
+	const format = printFormat || "POS Ha Vang Receipt"
 
 	const params = new URLSearchParams({
 		doctype: doctype,
@@ -499,25 +494,38 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 						invoiceData.receipt_company_display_name ||
 						invoiceData.company ||
 						"POS Next"
-					const branch =
+					// Cùng bộ trường với mẫu in "HÓA ĐƠN BÁN LẺ" của hệ thống, để bản
+					// dự phòng này không in ra một tờ khác hẳn (PM-TASK-00116).
+					const storeDisplay =
+						invoiceData.store_display_name ||
 						invoiceData.receipt_branch_label ||
-						invoiceData.pos_profile ||
 						""
-					const addr = invoiceData.receipt_company_address || ""
-					const coPhone = invoiceData.receipt_company_phone || ""
-					const printDt =
-						invoiceData.receipt_print_datetime ||
-						new Date().toLocaleString("vi-VN")
-					const msch = invoiceData.receipt_msch || ""
-					const nv = invoiceData.receipt_salesperson || ""
+					const addr =
+						invoiceData.store_address || invoiceData.receipt_company_address || ""
+					const coPhone =
+						invoiceData.store_phone || invoiceData.receipt_company_phone || ""
+					const postingDate = invoiceData.posting_date || ""
+					const postingTime = invoiceData.posting_time || ""
+					const shopCode = invoiceData.shop_code || ""
+					const shiftLabel = invoiceData.shift_label || "Ca 1"
+					const vipLabel = invoiceData.vip_label || ""
+					const grossTotal = Number(invoiceData.gross_total ?? invoiceData.total ?? 0)
+					const itemDiscountTotal = Number(invoiceData.item_discount_total ?? 0)
+					const invoiceDiscountTotal = Number(
+						invoiceData.invoice_discount_total ??
+							Math.abs(Number(invoiceData.discount_amount || 0)),
+					)
+					const cashPaid = Number(invoiceData.cash_paid ?? 0)
+					const bankPaid = Number(invoiceData.bank_paid ?? 0)
+					const walletPaid = Number(invoiceData.wallet_paid ?? 0)
+					const nv =
+						invoiceData.salesperson || invoiceData.receipt_salesperson || ""
 					const custPhone =
 						invoiceData.receipt_customer_phone ||
 						invoiceData.contact_mobile ||
 						invoiceData.mobile_no ||
 						invoiceData.pos_einvoice_buyer_phone ||
 						""
-					const lyEarn = Number(invoiceData.receipt_loyalty_earned ?? 0)
-					const lyBal = Number(invoiceData.receipt_loyalty_balance ?? 0)
 					let taxPct = null
 					for (const row of invoiceData.taxes || []) {
 						const r = Number.parseFloat(row.rate || 0)
@@ -570,31 +578,29 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 						.join("")
 
 					return `
-				<div style="text-align:center;margin-bottom:8px;">
-					<img src="${receiptLogoUrl()}" alt="Bách Hóa Bưu Điện" style="max-width:100%;width:${paperWidth === 58 ? "52mm" : "68mm"};height:auto;display:block;margin:0 auto;" />
-				</div>
+				${invoiceData.pos_logo_url ? `<div style="text-align:center;margin-bottom:8px;">
+					<img src="${invoiceData.pos_logo_url}" alt="" style="max-width:100%;width:${paperWidth === 58 ? "52mm" : "68mm"};height:auto;display:block;margin:0 auto;" />
+				</div>` : ""}
 				<div style="text-align:center;font-weight:bold;font-size:15px;margin-bottom:4px;">${storeName}</div>
 				<div style="text-align:center;font-size:11px;line-height:1.35;">
-					<div><b>Chi nhánh:</b> ${branch}</div>
+					${storeDisplay ? `<div><b>${storeDisplay}</b></div>` : ""}
 					${addr ? `<div>${addr}</div>` : ""}
-					${coPhone ? `<div><b>Số điện thoại:</b> ${coPhone}</div>` : ""}
+					${coPhone ? `<div>ĐT: ${coPhone}</div>` : ""}
 				</div>
-				<div style="text-align:center;font-weight:bold;font-size:13px;margin:10px 0 8px;">PHIẾU TÍNH TIỀN</div>
+				<div style="text-align:center;font-weight:bold;font-size:13px;margin:10px 0 8px;">HÓA ĐƠN BÁN LẺ</div>
 				<div style="display:table;width:100%;font-size:10px;margin-bottom:8px;">
 					<div style="display:table-cell;width:50%;vertical-align:top;">
-						<div><b>Thời gian:</b> ${printDt}</div>
-						<div><b>Mã HĐ:</b> ${invoiceData.name}</div>
+						<div>Số HĐ: ${invoiceData.name}</div>
+						<div>Ngày: ${postingDate}</div>
+						<div>Nhân viên: ${nv || "—"}</div>
 					</div>
 					<div style="display:table-cell;width:50%;vertical-align:top;text-align:right;">
-						<div><b>MSCH:</b> ${msch || "—"}</div>
-						<div><b>NV:</b> ${nv}</div>
+						<div>Shop: ${shopCode || "—"}</div>
+						<div>Giờ: ${postingTime}</div>
+						<div>Ca: ${shiftLabel}</div>
 					</div>
 				</div>
 				<div style="border-top:1px dashed #000;margin:8px 0;"></div>
-				<div style="font-size:10px;margin-bottom:8px;line-height:1.4;">
-					<div><b>Tên khách hàng:</b> ${invoiceData.customer_name || "Khách lẻ"}</div>
-					<div><b>Số điện thoại:</b> ${custPhone || "—"}</div>
-				</div>
 				${partial ? `<div style="color:#b30000;font-weight:bold;font-size:10px;margin-bottom:6px;">Trạng thái: THANH TOÁN MỘT PHẦN</div>` : ""}
 				<table style="width:100%;border-collapse:collapse;font-size:9px;margin-bottom:6px;table-layout:fixed;">
 					<thead>
@@ -609,11 +615,27 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 				</table>
 				<div style="border-top:1px dashed #000;margin:8px 0;"></div>
 				<div style="font-size:11px;">
-					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tổng tiền hàng</span><span>${formatVN(invoiceData.total || 0, 0)}</span></div>
-					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Chiết khấu</span><span>${formatVN(Math.abs(Number.parseFloat(invoiceData.discount_amount || 0)), 0)}</span></div>
-					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>${vatLbl}</span><span>${formatVN(vatAmt, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tổng cộng</span><span>${formatVN(grossTotal, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>CK hàng hóa</span><span>${formatVN(itemDiscountTotal, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Chiết khấu</span><span>${formatVN(invoiceDiscountTotal || itemDiscountTotal, 0)}</span></div>
 					<div style="display:flex;justify-content:space-between;margin:8px 0 0;padding-top:6px;border-top:2px solid #000;font-weight:bold;font-size:12px;">
-						<span>Tổng cần thanh toán</span><span>${formatVN(invoiceData.grand_total || 0, 0)}</span>
+						<span>Tổng thanh toán</span><span>${formatVN(invoiceData.grand_total || 0, 0)}</span>
+					</div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Chuyển khoản</span><span>${formatVN(bankPaid, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiền mặt</span><span>${formatVN(cashPaid, 0)}</span></div>
+					${
+						walletPaid > 0
+							? `<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiêu điểm</span><span>${formatVN(walletPaid, 0)}</span></div>`
+							: ""
+					}
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tiền mặt phải trả</span><span>${formatVN(invoiceData.outstanding_amount || 0, 0)}</span></div>
+					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Thối lại</span><span>${formatVN(invoiceData.change_amount || 0, 0)}</span></div>
+					<div style="border-top:1px dashed #000;margin:8px 0;"></div>
+					<div style="font-size:10px;line-height:1.45;">
+						<div style="font-weight:bold;margin-bottom:2px;">THÔNG TIN KHÁCH HÀNG</div>
+						<div>Họ tên: ${invoiceData.customer_name || "Khách lẻ"}</div>
+						<div>Điện thoại: ${custPhone || "—"}</div>
+						<div>VIP: ${vipLabel || "—"}</div>
 					</div>
 				</div>
 				`
@@ -667,7 +689,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 				}
 
 				<div style="font-size:9px;margin:12px 0;line-height:1.45;border-top:1px dashed #000;padding-top:8px;">
-					Điểm tích lũy: Hóa đơn hiện tại được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; Tổng điểm sau hóa đơn là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
+					Điểm tích lũy: Hóa đơn này được cộng ${Math.round(Number(invoiceData.receipt_loyalty_earned ?? 0))} điểm; điểm còn dùng được là ${Math.round(Number(invoiceData.receipt_loyalty_balance ?? 0))}.
 				</div>
 
 				${

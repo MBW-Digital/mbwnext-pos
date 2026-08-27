@@ -123,6 +123,68 @@ def process_loyalty_to_wallet(doc, method=None):
 		)
 
 
+def cancel_wallet_transactions_for_invoice(doc, method=None):
+	"""
+	Cancel Wallet Transactions created from this Sales Invoice (loyalty → wallet).
+	Must run on before_cancel / on_cancel so reverse GL happens and SI is not blocked
+	by Dynamic Link from Wallet Transaction.reference_name.
+	"""
+	if not doc.is_pos:
+		return
+
+	transactions = frappe.get_all(
+		"Wallet Transaction",
+		filters={
+			"reference_doctype": "Sales Invoice",
+			"reference_name": doc.name,
+			"docstatus": 1,
+		},
+		pluck="name",
+	)
+
+	if not transactions:
+		return
+
+	# If wallet credit was already spent, reversing it would go negative — block with clear message
+	total_credit = 0.0
+	for name in transactions:
+		wt = frappe.db.get_value(
+			"Wallet Transaction",
+			name,
+			["transaction_type", "amount", "customer", "company"],
+			as_dict=True,
+		)
+		if wt and wt.transaction_type in ("Credit", "Loyalty Credit"):
+			total_credit += flt(wt.amount)
+
+	if total_credit > 0:
+		balance = get_customer_wallet_balance(doc.customer, doc.company)
+		if flt(balance) + 0.0001 < total_credit:
+			frappe.throw(
+				_(
+					"Cannot cancel invoice {0}: wallet credit of {1} from this invoice "
+					"was already used. Available wallet balance: {2}. "
+					"Please reverse wallet payments first."
+				).format(
+					doc.name,
+					frappe.format_value(total_credit, {"fieldtype": "Currency"}),
+					frappe.format_value(balance, {"fieldtype": "Currency"}),
+				),
+				title=_("Wallet Credit Already Used"),
+			)
+
+	for name in transactions:
+		wt_doc = frappe.get_doc("Wallet Transaction", name)
+		wt_doc.flags.ignore_permissions = True
+		wt_doc.cancel()
+
+	frappe.msgprint(
+		_("Cancelled {0} wallet transaction(s) linked to this invoice").format(len(transactions)),
+		alert=True,
+		indicator="orange",
+	)
+
+
 def get_wallet_amount_from_payments(payments):
 	"""
 	Calculate total wallet payment amount from invoice payments.
@@ -147,92 +209,24 @@ def get_wallet_amount_from_payments(payments):
 
 @frappe.whitelist()
 def get_customer_wallet_balance(customer, company=None, exclude_invoice=None):
+	"""Số dư ví khách còn tiêu được.
+
+	⚠ Chỉ gọi lại bản trong doctype Wallet, đừng chép logic sang đây. Trước đây
+	hai file giữ hai bản giống hệt nhau; sửa cách tính số dư ở một bên là bên kia
+	lệch ngay, mà lỗi lại hiện ra ở tận màn hình POS nên rất khó lần (PM-TASK-00106).
 	"""
-	Get customer's available wallet balance.
+	from pos_next.pos_next.doctype.wallet.wallet import (
+		get_customer_wallet_balance as _tinh_so_du,
+	)
 
-	For receivable accounts:
-	- Negative GL balance = customer has credit (we owe them) = positive wallet balance
-	- Positive GL balance = customer owes us = no wallet balance
-
-	Args:
-		customer: Customer ID
-		company: Company (optional)
-		exclude_invoice: Invoice name to exclude from pending calculations
-
-	Returns:
-		float: Available wallet balance
-	"""
-	try:
-		from erpnext.accounts.utils import get_balance_on
-
-		filters = {"customer": customer, "status": "Active"}
-		if company:
-			filters["company"] = company
-
-		wallet = frappe.db.get_value("Wallet", filters, ["name", "account"], as_dict=True)
-
-		if not wallet:
-			return 0.0
-
-		# Get balance from GL entries
-		gl_balance = get_balance_on(
-			account=wallet.account,
-			party_type="Customer",
-			party=customer
-		)
-
-		# Negate because negative receivable balance = positive wallet credit
-		wallet_balance = -flt(gl_balance)
-
-		# Subtract pending wallet payments from open POS invoices
-		pending_wallet_amount = get_pending_wallet_payments(customer, exclude_invoice)
-
-		available_balance = flt(wallet_balance) - flt(pending_wallet_amount)
-
-		return available_balance if available_balance > 0 else 0.0
-
-	except Exception:
-		frappe.log_error(frappe.get_traceback(), "Wallet Balance Error")
-		return 0.0
+	return _tinh_so_du(customer, company, exclude_invoice)
 
 
 def get_pending_wallet_payments(customer, exclude_invoice=None):
-	"""
-	Get total wallet payments from unconsolidated/pending POS invoices.
-	"""
-	filters = {
-		"customer": customer,
-		"docstatus": ["in", [0, 1]],
-		"outstanding_amount": [">", 0],
-		"is_pos": 1
-	}
+	"""Tổng tiền ví khách đã dùng trả hàng — gọi lại bản trong doctype Wallet."""
+	from pos_next.pos_next.doctype.wallet.wallet import tong_tien_vi_da_tieu
 
-	invoices = frappe.get_all(
-		"Sales Invoice",
-		filters=filters,
-		fields=["name"]
-	)
-
-	pending_amount = 0.0
-
-	for invoice in invoices:
-		if exclude_invoice and invoice.name == exclude_invoice:
-			continue
-
-		payments = frappe.get_all(
-			"Sales Invoice Payment",
-			filters={"parent": invoice.name},
-			fields=["mode_of_payment", "amount"]
-		)
-
-		for payment in payments:
-			is_wallet = frappe.db.get_value(
-				"Mode of Payment", payment.mode_of_payment, "is_wallet_payment"
-			)
-			if is_wallet:
-				pending_amount += flt(payment.amount)
-
-	return pending_amount
+	return tong_tien_vi_da_tieu(customer, None, exclude_invoice)
 
 
 @frappe.whitelist()
@@ -288,6 +282,28 @@ def get_or_create_wallet(customer, company, pos_settings=None):
 	wallet_account = None
 	if pos_settings:
 		wallet_account = pos_settings.get("wallet_account")
+
+	# Tài khoản khai trong Cài đặt POS phải THUỘC ĐÚNG CÔNG TY của ca bán.
+	#
+	# Trước đây lấy thẳng giá trị khai trong cài đặt mà không kiểm tra, nên khi
+	# người dùng chọn nhầm tài khoản của công ty khác thì mọi ví tạo ra đều mang
+	# tài khoản đó. Hậu quả: bút toán của công ty này rơi vào tài khoản của công
+	# ty kia, và tới lúc HUỶ hoá đơn thì ERPNext chặn với thông báo "Account ...
+	# does not belong to Company ..." — kế toán không huỷ được đơn sai
+	# (PM-TASK-00059: 34/36 Cài đặt POS của Hạ Vàng khai tài khoản của Thái Tuấn,
+	# kéo theo 887 ví và 975 bút toán sai sổ).
+	if wallet_account:
+		cty_taikhoan = frappe.db.get_value("Account", wallet_account, "company")
+		if cty_taikhoan and cty_taikhoan != company:
+			frappe.log_error(
+				title="Wallet Account Company Mismatch",
+				message=(
+					f"Cài đặt POS khai tài khoản ví {wallet_account} thuộc công ty "
+					f"{cty_taikhoan}, không phải {company}. Đã bỏ qua và dùng tài "
+					f"khoản mặc định của công ty."
+				),
+			)
+			wallet_account = None
 
 	if not wallet_account:
 		# Try to find a receivable account with 'wallet' in name

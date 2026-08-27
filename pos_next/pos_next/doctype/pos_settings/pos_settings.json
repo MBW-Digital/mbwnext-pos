@@ -69,6 +69,7 @@
   "section_break_misc",
   "input_qty",
   "allow_negative_stock",
+  "hide_out_of_stock_items",
   "opening_closing_cash_configuration",
   "barcode_tab",
   "barcode_rules"
@@ -507,6 +508,13 @@
    "fieldname": "allow_negative_stock",
    "fieldtype": "Check",
    "label": "Allow Negative Stock"
+  },
+  {
+   "default": "0",
+   "description": "Hide items with zero or negative stock from the POS item list. Only items with available stock in the POS warehouse will be displayed.",
+   "fieldname": "hide_out_of_stock_items",
+   "fieldtype": "Check",
+   "label": "Hide Out of Stock Items"
   },
   {
    "default": "0",

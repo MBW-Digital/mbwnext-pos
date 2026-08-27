@@ -5,7 +5,6 @@
  * Full Vietnamese uses `buildReceiptBitmap` (canvas → raster, see below).
  */
 
-import { getReceiptPaymentSummary } from '@/utils/receiptPayments'
 
 // ─────────────────────────────────────────────────────────────────
 // Vietnamese → ASCII mapping (removes diacritics)
@@ -260,38 +259,44 @@ function fmtDate(dateStr) {
 	return d.toLocaleDateString('vi-VN') + ' ' + d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
 }
 
-function receiptVatAmount(inv) {
-	let v = Number.parseFloat(inv.total_taxes_and_charges || 0)
-	if (v > 0) return v
-	for (const row of inv.taxes || []) {
-		v += Number.parseFloat(row.tax_amount || 0)
-	}
-	return v
-}
-
-function receiptVatLabel(inv, vatAmt) {
-	for (const row of inv.taxes || []) {
-		const rp = Number.parseFloat(row.rate || 0)
-		if (rp > 0) {
-			const rInt = Math.round(rp)
-			const pct = Math.abs(rp - rInt) < 1e-9 ? String(rInt) : String(rp)
-			return `VAT ${pct}%`
-		}
-	}
-	if (vatAmt > 0) return 'Thuế GTGT'
-	return 'VAT 0%'
-}
-
 /**
- * Build full ESC/POS receipt including e-invoice QR (native printer rendering).
+ * Các trường đầu/cuối phiếu, gom một chỗ cho cả bản in text lẫn bản in ảnh.
  *
- * @param {Object}  invoiceData
- * @param {Object}  options
- * @param {number}  options.paperWidth        - 58 or 80 (mm)
- * @param {Object}  [options.einvoiceQr]      - einvoice_self_service_qr object
- * @param {boolean} [options.openCashDrawer]  - send ESC/POS drawer kick after receipt (default true)
- * @param {number}  [options.cashDrawerPin]   - 0 = pin 2, 1 = pin 5 (ESC/POS m param)
+ * Lấy đúng những trường mà mẫu in "HÓA ĐƠN BÁN LẺ" của hệ thống dùng
+ * (pos_next/templates/print_formats/pos_ha_vang_receipt.html), để in thẳng
+ * xuống máy in nhiệt ra cùng một tờ với in qua trình duyệt.
  */
+function receiptHeaderFields(inv) {
+	const txt = (v) => (v == null ? '' : String(v).trim())
+	return {
+		storeName:
+			txt(inv.receipt_company_display_name) || txt(inv.company) || 'POS Next',
+		storeDisplay: txt(inv.store_display_name) || txt(inv.receipt_branch_label),
+		addr: txt(inv.store_address) || txt(inv.receipt_company_address),
+		phone: txt(inv.store_phone) || txt(inv.receipt_company_phone),
+		shop: txt(inv.shop_code),
+		shift: txt(inv.shift_label) || 'Ca 1',
+		salesperson: txt(inv.salesperson) || txt(inv.receipt_salesperson),
+		postingDate: txt(inv.posting_date_display) || txt(inv.posting_date) || fmtDate(inv.posting_date),
+		postingTime: txt(inv.posting_time),
+		printDate: txt(inv.print_date),
+		printTime: txt(inv.print_time),
+		storeHours: txt(inv.store_hours),
+		vip: txt(inv.vip_label),
+		isReprint: Boolean(inv.is_reprint),
+		customerPhone:
+			txt(inv.receipt_customer_phone) || txt(inv.contact_mobile) || txt(inv.mobile_no),
+		grossTotal: Number.parseFloat(inv.gross_total ?? inv.total ?? 0),
+		itemDiscount: Number.parseFloat(inv.item_discount_total ?? 0),
+		invoiceDiscount: Number.parseFloat(
+			inv.invoice_discount_total ?? Math.abs(inv.discount_amount ?? 0),
+		),
+		cashPaid: Number.parseFloat(inv.cash_paid ?? 0),
+		bankPaid: Number.parseFloat(inv.bank_paid ?? 0),
+		walletPaid: Number.parseFloat(inv.wallet_paid ?? 0),
+	}
+}
+
 export function buildReceiptESCPOS(invoiceData, options = {}) {
 	const {
 		paperWidth = 80,
@@ -303,41 +308,28 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 
 	b.init()
 
-	const storeName =
-		invoiceData.receipt_company_display_name || invoiceData.company || 'POS Next'
-	const branch = invoiceData.receipt_branch_label || invoiceData.pos_profile || ''
-	const addr = (invoiceData.receipt_company_address || '').trim()
-	const coPhone = (invoiceData.receipt_company_phone || '').trim()
-	const printDt =
-		invoiceData.receipt_print_datetime || fmtDate(invoiceData.posting_date)
-	const nv = (invoiceData.receipt_salesperson || '').trim()
-	const msch = (invoiceData.receipt_msch || '').trim()
-	const custPhone = (
-		(invoiceData.receipt_customer_phone || '').trim()
-		|| (invoiceData.contact_mobile || '').trim()
-		|| (invoiceData.mobile_no || '').trim()
-	)
+	const R = receiptHeaderFields(invoiceData)
 
 	// ── Header ───────────────────────────────────────────────────
+	// Cùng bố cục với mẫu in "HÓA ĐƠN BÁN LẺ" của hệ thống. Hai đường in phải
+	// ra cùng một tờ, nếu không cửa hàng lại cầm hai mẫu khác nhau như
+	// PM-TASK-00116.
 	b.alignCenter()
 		.boldOn().dblOn()
-		.line(storeName)
+		.line(R.storeName)
 		.dblOff().boldOff()
-	if (branch) b.line(`Chi nhánh: ${branch}`)
-	if (addr) b.line(addr)
-	if (coPhone) b.line(`Số điện thoại: ${coPhone}`)
-	b.boldOn().line('PHIẾU TÍNH TIỀN').boldOff()
-		.divider('=')
+	if (R.storeDisplay) b.boldOn().line(R.storeDisplay).boldOff()
+	if (R.addr) b.line(R.addr)
+	if (R.phone) b.line(`ĐT: ${R.phone}`)
+	b.boldOn().line('HÓA ĐƠN BÁN LẺ').boldOff()
+	if (R.isReprint) b.line('[ IN LẠI ]')
+	b.divider('=')
 
 	// ── Info ─────────────────────────────────────────────────────
 	b.alignLeft()
-	b.twoCol('Thời gian:', printDt)
-	b.twoCol('Mã HĐ:', invoiceData.name || '')
-	b.twoCol('MSCH:', msch || '—')
-	b.twoCol('NV:', nv || '—')
-	b.divider('-')
-	b.line(`Tên KH: ${invoiceData.customer_name || 'Khách lẻ'}`)
-	b.twoCol('SĐT KH:', custPhone || '—')
+	b.twoCol(`Số HĐ: ${invoiceData.name || ''}`, `Shop: ${R.shop || '—'}`)
+	b.twoCol(`Ngày: ${R.postingDate}`, `Giờ: ${R.postingTime}`)
+	b.twoCol(`Nhân viên: ${R.salesperson || '—'}`, `Ca: ${R.shift}`)
 	if (
 		invoiceData.status === 'Partly Paid' ||
 		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
@@ -381,39 +373,27 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.divider('-')
 
 	// ── Totals ───────────────────────────────────────────────────
-	b.twoCol('Tổng tiền hàng:', fmtAmt(invoiceData.total || 0))
-	const invDisc = Number.parseFloat(invoiceData.discount_amount || 0)
-	b.twoCol('Chiết khấu:', fmtAmt(Math.abs(invDisc)))
-	const vatAmt = receiptVatAmount(invoiceData)
-	b.twoCol(`${receiptVatLabel(invoiceData, vatAmt)}:`, fmtAmt(vatAmt))
-
+	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
+	b.twoCol('Tổng cộng:', fmtAmt(R.grossTotal))
+	b.twoCol('CK hàng hóa:', fmtAmt(R.itemDiscount))
+	b.twoCol('Chiết khấu:', fmtAmt(R.invoiceDiscount || R.itemDiscount))
 	b.divider('=')
 	b.boldOn().dblOn()
-	b.twoCol('Tổng cần thanh toán:', fmtAmt(invoiceData.grand_total))
+	b.twoCol('Tổng thanh toán:', fmtAmt(invoiceData.grand_total))
 	b.dblOff().boldOff()
+	b.twoCol('Chuyển khoản:', fmtAmt(R.bankPaid))
+	b.twoCol('Tiền mặt:', fmtAmt(R.cashPaid))
+	// Chỉ in khi khách thực sự tiêu điểm, để phiếu thường không thêm dòng thừa
+	if (R.walletPaid > 0) b.twoCol('Tiêu điểm:', fmtAmt(R.walletPaid))
+	b.twoCol('Tiền mặt phải trả:', fmtAmt(outstanding))
+	b.twoCol('Thối lại:', fmtAmt(invoiceData.change_amount || 0))
 
-	// ── Payments ─────────────────────────────────────────────────
-	const outstanding = Number.parseFloat(invoiceData.outstanding_amount || 0)
-	const { payments: receiptPayments, totalPaid: receiptTotalPaid } =
-		getReceiptPaymentSummary(invoiceData)
-	if (receiptPayments.length > 0 || receiptTotalPaid > 0 || outstanding > 0) {
-		b.divider('-')
-		b.boldOn().line('Thanh toán:').boldOff()
-		for (const p of receiptPayments) {
-			b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
-		}
-		if (receiptTotalPaid > 0) b.twoCol('Đã thanh toán:', fmtAmt(receiptTotalPaid))
-	}
-
-	const change = Number.parseFloat(invoiceData.change_amount || 0)
-	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
-
-	if (outstanding > 0) b.boldOn().twoCol('Còn nợ:', fmtAmt(outstanding)).boldOff()
-
-	const lyE = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
-	const lyB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
+	// ── Khách hàng ───────────────────────────────────────────────
 	b.divider('-')
-	b.line(`Điểm TL: +${lyE.toFixed(0)}; Tổng ${lyB.toFixed(0)}`)
+	b.boldOn().line('THÔNG TIN KHÁCH HÀNG').boldOff()
+	b.line(`Họ tên: ${invoiceData.customer_name || 'Khách lẻ'}`)
+	b.line(`Điện thoại: ${R.customerPhone || '—'}`)
+	b.line(`VIP: ${R.vip || '—'}`)
 
 	// ── E-invoice QR ──────────────────────────────────────────────
 	if (einvoiceQr && einvoiceQr.url) {
@@ -427,11 +407,17 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	}
 
 	// ── Footer ────────────────────────────────────────────────────
-	b.divider('=')
-		.alignCenter()
-	if (coPhone) b.line(`SĐT cửa hàng — ${coPhone}`)
-	b.line('Cảm ơn và hẹn gặp lại!')
-		.line('Powered by MBWNext POS')
+	b.divider('-')
+	b.alignLeft()
+	b.twoCol(`Ngày in: ${R.printDate}`, `Giờ in: ${R.printTime}`)
+	b.alignCenter()
+	if (R.storeHours) b.line(`Giờ mở cửa: ${R.storeHours}`)
+	b.boldOn().line('Cảm ơn! Hẹn gặp lại quý khách').boldOff()
+	b.divider('-')
+	b.line('Hàng mua rồi miễn đổi trả, xem chi tiết')
+	b.line('bảo hành tại cửa hàng.')
+	b.line('The purchased items are non-returnable,')
+	b.line('please refer to the in-store warranty policy.')
 
 	b.feedAndCut()
 	if (openCashDrawer) {
@@ -462,17 +448,25 @@ const BITMAP_DOTS      = { 58: 384, 80: 576 }
 const BITMAP_THRESHOLD = 80   // 31 % luminance → black
 const BITMAP_FONT_80   = 26   // px, for 80 mm paper
 const BITMAP_FONT_58   = 22   // px, for 58 mm paper
-const RECEIPT_LOGO_URL = "/assets/pos_next/images/bhbuudien-logo.png"
-
+// Logo lấy theo TỪNG CỬA HÀNG (POS Profile > Logo POS), giống mẫu in của hệ
+// thống. Trước đây đường dẫn logo bị gắn cứng vào ảnh của dự án Bách Hóa Bưu
+// Điện, nên cửa hàng Hạ Vàng nào ghép máy in USB là in ra logo của khách khác
+// (PM-TASK-00116).
 let _receiptLogoImage = null
+let _receiptLogoUrl = null
 let _receiptLogoPromise = null
 
-function loadReceiptLogoImage() {
-	if (_receiptLogoImage) return Promise.resolve(_receiptLogoImage)
-	if (_receiptLogoPromise) return _receiptLogoPromise
+function loadReceiptLogoImage(url) {
+	if (!url) return Promise.resolve(null)
+	if (_receiptLogoUrl === url) {
+		if (_receiptLogoImage) return Promise.resolve(_receiptLogoImage)
+		if (_receiptLogoPromise) return _receiptLogoPromise
+	}
 	if (typeof window === "undefined" || typeof Image === "undefined") {
 		return Promise.resolve(null)
 	}
+	_receiptLogoUrl = url
+	_receiptLogoImage = null
 	_receiptLogoPromise = new Promise((resolve) => {
 		const img = new Image()
 		img.crossOrigin = "anonymous"
@@ -481,9 +475,7 @@ function loadReceiptLogoImage() {
 			resolve(img)
 		}
 		img.onerror = () => resolve(null)
-		const src = RECEIPT_LOGO_URL.startsWith("http")
-			? RECEIPT_LOGO_URL
-			: `${window.location.origin}${RECEIPT_LOGO_URL}`
+		const src = url.startsWith("http") ? url : `${window.location.origin}${url}`
 		img.src = src
 	})
 	return _receiptLogoPromise
@@ -698,37 +690,22 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	} = options
 	const b = new BitmapReceiptBuilder(paperWidth)
 
-	const logo = await loadReceiptLogoImage()
+	const logo = await loadReceiptLogoImage(invoiceData.pos_logo_url)
 	if (logo) b.image(logo)
 
-	const storeName =
-		invoiceData.receipt_company_display_name || invoiceData.company || 'POS Next'
-	const branch = invoiceData.receipt_branch_label || invoiceData.pos_profile || ''
-	const addr = (invoiceData.receipt_company_address || '').trim()
-	const coPhoneBmp = (invoiceData.receipt_company_phone || '').trim()
-	const printDtBmp =
-		invoiceData.receipt_print_datetime || fmtDate(invoiceData.posting_date)
-	const nvBmp = (invoiceData.receipt_salesperson || '').trim()
-	const mschBmp = (invoiceData.receipt_msch || '').trim()
-	const custPhoneBmp = (
-		(invoiceData.receipt_customer_phone || '').trim()
-		|| (invoiceData.contact_mobile || '').trim()
-	)
+	const R = receiptHeaderFields(invoiceData)
 
-	b.text(storeName, { large: true, align: 'center' })
-	b.text('PHIẾU TÍNH TIỀN', { align: 'center' })
+	b.text(R.storeName, { large: true, align: 'center' })
+	if (R.storeDisplay) b.text(R.storeDisplay, { bold: true, align: 'center' })
+	if (R.addr) b.text(R.addr, { align: 'center' })
+	if (R.phone) b.text(`ĐT: ${R.phone}`, { align: 'center' })
+	b.text('HÓA ĐƠN BÁN LẺ', { bold: true, align: 'center' })
+	if (R.isReprint) b.text('[ IN LẠI ]', { align: 'center' })
 	b.divider(true)
 
-	b.twoCol('Thời gian:', printDtBmp)
-	b.twoCol('Mã HĐ:', invoiceData.name || '')
-	b.twoCol('MSCH:', mschBmp || '—')
-	b.twoCol('NV:', nvBmp || '—')
-	if (branch) b.twoCol('Chi nhánh:', branch)
-	if (addr) b.text(addr, { align: 'left' })
-	if (coPhoneBmp) b.twoCol('SĐT CH:', coPhoneBmp)
-	b.divider()
-	b.twoCol('Tên KH:', invoiceData.customer_name || 'Khách lẻ')
-	b.twoCol('SĐT KH:', custPhoneBmp || '—')
+	b.twoCol(`Số HĐ: ${invoiceData.name || ''}`, `Shop: ${R.shop || '—'}`)
+	b.twoCol(`Ngày: ${R.postingDate}`, `Giờ: ${R.postingTime}`)
+	b.twoCol(`Nhân viên: ${R.salesperson || '—'}`, `Ca: ${R.shift}`)
 	const isPartial = invoiceData.status === 'Partly Paid' ||
 		(invoiceData.outstanding_amount > 0 && invoiceData.outstanding_amount < invoiceData.grand_total)
 	if (isPartial) b.text('** THANH TOÁN MỘT PHẦN **', { align: 'center' })
@@ -748,33 +725,23 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	}
 	b.divider()
 
-	b.twoCol('Tổng tiền hàng:', fmtAmt(invoiceData.total || 0))
-	const discB = Number.parseFloat(invoiceData.discount_amount || 0)
-	b.twoCol('Chiết khấu:', fmtAmt(Math.abs(discB)))
-	const vatAmtB = receiptVatAmount(invoiceData)
-	b.twoCol(`${receiptVatLabel(invoiceData, vatAmtB)}:`, fmtAmt(vatAmtB))
-	b.divider(true)
-	b.twoCol('Tổng cần thanh toán:', fmtAmt(invoiceData.grand_total))
-
 	const outstandingBmp = Number.parseFloat(invoiceData.outstanding_amount || 0)
-	const { payments: receiptPaymentsBmp, totalPaid: receiptTotalPaidBmp } =
-		getReceiptPaymentSummary(invoiceData)
-	if (receiptPaymentsBmp.length > 0 || receiptTotalPaidBmp > 0 || outstandingBmp > 0) {
-		b.divider()
-		b.text('Thanh toán:')
-		for (const p of receiptPaymentsBmp) {
-			b.twoCol(`  ${p.mode_of_payment}:`, fmtAmt(p.amount))
-		}
-		if (receiptTotalPaidBmp > 0) b.twoCol('Đã thanh toán:', fmtAmt(receiptTotalPaidBmp))
-	}
-	const change = Number.parseFloat(invoiceData.change_amount || 0)
-	if (change > 0) b.twoCol('Tiền thừa:', fmtAmt(change))
-	if (outstandingBmp > 0) b.text(`Còn nợ: ${fmtAmt(outstandingBmp)}`)
+	b.twoCol('Tổng cộng:', fmtAmt(R.grossTotal))
+	b.twoCol('CK hàng hóa:', fmtAmt(R.itemDiscount))
+	b.twoCol('Chiết khấu:', fmtAmt(R.invoiceDiscount || R.itemDiscount))
+	b.divider(true)
+	b.twoCol('Tổng thanh toán:', fmtAmt(invoiceData.grand_total))
+	b.twoCol('Chuyển khoản:', fmtAmt(R.bankPaid))
+	b.twoCol('Tiền mặt:', fmtAmt(R.cashPaid))
+	if (R.walletPaid > 0) b.twoCol('Tiêu điểm:', fmtAmt(R.walletPaid))
+	b.twoCol('Tiền mặt phải trả:', fmtAmt(outstandingBmp))
+	b.twoCol('Thối lại:', fmtAmt(invoiceData.change_amount || 0))
 
-	const lyEB = Number.parseFloat(invoiceData.receipt_loyalty_earned ?? 0)
-	const lyBB = Number.parseFloat(invoiceData.receipt_loyalty_balance ?? 0)
 	b.divider()
-	b.text(`Điểm TL: +${lyEB.toFixed(0)}; Tổng ${lyBB.toFixed(0)}`)
+	b.text('THÔNG TIN KHÁCH HÀNG', { bold: true })
+	b.text(`Họ tên: ${invoiceData.customer_name || 'Khách lẻ'}`)
+	b.text(`Điện thoại: ${R.customerPhone || '—'}`)
+	b.text(`VIP: ${R.vip || '—'}`)
 
 	if (einvoiceQr && einvoiceQr.url) {
 		b.divider()
@@ -787,9 +754,17 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	// Footer built separately so QR codes print before it
 	const bf = new BitmapReceiptBuilder(paperWidth)
 	bf.divider(true)
-	if (coPhoneBmp) bf.text(`SĐT cửa hàng — ${coPhoneBmp}`, { align: 'center' })
-	bf.text('Cảm ơn và hẹn gặp lại!', { align: 'center' })
-	bf.text('MBWNext POS', { align: 'center' })
+	bf.twoCol(`Ngày in: ${R.printDate}`, `Giờ in: ${R.printTime}`)
+	if (R.storeHours) bf.text(`Giờ mở cửa: ${R.storeHours}`, { align: 'center' })
+	bf.text('Cảm ơn! Hẹn gặp lại quý khách', { bold: true, align: 'center' })
+	bf.divider()
+	bf.text('Hàng mua rồi miễn đổi trả, xem chi tiết bảo hành tại cửa hàng.', {
+		align: 'center',
+	})
+	bf.text(
+		'The purchased items are non-returnable, please refer to the in-store warranty policy.',
+		{ align: 'center' },
+	)
 
 	const init     = new Uint8Array([ESC, 0x40, FS, 0x2e])
 	const mainBm   = b.buildBitmapBytes()

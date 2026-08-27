@@ -232,8 +232,12 @@
 							<div
 								class="absolute inset-y-0 start-0 ps-3 flex items-center pointer-events-none"
 							>
+								<div
+									v-if="customerSearching || (!customersLoaded && customerSearchStore.loading)"
+									class="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-blue-500"
+								></div>
 								<svg
-									v-if="customersLoaded"
+									v-else
 									class="w-4 h-4 text-gray-400"
 									fill="none"
 									stroke="currentColor"
@@ -246,10 +250,6 @@
 										d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
 									/>
 								</svg>
-								<div
-									v-else
-									class="animate-spin rounded-full h-3.5 w-3.5 border-b-2 border-blue-500"
-								></div>
 							</div>
 
 							<!-- Native Input for Instant Search -->
@@ -378,12 +378,18 @@
 					</div>
 
 					<!-- No Results + Create New Option -->
-					<div v-else-if="customerSearch.trim().length >= 2">
+					<div v-else-if="customerSearch.trim().length >= 2 && !customerSearching">
 						<div
 							class="px-2 py-1.5 text-center text-[11px] font-medium text-gray-700 border-b border-gray-100"
 						>
 							{{ __('No results for "{0}"', [customerSearch]) }}
 						</div>
+					</div>
+					<div
+						v-else-if="customerSearch.trim().length >= 2 && customerSearching"
+						class="px-2 py-1.5 text-center text-[11px] text-gray-500 border-b border-gray-100"
+					>
+						{{ __('Searching...') }}
 					</div>
 
 					<!-- Create New Customer Option -->
@@ -860,29 +866,37 @@
 						<div class="flex-1 min-w-0 flex flex-col justify-center">
 							<!-- Single row: Name + Qty + UOM + Price + Total + Remove -->
 							<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
-								<div class="flex items-center gap-1 flex-1 min-w-0">
-									<h4
-										class="text-[11px] font-bold truncate leading-tight min-w-0"
-										:class="item.is_free_display ? 'text-green-800' : 'text-gray-900'"
-									>
-										{{ item.item_name }}
-									</h4>
-									<span
-										v-if="item.is_free_display"
-										class="inline-flex items-center px-1 py-0.5 bg-green-600 text-white rounded-full text-[8px] font-bold flex-shrink-0"
-									>
-										{{ __("Free gift") }}
-									</span>
-									<div
-										v-if="item.discount_amount && item.discount_amount > 0"
-										class="inline-flex items-center px-1 py-0.5 bg-red-50 text-red-700 rounded-full text-[8px] font-bold border border-red-200 flex-shrink-0"
-									>
-										{{
-											__("{0}%", [
-												Number(item.discount_percentage).toFixed(0),
-											])
-										}}
+								<div class="flex flex-col min-w-0 flex-1">
+									<div class="flex items-center gap-1 min-w-0">
+										<h4
+											class="text-[11px] font-bold truncate leading-tight min-w-0"
+											:class="item.is_free_display ? 'text-green-800' : 'text-gray-900'"
+										>
+											{{ item.item_name }}
+										</h4>
+										<span
+											v-if="item.is_free_display"
+											class="inline-flex items-center px-1 py-0.5 bg-green-600 text-white rounded-full text-[8px] font-bold flex-shrink-0"
+										>
+											{{ __("Free gift") }}
+										</span>
+										<div
+											v-if="item.discount_amount && item.discount_amount > 0"
+											class="inline-flex items-center px-1 py-0.5 bg-red-50 text-red-700 rounded-full text-[8px] font-bold border border-red-200 flex-shrink-0"
+										>
+											{{
+												__("{0}%", [
+													Number(item.discount_percentage).toFixed(0),
+												])
+											}}
+										</div>
 									</div>
+									<span
+										v-if="item.item_code"
+										class="text-[9px] font-semibold text-gray-600 truncate leading-tight"
+									>
+										{{ item.item_code }}
+									</span>
 								</div>
 
 								<!-- Quantity -->
@@ -1102,19 +1116,18 @@
 								</button>
 							</div>
 
-							<!-- Inline Item Discount Controls + DVNL -->
+							<!-- Inline Item Discount Controls + DVNL (DVNL chỉ hiện khi có service_surcharge_item) -->
 							<div
 								v-if="
 									!item.is_free_display &&
-									(settingsStore.allowItemDiscount ||
-									item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh'))
+									(settingsStore.allowItemDiscount || showColdStorageToggle(item))
 								"
 								class="mt-0.5 flex items-center justify-between gap-1 text-[10px] text-gray-600"
 								@click.stop
 							>
 								<div class="flex items-center gap-1 flex-1 min-w-0">
 									<label
-										v-if="item.item_code !== (coldStorageFeeItemCode || 'Phí bảo quản lạnh')"
+										v-if="showColdStorageToggle(item)"
 										class="flex items-center gap-1 cursor-pointer select-none flex-shrink-0"
 									>
 										<input
@@ -1167,7 +1180,8 @@
 										<input
 											type="number"
 											min="0"
-											step="0.01"
+											:step="getInlineDiscountType(item) === 'percentage' ? 'any' : '0.01'"
+											inputmode="decimal"
 											class="w-full h-6 border border-gray-300 rounded ps-1 pe-4 text-[10px] text-right focus:outline-none focus:ring-1 focus:ring-blue-500"
 											:value="
 												getInlineDiscountType(item) === 'percentage'
@@ -1224,8 +1238,9 @@
 
 		<!-- Totals Summary -->
 		<div class="p-1.5 sm:p-2 bg-white border-t border-gray-200">
+			<!-- Discount, excluding the coupon — the coupon has its own line below -->
 			<div
-				v-if="items.length > 0 && discountAmount > 0"
+				v-if="items.length > 0 && displayDiscountAmount > 0"
 				class="mb-1.5 flex items-center justify-between bg-red-50 rounded px-1.5 py-1"
 			>
 				<div class="flex items-center gap-1">
@@ -1243,7 +1258,35 @@
 					<span class="text-xs font-bold text-red-700">{{ __("Discount") }}</span>
 				</div>
 				<span class="text-sm font-extrabold text-red-600 text-center min-w-[60px]">{{
-					formatCurrency(discountAmount)
+					formatCurrency(displayDiscountAmount)
+				}}</span>
+			</div>
+
+			<!-- Coupon discount: shown separately, with its % when the coupon is percentage-based -->
+			<div
+				v-if="items.length > 0 && couponDiscountAmount > 0"
+				class="mb-1.5 flex items-center justify-between bg-purple-50 rounded px-1.5 py-1"
+			>
+				<div class="flex items-center gap-1 min-w-0">
+					<svg
+						class="w-3.5 h-3.5 text-purple-600 flex-shrink-0"
+						fill="currentColor"
+						viewBox="0 0 20 20"
+					>
+						<path
+							d="M10 2a1 1 0 011 1v1a1 1 0 002 0V3a1 1 0 112 0v1a2 2 0 002 2v2a2 2 0 000 4v2a2 2 0 00-2 2v1a1 1 0 11-2 0v-1a1 1 0 10-2 0v1a1 1 0 11-2 0v-1a1 1 0 10-2 0v1a1 1 0 11-2 0v-1a2 2 0 00-2-2v-2a2 2 0 000-4V6a2 2 0 002-2V3a1 1 0 011-1h4z"
+						/>
+					</svg>
+					<span class="text-xs font-bold text-purple-700 truncate">{{ __("Coupon Discount") }}</span>
+					<span
+						v-if="couponDiscountPercentage > 0"
+						class="text-[10px] font-bold text-purple-700 bg-purple-200 rounded px-1 py-0.5 flex-shrink-0"
+					>
+						{{ couponDiscountPercentage }}%
+					</span>
+				</div>
+				<span class="text-sm font-extrabold text-purple-600 text-center min-w-[60px]">{{
+					formatCurrency(couponDiscountAmount)
 				}}</span>
 			</div>
 
@@ -1268,10 +1311,10 @@
 				<button
 					type="button"
 					@click="handleProceedToPayment"
-					:disabled="items.length === 0"
+					:disabled="items.length === 0 || offersPending"
 					:class="[
 						'flex-1 py-2.5 px-3 rounded-lg font-bold text-xs text-white transition-all flex items-center justify-center touch-manipulation',
-						items.length === 0
+						items.length === 0 || offersPending
 							? 'bg-gray-300 cursor-not-allowed'
 							: 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 shadow-lg hover:shadow-xl active:scale-[0.98]',
 					]"
@@ -1290,7 +1333,7 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{ __("Checkout") }}</span>
+					<span>{{ offersPending ? __("Đang tính khuyến mại...") : __("Checkout") }}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
@@ -1364,6 +1407,20 @@ const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
 const { formatQuantity } = useFormatters(); // Quantity formatting utilities
 
+/**
+ * Khuyến mại của giỏ hiện tại chưa tính xong → khoá Thanh toán.
+ *
+ * Ngay sau khi tải lại trang POS, việc áp khuyến mại xếp hàng sau các tác vụ
+ * nặng và có thể mất hàng chục giây. Trước khi có chốt chặn này, thu ngân quét
+ * hàng rồi bấm Thanh toán ngay là bán ĐÚNG GIÁ GỐC, mất phần khuyến mại mà
+ * không có cảnh báo nào (PM-TASK-00060).
+ */
+const offersPending = computed(() => {
+	if (!props.items?.length) return false;
+	if (!offersStore.hasFetched) return true;
+	return !cartStore.offersSettled;
+});
+
 function handleProceedToPayment() {
 	emit("proceed-to-payment");
 }
@@ -1401,6 +1458,16 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	// Coupon-only portion of discountAmount — displayed on its own line, not lumped
+	// into the Discount line above it
+	couponDiscount: {
+		type: Number,
+		default: 0,
+	},
+	appliedCoupon: {
+		type: Object,
+		default: null,
+	},
 	grandTotal: {
 		type: Number,
 		default: 0,
@@ -1418,10 +1485,10 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
-	/** Item code cho dịch vụ làm nóng/lạnh (để ẩn checkbox trên chính dòng dịch vụ). */
+	/** Item code cho dịch vụ làm nóng/lạnh. Rỗng = ẩn DVNL (chưa cấu hình trên POS Profile). */
 	coldStorageFeeItemCode: {
 		type: String,
-		default: 'Phí bảo quản lạnh',
+		default: '',
 	},
 });
 
@@ -1465,12 +1532,20 @@ const emit = defineEmits([
 const customerSearch = ref(""); // Current search query
 const customerSearchContainer = ref(null); // Ref to search container for click-outside detection
 const customerSearchFocused = ref(false); // Track if search input is focused
-// Use Pinia store for allCustomers (shared with CustomerDialog, synced on customer creation)
+const customerResults = ref([]); // Debounced search results (server / IndexedDB)
 const allCustomers = computed(() => customerSearchStore.allCustomers);
-const customersLoaded = computed(() => customerSearchStore.allCustomers.length > 0);
+// Online: ready immediately. Offline: wait until cache is available.
+const customersLoaded = computed(
+	() =>
+		!isOffline() ||
+		customerSearchStore.searchReady ||
+		customerSearchStore.allCustomers.length > 0,
+);
+const customerSearching = computed(() => customerSearchStore.searching);
 const selectedIndex = ref(-1); // Keyboard navigation index for search results
 const availableGiftCards = ref([]); // Available gift cards for current customer
 const previousCustomer = ref(null); // Store previous customer for restore on blur
+let customerSearchTimer = null;
 
 // Edit item dialog state
 const showEditDialog = ref(false); // Controls edit dialog visibility
@@ -1598,69 +1673,30 @@ watch(
  */
 const appliedOfferCount = computed(() => (props.appliedOffers || []).length);
 
-/**
- * Pre-computed customer lookup map for O(1) access by ID.
- * Rebuilt when allCustomers changes.
- */
-const customerMap = computed(() => {
-	const map = new Map();
-	for (const cust of allCustomers.value) {
-		map.set(cust.name, cust);
+function showFrequentCustomers() {
+	const frequent = customerSearchStore.getFrequentCustomerObjects(5);
+	if (frequent.length) {
+		customerResults.value = frequent;
+		return;
 	}
-	return map;
-});
+	customerResults.value = allCustomers.value.slice(0, 5);
+}
 
-/**
- * Instant customer search results with in-memory filtering.
- *
- * Performs zero-latency filtering on the cached customer list.
- * Searches across customer_name, mobile_no, and customer ID.
- * Returns max 20 results to keep dropdown performant.
- *
- * @returns {Array} Filtered customer objects matching search query
- */
-const customerResults = computed(() => {
-	const searchValue = customerSearch.value.trim().toLowerCase();
-
-	// When focused with no/short search term, show frequent customers (top 5)
-	if (searchValue.length < 2) {
-		if (customerSearchFocused.value) {
-			// Get frequent customer IDs from the store
-			const frequentIds = customerSearchStore.frequentCustomers.slice(0, 5);
-			if (frequentIds.length > 0) {
-				// O(1) lookup using pre-computed map instead of O(n) find
-				const frequentCustomers = [];
-				for (const id of frequentIds) {
-					const cust = customerMap.value.get(id);
-					if (cust) frequentCustomers.push(cust);
-				}
-				return frequentCustomers;
-			}
-			// If no frequent customers, show first 5 from the list
-			return allCustomers.value.slice(0, 5);
-		}
-		return [];
+async function runCustomerSearch(term) {
+	const q = term.trim();
+	if (q.length < 2) {
+		if (customerSearchFocused.value) showFrequentCustomers();
+		else customerResults.value = [];
+		return;
 	}
-
-	// Instant in-memory filter
-	return allCustomers.value
-		.filter((cust) => {
-			const name = (cust.customer_name || "").toLowerCase();
-			const mobile = (cust.mobile_no || "").toLowerCase();
-			const id = (cust.name || "").toLowerCase();
-
-			return (
-				name.includes(searchValue) ||
-				mobile.includes(searchValue) ||
-				id.includes(searchValue)
-			);
-		})
-		.slice(0, 20);
-});
+	const results = await customerSearchStore.searchCustomers(q, props.posProfile, 20);
+	// Ignore stale responses if the input changed
+	if (customerSearch.value.trim() !== q) return;
+	customerResults.value = results;
+}
 
 /**
  * Reset keyboard selection index when search results change.
- * Ensures the selection doesn't point to a non-existent result.
  */
 watch(customerResults, () => {
 	selectedIndex.value = -1;
@@ -1675,11 +1711,16 @@ const totalQuantity = computed(() => {
 
 /**
  * Dịch vụ làm nóng/lạnh: lưu per-item (item_code + uom) thay vì phân bổ theo thứ tự.
- * Tránh lỗi: tích item thứ 2 thì item đầu cũng tích theo.
+ * Chỉ bật khi POS Profile có service_surcharge_item.
  */
 const coldStorageFeeItemCode = computed(
-	() => props.coldStorageFeeItemCode || 'Phí bảo quản lạnh'
+	() => props.coldStorageFeeItemCode || ''
 );
+
+function showColdStorageToggle(item) {
+	const code = coldStorageFeeItemCode.value;
+	return Boolean(code) && item.item_code !== code;
+}
 
 // Map: key (item_code|uom) -> quantity đã chọn dịch vụ cho dòng đó
 const coldStorageItems = ref({});
@@ -1691,6 +1732,10 @@ function getItemKey(item) {
 // Sync coldStorageItems khi có fee lines sẵn (load từ cart cũ) - phân bổ theo thứ tự
 function syncColdStorageFromCart() {
 	const code = coldStorageFeeItemCode.value;
+	if (!code) {
+		coldStorageItems.value = {};
+		return;
+	}
 	const items = (props.items || []).filter((i) => i.item_code !== code && !i.is_free_display);
 	const totalFee = (props.items || [])
 		.filter((i) => i.item_code === code)
@@ -1755,6 +1800,8 @@ function isColdStorageCheckedForItem(item) {
 }
 
 function toggleColdStorageForItem(item, checked, quantity) {
+	if (!coldStorageFeeItemCode.value) return;
+
 	const qty = Math.max(0, Math.floor(Number(quantity) || 0));
 	if (qty <= 0) return;
 
@@ -1805,6 +1852,23 @@ const displaySubtotal = computed(() => {
  */
 const displayGrandTotal = computed(() => props.grandTotal);
 
+/** Coupon discount shown on its own line, never inside the Discount line. */
+const couponDiscountAmount = computed(() =>
+	Math.max(0, Number(props.couponDiscount) || 0),
+);
+
+/** Discount line excludes the coupon so the two lines don't double-count it. */
+const displayDiscountAmount = computed(() =>
+	Math.max(0, (Number(props.discountAmount) || 0) - couponDiscountAmount.value),
+);
+
+/** Percentage-type coupons show their % next to the label; amount-type show nothing. */
+const couponDiscountPercentage = computed(() => {
+	const coupon = props.appliedCoupon;
+	if (!coupon || coupon.type !== "Percentage") return 0;
+	return Number(coupon.percentage) || 0;
+});
+
 /**
  * ============================================================================
  * FUNCTIONS
@@ -1816,12 +1880,24 @@ const displayGrandTotal = computed(() => props.grandTotal);
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Handle customer search input with instant reactivity.
- * Updates the customerSearch ref which triggers computed filtering.
- * @param {Event} event - Input event from search field
+ * Debounced customer search — server-side when online (avoids scanning 300k+ in UI).
  */
 function handleSearchInput(event) {
 	customerSearch.value = event.target.value;
+	const term = customerSearch.value;
+
+	if (customerSearchTimer) clearTimeout(customerSearchTimer);
+
+	if (term.trim().length < 2) {
+		customerSearchStore.clearSearch();
+		if (customerSearchFocused.value) showFrequentCustomers();
+		else customerResults.value = [];
+		return;
+	}
+
+	customerSearchTimer = setTimeout(() => {
+		runCustomerSearch(term);
+	}, 250);
 }
 
 // Track if customer history has been loaded this session
@@ -1832,10 +1908,12 @@ const customerHistoryLoaded = ref(false);
  */
 function handleSearchFocus() {
 	customerSearchFocused.value = true;
-	// Load customer history only once per session for faster subsequent focuses
 	if (!customerHistoryLoaded.value) {
 		customerSearchStore.loadCustomerHistory();
 		customerHistoryLoaded.value = true;
+	}
+	if (customerSearch.value.trim().length < 2) {
+		showFrequentCustomers();
 	}
 }
 
@@ -1889,9 +1967,10 @@ function handleKeydown(event) {
  */
 function selectCustomer(cust) {
 	// Track selection for frequent customers feature
-	customerSearchStore.trackCustomerSelection(cust.name);
+	customerSearchStore.trackCustomerSelection(cust.name, cust);
 	emit("select-customer", cust);
 	customerSearch.value = "";
+	customerResults.value = [];
 	selectedIndex.value = -1;
 	customerSearchFocused.value = false;
 	previousCustomer.value = null;

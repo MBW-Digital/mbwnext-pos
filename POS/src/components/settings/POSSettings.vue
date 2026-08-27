@@ -153,6 +153,11 @@
 												:label="__('Allow Negative Stock')"
 												:description="__('Enable selling items even when stock reaches zero or below. Integrates with Back Office stock settings.')"
 											/>
+											<CheckboxField
+												v-model="settings.hide_out_of_stock_items"
+												:label="__('Hide Out of Stock Items')"
+												:description="__('Hide items with zero or negative stock from the item list. Only items available in the POS warehouse will be shown.')"
+											/>
 											<div class="mt-3 p-3 bg-blue-100 rounded-md">
 												<div class="flex items-start gap-2">
 													<svg class="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -578,6 +583,7 @@ const settings = ref({
 				silent_print: 0,
 				allow_skip_manual_batch_selection: 0,
 				allow_negative_stock: 0,
+				hide_out_of_stock_items: 0,
 	tax_inclusive: 0,
 	allow_manual_cash_drawer: 0,
 })

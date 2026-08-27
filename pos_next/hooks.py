@@ -51,6 +51,7 @@ _asset_version = get_build_version()
 doctype_js = {
 	"Material Request": "controllers/js/material_request.js",
 	"Loyalty Program": "public/js/loyalty_program.js",
+	"Mode of Payment": "public/js/mode_of_payment.js",
 }
 doctype_list_js = {
 	"Sales Invoice": "public/js/sales_invoice_list.js",
@@ -125,8 +126,9 @@ fixtures = [
 				"name",
 				"in",
 				[
-					"POS Next Receipt",
-					"POS HA Vang Receipt",
+					# Nhánh ha_vang chỉ phục vụ Hạ Vàng. Mẫu "POS Next Receipt"
+					# là mẫu của dự án Bách Hóa Bưu Điện, đã gỡ (PM-TASK-00116).
+					"POS Ha Vang Receipt",
 				]
 			]
 		]
@@ -217,11 +219,17 @@ doc_events = {
 		"validate": "pos_next.validations.validate_item"
 	},
 	"Customer": {
-		"before_insert": "pos_next.api.customers.set_customer_code_if_mandatory",
+		"before_insert": [
+			"pos_next.api.customers.set_default_territory_and_customer_group",
+			"pos_next.api.customers.set_customer_code_if_mandatory"
+		],
 		"after_insert": "pos_next.api.customers.auto_assign_loyalty_program"
 	},
 	"Sales Invoice": {
-        "before_validate": "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
+        "before_validate": [
+            "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
+            "pos_next.api.sales_invoice_hooks.capture_pos_authoritative_discounts"
+        ],
 		"validate": [
 			"pos_next.api.sales_invoice_hooks.validate",
 			"pos_next.api.wallet.validate_wallet_payment"
@@ -239,6 +247,18 @@ doc_events = {
 	},
 	"Loyalty Program": {
 		"validate": "pos_next.api.loyalty_program_hooks.validate",
+	},
+	"Pricing Rule": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotional Scheme": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotion Campaign": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
 	},
 }
 

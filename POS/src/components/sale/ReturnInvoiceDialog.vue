@@ -383,11 +383,11 @@
 								<!-- Rate & Amount -->
 								<div class="text-center min-w-[100px]">
 									<p class="text-sm font-bold text-gray-900">
-										{{ formatCurrency((item.rate_with_tax || item.rate) * item.return_qty) }}
+										{{ formatCurrency(lineReturnDisplayAmount(item)) }}
 									</p>
 									<p class="text-xs text-gray-500 mt-0.5 flex items-center gap-1 flex-wrap justify-center">
 										<span>@ {{ formatCurrency(item.price_list_rate || item.rate) }}/{{ item.uom }}</span>
-										<span v-if="item.discount_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(item.discount_per_unit) }}</span>
+										<span v-if="lineDiscountDisplay(item) > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(lineDiscountDisplay(item)) }}</span>
 										<span v-if="item.tax_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">+{{ formatCurrency(item.tax_per_unit) }}</span>
 									</p>
 								</div>
@@ -470,11 +470,11 @@
 									<span class="text-xs text-gray-600 text-start">{{ __('Amount:') }}</span>
 									<div class="text-end">
 										<p class="text-base font-bold text-gray-900">
-											{{ formatCurrency((item.rate_with_tax || item.rate) * item.return_qty) }}
+											{{ formatCurrency(lineReturnDisplayAmount(item)) }}
 										</p>
 										<p class="text-xs text-gray-500 flex items-center gap-1 flex-wrap justify-end">
 											<span>@ {{ formatCurrency(item.price_list_rate || item.rate) }}/{{ item.uom }}</span>
-											<span v-if="item.discount_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(item.discount_per_unit) }}</span>
+											<span v-if="lineDiscountDisplay(item) > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">−{{ formatCurrency(lineDiscountDisplay(item)) }}</span>
 											<span v-if="item.tax_per_unit > 0" class="inline-flex items-center px-1 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700">+{{ formatCurrency(item.tax_per_unit) }}</span>
 										</p>
 									</div>
@@ -673,8 +673,8 @@
 						<!-- KM Reclaim breakdown -->
 						<template v-if="needsKmReclaim || (kmReclaimConfirmed && kmReclaimAmount > 0)">
 							<div class="flex justify-between items-center text-sm pt-2 border-t border-red-200">
-								<span class="text-gray-600">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
-								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotalAtListPrice) }}</span>
+								<span class="text-gray-600">{{ __('Hoàn hàng (giá đã bán):') }}</span>
+								<span class="font-medium text-gray-700">{{ formatCurrency(returnTotal) }}</span>
 							</div>
 							<div class="flex justify-between items-center text-sm">
 								<span class="text-red-600 font-medium">{{ __('Thu hồi KM:') }}</span>
@@ -822,8 +822,8 @@
 						</span>
 					</div>
 					<div class="border-t border-gray-200 pt-2 flex justify-between">
-						<span class="text-gray-500">{{ __('Hoàn hàng (giá list + thuế):') }}</span>
-						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotalAtListPrice) }}</span>
+						<span class="text-gray-500">{{ __('Hoàn hàng (giá đã bán):') }}</span>
+						<span class="font-semibold text-gray-800">{{ formatCurrency(returnTotal) }}</span>
 					</div>
 					<div class="flex justify-between text-red-600">
 						<span>{{ __('Thu hồi KM:') }}</span>
@@ -831,7 +831,7 @@
 					</div>
 					<div class="border-t border-gray-300 pt-2 flex justify-between">
 						<span class="font-semibold text-gray-700">{{ __('Thực hoàn:') }}</span>
-						<span class="font-bold text-gray-900">{{ formatCurrency(returnTotalAtListPrice - kmReclaimDialog.reclaim) }}</span>
+						<span class="font-bold text-gray-900">{{ formatCurrency(Math.max(0, returnTotal - kmReclaimDialog.reclaim)) }}</span>
 					</div>
 				</div>
 			</div>
@@ -867,8 +867,6 @@ const { isOffline } = useOffline()
 // ============================================
 // Constants (hoisted for performance)
 // ============================================
-const INVOICE_PATTERN = /^(ACC-SINV|SINV|SI|INV|ACC)/i
-const INVOICE_FORMAT_PATTERN = /^\d{4,}$/
 const DATE_FORMAT_OPTIONS = { year: "numeric", month: "short", day: "numeric" }
 const MAX_SUGGESTIONS = 8
 const SEARCH_DEBOUNCE_MS = 300
@@ -1040,7 +1038,11 @@ const fetchInvoiceResource = createResource({
 				company: data.company,
 				posting_date: origInvoice.posting_date,
 				grand_total: origInvoice.grand_total,
+				total: origInvoice.total,
+				discount_amount: origInvoice.discount_amount,
+				apply_discount_on: origInvoice.apply_discount_on,
 				paid_amount: origInvoice.paid_amount,
+				change_amount: origInvoice.change_amount,
 				outstanding_amount: origInvoice.outstanding_amount,
 				payments: origInvoice.payments || [],
 				docstatus: 1, // Already validated by backend
@@ -1160,7 +1162,15 @@ const createReturnResource = createResource({
 				item_code: item.item_code,
 				item_name: item.item_name,
 				qty: -Math.abs(item.return_qty),
+				// Hoàn đúng đơn giá đã bán của dòng (đã trừ CK cấp dòng / Pricing
+				// Rule, chưa phân bổ CK bill-level). KHÔNG dùng price_list_rate:
+				// giá gốc sẽ hoàn thừa đúng bằng phần khuyến mại của món hàng.
+				// CK bill-level nếu phải thu hồi thì đi qua write_off (thu hồi KM).
 				rate: item.rate,
+				// Forward the original price_list_rate/item_tax_template so tax
+				// is reversed the same way it was originally applied.
+				price_list_rate: item.price_list_rate,
+				item_tax_template: item.item_tax_template,
 				warehouse: item.warehouse,
 				uom: item.uom,
 				conversion_factor: item.conversion_factor || 1,
@@ -1179,6 +1189,33 @@ const createReturnResource = createResource({
 			remarks:
 				returnReason.value ||
 				__("Return against {0}", [originalInvoice.value.name]),
+		}
+
+		// Chiết khấu bill của đơn gốc phải theo hàng trả về, PHÂN BỔ THEO TỈ LỆ.
+		//
+		// Coupon phần trăm (vd CK15 giảm 15%) áp trên tổng đơn, nên trả bớt hàng
+		// thì phần giảm cũng phải bớt theo. Trước đây phiếu trả không mang chiết
+		// khấu nào, nên chứng từ ghi hoàn NGUYÊN giá dòng trong khi cửa hàng chỉ
+		// trả khách 85% — hai số lệch nhau và để lại công nợ treo trên cả đơn gốc
+		// lẫn phiếu trả (PM-TASK-00100: ghi hoàn 3.148.850 / thực hoàn 2.676.522,
+		// treo 472.328).
+		//
+		// Không lấy nguyên chiết khấu của đơn gốc: trả 1 trong 3 món mà trừ cả
+		// khoản giảm của cả đơn thì hoàn thiếu cho khách.
+		const ckBillGoc = Math.abs(Number(originalInvoice.value?.discount_amount) || 0)
+		const tongDongGoc = Math.abs(Number(originalInvoice.value?.total) || 0)
+		if (ckBillGoc > 0 && tongDongGoc > 0) {
+			const tongDongTra = selectedItems.value.reduce(
+				(sum, item) =>
+					sum + roundCurrency(Number(item.return_qty || 0) * Number(item.rate || 0)),
+				0,
+			)
+			const ckPhanBo = roundCurrency((ckBillGoc * tongDongTra) / tongDongGoc)
+			if (ckPhanBo > 0) {
+				invoiceData.apply_discount_on =
+					originalInvoice.value?.apply_discount_on || "Grand Total"
+				invoiceData.discount_amount = -ckPhanBo
+			}
 		}
 
 		// KM reclaim: gửi write_off_amount và write_off_account
@@ -1314,16 +1351,14 @@ const allPaidItemsFullyReturned = computed(() => {
 	)
 })
 
-function lineReturnAtListPrice(item) {
+function lineReturnDisplayAmount(item) {
+	if (item.is_free_item) return 0
 	const qty = Number(item.return_qty) || 0
-	const priceListRate = Number(item.price_list_rate) || 0
-	const netRate = Number(item.rate ?? item.net_rate) || 0
-	const taxPerUnit = Number(item.tax_per_unit) || 0
-	let taxOnList = taxPerUnit
-	if (priceListRate > 0 && netRate > 0 && taxPerUnit > 0) {
-		taxOnList = priceListRate * (taxPerUnit / netRate)
-	}
-	return roundCurrency(qty * (priceListRate + taxOnList))
+	return roundCurrency(qty * (item.rate_with_tax || item.rate))
+}
+
+function lineDiscountDisplay(item) {
+	return Number(item.discount_per_unit) || 0
 }
 
 // Giá trị còn lại để so với min_amt — cùng cơ sở với POS lúc bán (price_list_rate × qty, trước CK dòng/bill)
@@ -1383,7 +1418,8 @@ const filteredReturnItems = computed(() => {
 
 const hasOpenShift = computed(() => Boolean(props.posOpeningShift))
 
-// Hoàn theo giá net đã ghi trên HĐ (sau phân bổ chiết khấu bill)
+// Hoàn theo đơn giá đã bán của dòng: đã trừ CK cấp dòng (Pricing Rule), CHƯA
+// phân bổ CK bill-level — phần bill-level chỉ bị trừ khi phải thu hồi KM.
 const returnTotal = computed(() =>
 	roundCurrency(
 		selectedItems.value.reduce(
@@ -1395,24 +1431,21 @@ const returnTotal = computed(() =>
 	),
 )
 
-// Hoàn theo giá list + thuế (trước chiết khấu bill) — dùng khi thu hồi KM
-const returnTotalAtListPrice = computed(() =>
-	roundCurrency(
-		selectedItems.value.reduce((sum, item) => sum + lineReturnAtListPrice(item), 0),
-	),
-)
-
 // Số tiền thực hoàn cho khách
+const partialRefundBase = computed(() => {
+	if (needsKmReclaim.value || kmReclaimConfirmed.value) {
+		return roundCurrency(
+			Math.max(0, returnTotal.value - kmReclaimDeduction.value),
+		)
+	}
+	return returnTotal.value
+})
+
 const effectiveRefundAmount = computed(() => {
 	if (showPartialBreakdown.value) {
 		return maxRefundableAmount.value
 	}
-	if (needsKmReclaim.value || kmReclaimConfirmed.value) {
-		return roundCurrency(
-			Math.max(0, returnTotalAtListPrice.value - kmReclaimDeduction.value),
-		)
-	}
-	return returnTotal.value
+	return partialRefundBase.value
 })
 
 const totalPaymentAmount = computed(() =>
@@ -1426,20 +1459,20 @@ const totalPaymentAmount = computed(() =>
 
 const maxRefundableAmount = computed(() => {
 	if (!originalInvoice.value) return 0
-	if (!isPartiallyPaid.value && !isOriginalCreditSale.value)
-		return returnTotal.value
+	const refundBase = partialRefundBase.value
+	if (!isPartiallyPaid.value && !isOriginalCreditSale.value) return refundBase
 
 	const grandTotal = Math.abs(originalInvoice.value.grand_total) || 1
-	const returnRatio = returnTotal.value / grandTotal
+	const returnRatio = refundBase / grandTotal
 	return roundCurrency(
-		Math.min(returnTotal.value, originalPaidAmount.value * returnRatio),
+		Math.min(refundBase, originalPaidAmount.value * returnRatio),
 	)
 })
 
 // Amount that goes toward credit balance (for partially paid invoices)
 const creditAdjustmentAmount = computed(() =>
 	isPartiallyPaid.value
-		? roundCurrency(Math.max(0, returnTotal.value - maxRefundableAmount.value))
+		? roundCurrency(Math.max(0, partialRefundBase.value - maxRefundableAmount.value))
 		: 0,
 )
 
@@ -1523,12 +1556,6 @@ const searchSuggestions = computed(() => {
 // Debounce timer for server search (will be cleaned up on unmount)
 let serverSearchTimeout = null
 
-// Helper to check if search term looks like an invoice number
-const looksLikeInvoiceNumber = (term) =>
-	INVOICE_PATTERN.test(term) ||
-	INVOICE_FORMAT_PATTERN.test(term) ||
-	term.includes("-")
-
 // Watch for search input changes and auto-search server when no local matches
 watch(normalizedSearchTerm, (searchTerm) => {
 	// Clear any pending search
@@ -1539,7 +1566,6 @@ watch(normalizedSearchTerm, (searchTerm) => {
 
 	// Early exit conditions
 	if (!searchTerm || searchTerm.length < MIN_SERVER_SEARCH_LENGTH) return
-	if (!looksLikeInvoiceNumber(searchTerm)) return
 
 	// Check if we already have this in local results (reuse filtered list)
 	if (filteredInvoiceList.value.length > 0) return
@@ -1670,10 +1696,41 @@ function initializePaymentsFromInvoice() {
 
 	const invoicePayments = originalInvoice.value?.payments
 	if (invoicePayments?.length) {
-		refundPayments.value = invoicePayments.map((payment) => ({
-			mode_of_payment: payment.mode_of_payment,
-			amount: isPartiallyPaid.value ? 0 : Math.abs(payment.amount),
-		}))
+		// Số tiền CỬA HÀNG THỰC NHẬN, không phải tổng các dòng thanh toán.
+		//
+		// Khi thu ngân lỡ nhập thừa dòng thanh toán (bấm hai lần, hoặc sửa giá
+		// rồi bấm lại), tổng các dòng lớn hơn tiền hàng và phần dư nằm ở
+		// `change_amount` (tiền thối). Trước đây màn hình này cộng hết các dòng
+		// làm số tiền hoàn, ra số lớn hơn tiền cần hoàn nên nút Tạo phiếu trả
+		// bị khoá vĩnh viễn — đơn nào từng thu vượt là không trả hàng được
+		// (PM-TASK-00072: đơn 6.630.000 cho hoá đơn 2.730.000).
+		const paid = Math.abs(Number(originalInvoice.value?.paid_amount) || 0)
+		const change = Math.abs(Number(originalInvoice.value?.change_amount) || 0)
+		const thucNhan = roundCurrency(Math.max(0, paid - change))
+
+		// Gộp các dòng trùng hình thức để thu ngân không phải nhìn 3 dòng Payoo
+		const gopTheoHinhThuc = []
+		for (const payment of invoicePayments) {
+			const mode = payment.mode_of_payment
+			const amount = Math.abs(Number(payment.amount) || 0)
+			const existing = gopTheoHinhThuc.find((r) => r.mode_of_payment === mode)
+			if (existing) {
+				existing.amount = roundCurrency(existing.amount + amount)
+			} else {
+				gopTheoHinhThuc.push({ mode_of_payment: mode, amount })
+			}
+		}
+
+		// Cắt tổng xuống đúng số thực nhận, trừ dần từ dòng đầu
+		let conLai = thucNhan
+		refundPayments.value = gopTheoHinhThuc.map((row) => {
+			const capped = roundCurrency(Math.min(row.amount, Math.max(0, conLai)))
+			conLai = roundCurrency(conLai - capped)
+			return {
+				mode_of_payment: row.mode_of_payment,
+				amount: isPartiallyPaid.value ? 0 : capped,
+			}
+		})
 	} else {
 		refundPayments.value = [
 			{
@@ -1721,6 +1778,7 @@ function openReturnModal(invoice) {
 	fetchInvoiceResource.fetch({
 		invoice_name: invoice.name,
 		pos_opening_shift: props.posOpeningShift,
+		pos_profile: props.posProfile,
 	})
 	returnModal.visible = true
 }
@@ -1734,11 +1792,13 @@ async function checkValidityAndOpenModal(invoiceName, fallbackOnError = false) {
 	try {
 		const validity = await checkInvoiceValidityResource.fetch({
 			invoice_name: invoiceName,
+			pos_profile: props.posProfile,
 		})
 		if (handleValidityResponse(validity)) {
 			fetchInvoiceResource.fetch({
 				invoice_name: invoiceName,
 				pos_opening_shift: props.posOpeningShift,
+				pos_profile: props.posProfile,
 			})
 			returnModal.visible = true
 		}
@@ -1758,7 +1818,7 @@ async function checkValidityAndOpenModal(invoiceName, fallbackOnError = false) {
  */
 async function searchInvoiceDirectly() {
 	const searchTerm = normalizedSearchTerm.value
-	if (!searchTerm || !looksLikeInvoiceNumber(searchTerm)) return
+	if (!searchTerm || searchTerm.length < MIN_SERVER_SEARCH_LENGTH) return
 	await checkValidityAndOpenModal(searchTerm, false)
 }
 

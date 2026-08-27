@@ -229,10 +229,21 @@ watch(show, (newVal) => {
 	}
 })
 
-// Handle search input with instant reactivity
+// Handle search input with debounce — server search for large customer lists
+let dialogSearchTimer = null
 function handleSearchInput(event) {
 	const value = event.target.value
 	customerStore.setSearchTerm(value)
+
+	if (dialogSearchTimer) clearTimeout(dialogSearchTimer)
+
+	if (!value || value.trim().length < 2) {
+		return
+	}
+
+	dialogSearchTimer = setTimeout(() => {
+		customerStore.searchCustomers(value, props.posProfile, 50)
+	}, 250)
 }
 
 // Keyboard navigation
@@ -271,7 +282,7 @@ onMounted(() => {
 
 function selectCustomer(customer) {
 	// Track selection for recommendations
-	customerStore.trackCustomerSelection(customer.name)
+	customerStore.trackCustomerSelection(customer.name, customer)
 
 	emit("customer-selected", customer)
 	show.value = false
@@ -287,7 +298,7 @@ async function handleCustomerCreated(customer) {
 	}
 
 	// Track new customer selection
-	customerStore.trackCustomerSelection(customer.name)
+	customerStore.trackCustomerSelection(customer.name, customer)
 
 	emit("customer-selected", customer)
 	show.value = false

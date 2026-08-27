@@ -38,6 +38,7 @@ export function useInvoice() {
 	// Lưu lại để check threshold khi trả hàng (KM reclaim)
 	const transactionPricingRule = ref("")
 	const couponCode = ref(null)
+	const couponDiscountAmount = ref(0) // Discount attributable to the coupon alone
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
 
@@ -182,6 +183,8 @@ export function useInvoice() {
 	}
 
 	const subtotal = computed(() => roundCurrency(_cachedSubtotal.value))
+	// Subtotal minus item-level (Pricing Rule) discounts, before any additional/coupon discount.
+	const netTotal = computed(() => roundCurrency(_cachedSubtotal.value - _cachedTotalDiscount.value))
 	const totalTax = computed(() => {
 		if (transactionPreviewTotals.value?.total_tax > 0) {
 			return roundCurrency(transactionPreviewTotals.value.total_tax)
@@ -624,8 +627,12 @@ export function useInvoice() {
 		// Store coupon code for tracking
 		couponCode.value = discount.code || discount.name
 
-		// Use centralized calculation to handle percentage/amount and clamping
-		let discountAmount = calculateDiscountAmount(discount, subtotal.value)
+		// The caller (CouponDialog) already computed the final currency amount,
+		// respecting the coupon's apply_on (Net Total vs Grand Total) and any
+		// min/max clamps. Recomputing here from discount.percentage against the
+		// gross subtotal.value would silently discard that and re-introduce the
+		// "coupon calculated on gross price instead of net total" bug.
+		let discountAmount = discount.amount ?? 0
 
 		// Clamp discount to subtotal (cannot exceed total)
 		if (discountAmount > subtotal.value) {
@@ -641,6 +648,10 @@ export function useInvoice() {
 		// This preserves item-level pricing rules while applying coupon discount
 		additionalDiscount.value = discountAmount
 
+		// Track separately from additionalDiscount: that one also carries offer /
+		// transaction pricing rule discounts, so it cannot be attributed to the coupon
+		couponDiscountAmount.value = discountAmount
+
 		// Rebuild cache after applying additional discount
 		rebuildIncrementalCache()
 	}
@@ -654,6 +665,7 @@ export function useInvoice() {
 		transactionPreviewTotals.value = null
 		transactionApplyDiscountOn.value = null
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 		rebuildIncrementalCache()
 	}
 
@@ -889,10 +901,11 @@ export function useInvoice() {
 	 */
 	function formatItemsForSubmission(items) {
 		return items.map((item) => {
+			const qty = item.quantity || item.qty || 1
 			const row = {
 				item_code: item.item_code,
 				item_name: item.item_name,
-				qty: item.quantity || item.qty || 1,
+				qty,
 				rate: computeBackendRate(item),
 				price_list_rate: roundCurrency(item.price_list_rate || item.rate),
 				uom: item.uom,
@@ -900,8 +913,13 @@ export function useInvoice() {
 				batch_no: item.batch_no,
 				serial_no: item.serial_no,
 				conversion_factor: item.conversion_factor || 1,
-				discount_percentage: roundCurrency(item.discount_percentage || 0),
-				discount_amount: roundCurrency(item.discount_amount || 0),
+				discount_percentage: Number.parseFloat(item.discount_percentage) || 0,
+				// Chia cho số lượng: trong giỏ POS `discount_amount` là mức giảm của CẢ
+				// DÒNG (recalculateItem tính trên baseAmount = qty x giá), còn ERPNext
+				// hiểu Sales Invoice Item.discount_amount là giảm trên MỘT đơn vị và tính
+				// lại rate = price_list_rate - discount_amount. Gửi nguyên số của cả dòng
+				// thì với qty >= 2 rate bị trừ thừa, thường ra ÂM (xem PM-TASK-00027).
+				discount_amount: qty ? roundCurrency((item.discount_amount || 0) / qty) : 0,
 				pricing_rules: stringifyPricingRules(item.pricing_rules),
 			}
 			if (item.is_free_item) {
@@ -1064,6 +1082,7 @@ export function useInvoice() {
 		additional_discount_percentage: additionalDiscountPercentage.value || 0,
 		apply_discount_on: transactionApplyDiscountOn.value || undefined,
 		coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 		remarks: (remarks.value || "").trim(),
 		is_pos: 1,
 		update_stock: 1,
@@ -1136,6 +1155,7 @@ export function useInvoice() {
 				additional_discount_percentage: additionalDiscountPercentage.value || 0,
 				posa_transaction_pricing_rule: transactionPricingRule.value || "",
 				coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 				remarks: (remarks.value || "").trim(),
 				is_pos: 1,
 				update_stock: 1, // Critical: Ensures stock is updated
@@ -1293,6 +1313,7 @@ export function useInvoice() {
 			apply_discount_on: transactionApplyDiscountOn.value || undefined,
       remarks: (remarks.value || "").trim(),
 			coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 			is_pos: 1,
 			update_stock: 1,
 		}
@@ -1377,6 +1398,7 @@ export function useInvoice() {
 		additionalDiscountPercentage.value = 0
 		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1406,6 +1428,7 @@ export function useInvoice() {
 		additionalDiscountPercentage.value = 0
 		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1417,8 +1440,12 @@ export function useInvoice() {
 		setDefaultCustomer()
 
 		// Cleanup old draft invoices (older than 1 hour) in background
-		// Skip if offline to avoid network errors
-		if (!isOffline()) {
+		// Skip if offline to avoid network errors.
+		// posProfile must be set: clearCart() also runs from Login.vue's
+		// onMounted right after a logout, when posProfile is back to its
+		// initial null - and a null profile used to make the server delete
+		// every stale draft in the system (PM-TASK-00109).
+		if (!isOffline() && posProfile.value) {
 			try {
 				await cleanupDraftsResource.submit({
 					pos_profile: posProfile.value,
@@ -1500,12 +1527,14 @@ export function useInvoice() {
 		transactionApplyDiscountOn,
 		transactionPricingRule,
 		couponCode,
+		couponDiscountAmount,
 		taxRules,
 		taxInclusive,
 		isSubmitting,
 
 		// Computed
 		subtotal,
+		netTotal,
 		totalTax,
 		totalDiscount,
 		grandTotal,

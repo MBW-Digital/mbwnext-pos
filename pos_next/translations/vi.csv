@@ -1721,3 +1721,4 @@
 "POS Coupons Applied","Coupon POS đã áp dụng",""
 "POS Coupon(s) applied to this invoice, with the discount amount each one contributed.","Các coupon POS đã áp dụng cho hóa đơn này, kèm số tiền giảm của từng coupon.",""
 "Territory is required","Vui lòng chọn khu vực",""
+"Only {0} left in stock for ""{1}"". Cannot set quantity to {2}.","Chỉ còn {0} trong kho cho ""{1}"". Không thể đặt số lượng {2}.",""

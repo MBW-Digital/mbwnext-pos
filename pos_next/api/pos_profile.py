@@ -9,23 +9,50 @@ from pos_next.api.utilities import check_user_company
 from pos_next.api.utilities import _parse_list_parameter
 
 
-@frappe.whitelist()
-def get_pos_profiles():
-	"""Get all POS Profiles accessible by current user"""
-	pos_profiles = frappe.db.sql(
-		"""
+def profile_requires_shift_in_pos(pos_profile):
+	"""Return True when POS Profile enforces HR shift / Employee checks in POS."""
+	if not pos_profile:
+		return False
+	if not frappe.db.has_column("POS Profile", "custom_use_shift_in_pos"):
+		return False
+	return bool(frappe.db.get_value("POS Profile", pos_profile, "custom_use_shift_in_pos"))
+
+
+def get_accessible_pos_profiles_for_user(user=None):
+	"""POS Profiles the user may open, including custom_use_shift_in_pos when present."""
+	effective_user = user or frappe.session.user
+	shift_field = (
+		", p.custom_use_shift_in_pos"
+		if frappe.db.has_column("POS Profile", "custom_use_shift_in_pos")
+		else ", 0 AS custom_use_shift_in_pos"
+	)
+	return frappe.db.sql(
+		f"""
 		SELECT DISTINCT p.name, p.company, p.currency, p.warehouse,
 			p.selling_price_list, p.write_off_account, p.write_off_cost_center
+			{shift_field}
 		FROM `tabPOS Profile` p
 		INNER JOIN `tabPOS Profile User` u ON u.parent = p.name
 		WHERE p.disabled = 0 AND u.user = %s
 		ORDER BY p.name
 		""",
-		frappe.session.user,
+		effective_user,
 		as_dict=1,
 	)
 
-	return pos_profiles
+
+def user_can_open_pos_without_hr_shift(user=None):
+	"""True when the user has at least one accessible profile without HR shift enforcement."""
+	for profile in get_accessible_pos_profiles_for_user(user):
+		if not profile.get("custom_use_shift_in_pos"):
+			return True
+	return False
+
+
+@frappe.whitelist()
+def get_pos_profiles():
+	"""Get all POS Profiles accessible by current user"""
+	return get_accessible_pos_profiles_for_user()
 
 
 @frappe.whitelist()
@@ -57,6 +84,7 @@ def get_pos_profile_data(pos_profile):
 			"auto_print": profile_doc.get("print_receipt_on_order_complete", 0),
 			"print_format": profile_doc.get("print_format"),
 			"letter_head": profile_doc.get("letter_head"),
+			"print_in_duplicate": profile_doc.get("custom_print_in_duplicate") or 0,
 		}
 	}
 
@@ -131,8 +159,6 @@ def get_payment_methods(pos_profile):
 
 		payment_methods = query.run(as_dict=True)
 
-		# Mark Bank Draft (and other bank transfer modes) as SePay when enabled
-		# User uses "Bank Draft" for chuyển khoản - no need to inject "Chuyển khoản"
 		from pos_next.api.sepay import _get_sepay_settings
 		if _get_sepay_settings(pos_profile):
 			for m in payment_methods:

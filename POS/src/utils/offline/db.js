@@ -71,6 +71,15 @@ const CURRENT_SCHEMA = {
 	// Indexed by name (unique), filterable by pos_profile
 	offers: "&name, pos_profile, apply_on, valid_upto",
 
+	// Mã giảm giá cho phép áp khi mất mạng (PM-TASK-00071).
+	// Khoá theo mã đã viết hoa để tra thẳng; chỉ lưu mã KHÔNG giới hạn số lượt
+	// dùng và không gán riêng khách — hai loại đó phải hỏi máy chủ mới biết còn
+	// dùng được không.
+	coupons: "&coupon_code, company",
+
+	// Product Bundle definitions for offline combo detection
+	product_bundles: "&bundle_code, pos_profile",
+
 	// Invoice history cache for offline viewing
 	// Stores submitted invoices for offline access
 	invoice_history: "&name, pos_profile, posting_date, customer",
@@ -212,9 +221,17 @@ export const getSetting = async (key, defaultValue = null) => {
  * @param {*} value - Value to store (must be IndexedDB-serializable)
  * @returns {Promise<void>}
  */
+function toStorableValue(value) {
+	if (value === undefined) {
+		return null
+	}
+	// Strip Vue proxies / non-cloneable values before IndexedDB put
+	return JSON.parse(JSON.stringify(value))
+}
+
 export const setSetting = async (key, value) => {
 	try {
-		await db.settings.put({ key, value })
+		await db.settings.put({ key, value: toStorableValue(value) })
 	} catch (error) {
 		log.error(`Error setting ${key}:`, error)
 	}

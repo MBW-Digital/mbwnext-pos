@@ -33,19 +33,19 @@ function getFlagUrlSvg(countryCode) {
 export const SUPPORTED_LOCALES = {
 	en: {
 		name: "English",
-		nativeName: "English",
+		nativeName: "",
 		countryCode: "us",
 		dir: "ltr",
 	},
 	vi: {
 		name: "Vietnamese",
-		nativeName: "Tiếng Việt",
+		nativeName: "",
 		countryCode: "vn",
 		dir: "ltr",
 	},
 	ar: {
 		name: "Arabic",
-		nativeName: "العربية",
+		nativeName: "",
 		countryCode: "eg",
 		dir: "rtl",
 	},

@@ -12,7 +12,6 @@
 							v-model="searchTerm"
 							type="text"
 							:placeholder="__('Search by invoice number or customer...')"
-							@input="searchInvoices"
 						>
 							<template #prefix>
 								<svg class="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -153,7 +152,7 @@ import { useToast } from "@/composables/useToast"
 import { DEFAULT_CURRENCY, DEFAULT_LOCALE, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
 import { getInvoiceStatusColor } from "@/utils/invoice"
 import { Button, Dialog, Input, createResource } from "frappe-ui"
-import { computed, ref, watch } from "vue"
+import { computed, onUnmounted, ref, watch } from "vue"
 import ReturnInvoiceDialog from "./ReturnInvoiceDialog.vue"
 
 const { showError } = useToast()
@@ -180,6 +179,8 @@ const searchTerm = ref("")
 const page = ref(0)
 const pageSize = 20
 const hasMore = ref(true)
+const SEARCH_DEBOUNCE_MS = 300
+let searchDebounceTimer = null
 
 // Return dialog state
 const showReturnDialog = ref(false)
@@ -192,7 +193,8 @@ const isLoadingMore = ref(false)
 const invoicesResource = createResource({
 	url: "frappe.client.get_list",
 	makeParams() {
-		return {
+		const term = searchTerm.value?.trim()
+		const params = {
 			doctype: "Sales Invoice",
 			filters: {
 				is_pos: 1,
@@ -210,9 +212,21 @@ const invoicesResource = createResource({
 				"is_return",
 			],
 			order_by: "modified desc",
-			start: page.value * pageSize,
-			page_length: pageSize,
+			// frappe.client.get_list only accepts limit_start/limit_page_length —
+			// any other name is silently dropped and every page refetches the first one
+			limit_start: page.value * pageSize,
+			limit_page_length: pageSize,
 		}
+
+		// Search the whole history on the server, not just the pages already loaded
+		if (term) {
+			params.or_filters = {
+				name: ["like", `%${term}%`],
+				customer_name: ["like", `%${term}%`],
+			}
+		}
+
+		return params
 	},
 	auto: false,
 	onSuccess(data) {
@@ -247,7 +261,9 @@ watch(
 	(val) => {
 		show.value = val
 		if (val && props.posProfile) {
-			invoicesResource.reload()
+			// Reopen always starts from a clean first page, not the last one paged to
+			searchTerm.value = ""
+			loadInvoices()
 		}
 	},
 )
@@ -263,16 +279,8 @@ watch(showReturnDialog, (val) => {
 	}
 })
 
-const filteredInvoices = computed(() => {
-	if (!searchTerm.value) return invoices.value
-
-	const term = searchTerm.value.toLowerCase()
-	return invoices.value.filter(
-		(inv) =>
-			inv.name.toLowerCase().includes(term) ||
-			inv.customer_name?.toLowerCase().includes(term),
-	)
-})
+// Filtering happens server-side in invoicesResource — the list is already the result
+const filteredInvoices = computed(() => invoices.value)
 
 function loadInvoices() {
 	if (props.posProfile) {
@@ -289,9 +297,18 @@ function loadMore() {
 	invoicesResource.reload()
 }
 
-function searchInvoices() {
-	// Debounced search - already filtered by computed property
-}
+onUnmounted(() => {
+	if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+})
+
+// Watch the term itself rather than @input, so clearing/pasting reloads too
+watch(searchTerm, () => {
+	if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+	searchDebounceTimer = setTimeout(() => {
+		searchDebounceTimer = null
+		loadInvoices()
+	}, SEARCH_DEBOUNCE_MS)
+})
 
 function viewInvoice(invoice) {
 	emit("view-invoice", invoice)

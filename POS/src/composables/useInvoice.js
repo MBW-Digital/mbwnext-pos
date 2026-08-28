@@ -1,6 +1,7 @@
 import { createResource } from "frappe-ui"
 import { computed, ref, toRaw } from "vue"
 import { isOffline } from "@/utils/offline"
+import { getSetting, setSetting } from "@/utils/offline/db"
 import { useSerialNumberStore } from "@/stores/serialNumber"
 import { CoalescingMutex } from "@/utils/mutex"
 import { logger } from "@/utils/logger"
@@ -27,7 +28,17 @@ export function useInvoice() {
 	const posProfile = ref(null)
 	const posOpeningShift = ref(null) // POS Opening Shift name
 	const additionalDiscount = ref(0)
+	// Discount từ Pricing Rule ở cấp invoice (additional_discount_percentage, %)
+	const additionalDiscountPercentage = ref(0)
+	const remarks = ref("")
+	// ERPNext preview totals after transaction-level pricing rule (tax + discount recalc)
+	const transactionPreviewTotals = ref(null)
+	const transactionApplyDiscountOn = ref(null)
+	// Transaction-level Pricing Rule gây ra header discount (VD: PRLE-0004)
+	// Lưu lại để check threshold khi trả hàng (KM reclaim)
+	const transactionPricingRule = ref("")
 	const couponCode = ref(null)
+	const couponDiscountAmount = ref(0) // Discount attributable to the coupon alone
 	const taxRules = ref([]) // Tax rules from POS Profile
 	const taxInclusive = ref(false) // Tax inclusive setting from POS Settings
 
@@ -138,26 +149,108 @@ export function useInvoice() {
 	// This ensures tax is not double-counted in inclusive mode!
 	// ========================================================================
 	// Use roundCurrency for monetary totals to match ERPNext's currency precision (from System Settings)
+	function getTransactionDiscountAmount() {
+		const preview = transactionPreviewTotals.value
+		const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+		const pct = additionalDiscountPercentage.value || 0
+
+		if (preview?.discount_amount != null && preview.discount_amount > 0) {
+			if (
+				transactionApplyDiscountOn.value === "Grand Total"
+				&& preview.total_tax === 0
+				&& _cachedTotalTax.value > 0
+				&& pct > 0
+			) {
+				const beforeDisc = itemNet + _cachedTotalTax.value
+				return roundCurrency(beforeDisc * pct / 100)
+			}
+			return roundCurrency(preview.discount_amount)
+		}
+
+		if (additionalDiscount.value > 0) {
+			return roundCurrency(additionalDiscount.value)
+		}
+
+		if (pct > 0) {
+			const base =
+				transactionApplyDiscountOn.value === "Grand Total"
+					? itemNet + _cachedTotalTax.value
+					: itemNet
+			return roundCurrency(base * pct / 100)
+		}
+
+		return 0
+	}
+
 	const subtotal = computed(() => roundCurrency(_cachedSubtotal.value))
-	const totalTax = computed(() => roundCurrency(_cachedTotalTax.value))
-	const totalDiscount = computed(() =>
-		roundCurrency(_cachedTotalDiscount.value + (additionalDiscount.value || 0)),
-	)
+	// Subtotal minus item-level (Pricing Rule) discounts, before any additional/coupon discount.
+	const netTotal = computed(() => roundCurrency(_cachedSubtotal.value - _cachedTotalDiscount.value))
+	const totalTax = computed(() => {
+		if (transactionPreviewTotals.value?.total_tax > 0) {
+			return roundCurrency(transactionPreviewTotals.value.total_tax)
+		}
+
+		const txnDisc = getTransactionDiscountAmount()
+		const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+
+		if (
+			txnDisc > 0
+			&& transactionApplyDiscountOn.value === "Net Total"
+			&& itemNet > 0
+			&& _cachedTotalTax.value > 0
+		) {
+			const netAfterDisc = itemNet - txnDisc
+			return roundCurrency((_cachedTotalTax.value / itemNet) * netAfterDisc)
+		}
+
+		return roundCurrency(_cachedTotalTax.value)
+	})
+	const totalDiscount = computed(() => {
+		const itemDiscount = _cachedTotalDiscount.value
+		const txnDisc = getTransactionDiscountAmount()
+		if (txnDisc > 0) {
+			return roundCurrency(itemDiscount + txnDisc)
+		}
+		return roundCurrency(itemDiscount + (additionalDiscount.value || 0))
+	})
 	const grandTotal = computed(() => {
+		if (transactionPreviewTotals.value?.grand_total != null) {
+			if (transactionPreviewTotals.value.total_tax > 0) {
+				return roundCurrency(transactionPreviewTotals.value.grand_total)
+			}
+		}
+
+		const txnDisc = getTransactionDiscountAmount()
+		if (txnDisc > 0 && transactionApplyDiscountOn.value) {
+			const itemNet = _cachedSubtotal.value - _cachedTotalDiscount.value
+			if (transactionApplyDiscountOn.value === "Grand Total") {
+				const beforeDisc = itemNet + _cachedTotalTax.value
+				return roundCurrency(beforeDisc - txnDisc)
+			}
+			// Net Total — tax recalculated in totalTax computed
+			return roundCurrency(itemNet - txnDisc + totalTax.value)
+		}
+
+		if (transactionPreviewTotals.value?.grand_total != null) {
+			return roundCurrency(transactionPreviewTotals.value.grand_total)
+		}
+
 		const discount =
 			_cachedTotalDiscount.value + (additionalDiscount.value || 0)
 
+		let gt
 		if (taxInclusive.value) {
-			// Tax inclusive: Subtotal already includes tax, so don't add it again
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(_cachedSubtotal.value - discount)
+			gt = _cachedSubtotal.value - discount
 		} else {
-			// Tax exclusive: Add tax on top of subtotal
-			// Use roundCurrency to match ERPNext's currency precision (from System Settings)
-			return roundCurrency(
-				_cachedSubtotal.value + _cachedTotalTax.value - discount,
-			)
+			gt = _cachedSubtotal.value + _cachedTotalTax.value - discount
 		}
+
+		const pct = additionalDiscountPercentage.value || 0
+		if (pct > 0) {
+			gt = gt * (1 - pct / 100)
+		}
+
+		return roundCurrency(gt)
 	})
 	const totalPaid = computed(() => _cachedTotalPaid.value)
 
@@ -172,6 +265,62 @@ export function useInvoice() {
 	})
 
 	// Actions
+	function itemHasExplicitDiscount(item) {
+		const pct = Number.parseFloat(item.discount_percentage) || 0
+		const amt = Number.parseFloat(item.discount_amount) || 0
+		if (pct > 0 || amt > 0) {
+			return true
+		}
+		const rules = item?.pricing_rules
+		if (!rules) {
+			return false
+		}
+		if (Array.isArray(rules)) {
+			return rules.length > 0
+		}
+		return String(rules).trim().length > 0
+	}
+
+	function discountsCompatibleForMerge(line, item) {
+		const lineDisc = Number.parseFloat(line.discount_percentage) || 0
+		const itemDisc = Number.parseFloat(item.discount_percentage) || 0
+		if (lineDisc === itemDisc) {
+			return true
+		}
+		// Item grid adds have no discount yet; merge into lines with auto-applied promos.
+		return !itemHasExplicitDiscount(item)
+	}
+
+	/**
+	 * Find an existing cart line that can receive merged quantity.
+	 * Lines merge when item, UOM, batch, price list rate, and discount tier match.
+	 */
+	function findMergeableLine(item) {
+		const itemUom = item.uom || item.stock_uom || ""
+		return (
+			invoiceItems.value.find((line) => {
+				if (line.item_code !== item.item_code) {
+					return false
+				}
+				const lineUom = line.uom || line.stock_uom || ""
+				if (lineUom !== itemUom) {
+					return false
+				}
+				if (!(line.has_serial_no || item.has_serial_no)) {
+					if (String(line.batch_no ?? "") !== String(item.batch_no ?? "")) {
+						return false
+					}
+				}
+				const lineRate = roundCurrency(line.price_list_rate || line.rate || 0)
+				const itemRate = roundCurrency(item.price_list_rate || item.rate || 0)
+				return (
+					lineRate === itemRate
+					&& discountsCompatibleForMerge(line, item)
+				)
+			}) || null
+		)
+	}
+
 	/**
 	 * @param {Object} item - Item to add
 	 * @param {number} quantity - Quantity
@@ -180,11 +329,7 @@ export function useInvoice() {
 	function addItem(item, quantity = 1, options = {}) {
 		const itemUom = item.uom || item.stock_uom
 		const shouldMerge = options.merge !== false
-		const existingItem = shouldMerge
-			? invoiceItems.value.find(
-					(i) => i.item_code === item.item_code && i.uom === itemUom,
-			  )
-			: null
+		const existingItem = shouldMerge ? findMergeableLine(item) : null
 
 		if (existingItem) {
 			// Store old values before update for incremental cache adjustment
@@ -250,6 +395,10 @@ export function useInvoice() {
 				brand: item.brand,
 				// Resolved barcode flag - prevents editing qty/uom/rate for weighted/priced barcodes
 				is_resolved_barcode: item.is_resolved_barcode || false,
+				item_tax_template: item.item_tax_template || null,
+				item_tax_rate: item.item_tax_rate || null,
+				// Cart-line flag: applied bundle parent only (not ERPNext Product Bundle master flag)
+				is_bundle: item.applied_bundle ? 1 : 0,
 			}
 			invoiceItems.value.push(newItem)
 			// Recalculate the newly added item to apply taxes
@@ -478,8 +627,12 @@ export function useInvoice() {
 		// Store coupon code for tracking
 		couponCode.value = discount.code || discount.name
 
-		// Use centralized calculation to handle percentage/amount and clamping
-		let discountAmount = calculateDiscountAmount(discount, subtotal.value)
+		// The caller (CouponDialog) already computed the final currency amount,
+		// respecting the coupon's apply_on (Net Total vs Grand Total) and any
+		// min/max clamps. Recomputing here from discount.percentage against the
+		// gross subtotal.value would silently discard that and re-introduce the
+		// "coupon calculated on gross price instead of net total" bug.
+		let discountAmount = discount.amount ?? 0
 
 		// Clamp discount to subtotal (cannot exceed total)
 		if (discountAmount > subtotal.value) {
@@ -495,22 +648,65 @@ export function useInvoice() {
 		// This preserves item-level pricing rules while applying coupon discount
 		additionalDiscount.value = discountAmount
 
+		// Track separately from additionalDiscount: that one also carries offer /
+		// transaction pricing rule discounts, so it cannot be attributed to the coupon
+		couponDiscountAmount.value = discountAmount
+
 		// Rebuild cache after applying additional discount
 		rebuildIncrementalCache()
 	}
 
 	function removeDiscount() {
 		/**
-		 * Remove additional discount (coupon discount)
+		 * Remove additional discount (coupon or transaction pricing rule)
 		 */
-		// Clear additional discount
 		additionalDiscount.value = 0
-
-		// Clear coupon code
+		additionalDiscountPercentage.value = 0
+		transactionPreviewTotals.value = null
+		transactionApplyDiscountOn.value = null
 		couponCode.value = null
-
-		// Rebuild cache after removing discount
+		couponDiscountAmount.value = 0
 		rebuildIncrementalCache()
+	}
+
+	/**
+	 * Apply invoice-level discount from apply_offers response.
+	 * Uses ERPNext preview_totals when available so Net Total / Grand Total
+	 * discounts recalculate tax correctly (not client-side approximation).
+	 */
+	function applyTransactionDiscountFromResponse({
+		additionalDiscountPct = 0,
+		additionalDiscountAmt = 0,
+		applyDiscountOn = null,
+		previewTotals = null,
+	} = {}) {
+		const pct = Number(additionalDiscountPct) || 0
+		const amt = Number(additionalDiscountAmt) || 0
+
+		if (!pct && !amt) {
+			additionalDiscount.value = 0
+			additionalDiscountPercentage.value = 0
+			transactionPreviewTotals.value = null
+			transactionApplyDiscountOn.value = null
+			return
+		}
+
+		transactionApplyDiscountOn.value = applyDiscountOn || null
+
+		if (previewTotals && previewTotals.grand_total != null) {
+			transactionPreviewTotals.value = previewTotals
+		} else {
+			transactionPreviewTotals.value = null
+		}
+
+		// Prefer percentage for submit — ERPNext recalculates discount_amount + tax
+		if (pct > 0) {
+			additionalDiscountPercentage.value = pct
+			additionalDiscount.value = 0
+		} else {
+			additionalDiscount.value = amt
+			additionalDiscountPercentage.value = 0
+		}
 	}
 
 	// Performance: Cache tax calculation to avoid repeated loops
@@ -522,7 +718,7 @@ export function useInvoice() {
 		const currentKey = JSON.stringify(taxRules.value)
 
 		// Return cached value if tax rules haven't changed
-		if (currentKey === taxRulesCacheKey && cachedTaxRate !== 0) {
+		if (currentKey === taxRulesCacheKey) {
 			return cachedTaxRate
 		}
 
@@ -544,6 +740,34 @@ export function useInvoice() {
 		taxRulesCacheKey = currentKey
 
 		return totalRate
+	}
+
+	/**
+	 * Sum tax % from ERPNext `item_tax_rate` (JSON: account head -> rate).
+	 * Matches get_item_details / Sales Invoice item row behavior.
+	 */
+	function parseItemTaxRatePercent(item) {
+		if (!item?.item_tax_rate) return 0
+		try {
+			const raw = item.item_tax_rate
+			const obj = typeof raw === "string" ? JSON.parse(raw) : raw
+			if (!obj || typeof obj !== "object") return 0
+			let sum = 0
+			for (const v of Object.values(obj)) {
+				const n = Number(v)
+				if (!Number.isNaN(n)) sum += n
+			}
+			return sum
+		} catch {
+			return 0
+		}
+	}
+
+	/** Per-line rate from Item Tax Template; falls back to POS Profile template total %. */
+	function getApplicableTaxRatePercent(item) {
+		const perItem = parseItemTaxRatePercent(item)
+		if (perItem > 0) return perItem
+		return calculateTotalTaxRate()
 	}
 
 	function rebuildIncrementalCache() {
@@ -619,7 +843,7 @@ export function useInvoice() {
 
 		// Calculate tax based on inclusive/exclusive mode
 		// Use currency precision for all monetary calculations to match ERPNext
-		const totalTaxRate = calculateTotalTaxRate()
+		const totalTaxRate = getApplicableTaxRatePercent(item)
 		let netAmount = 0
 		let taxAmount = 0
 
@@ -676,21 +900,97 @@ export function useInvoice() {
 	 * @returns {Array} Items formatted for ERPNext Sales Invoice
 	 */
 	function formatItemsForSubmission(items) {
-		return items.map((item) => ({
-			item_code: item.item_code,
-			item_name: item.item_name,
-			qty: item.quantity || item.qty || 1,
-			rate: computeBackendRate(item),
-			price_list_rate: roundCurrency(item.price_list_rate || item.rate),
-			uom: item.uom,
-			warehouse: item.warehouse,
-			batch_no: item.batch_no,
-			serial_no: item.serial_no,
-			conversion_factor: item.conversion_factor || 1,
-			discount_percentage: roundCurrency(item.discount_percentage || 0),
-			discount_amount: roundCurrency(item.discount_amount || 0),
-			pricing_rules: stringifyPricingRules(item.pricing_rules),
-		}))
+		return items.map((item) => {
+			const qty = item.quantity || item.qty || 1
+			const row = {
+				item_code: item.item_code,
+				item_name: item.item_name,
+				qty,
+				rate: computeBackendRate(item),
+				price_list_rate: roundCurrency(item.price_list_rate || item.rate),
+				uom: item.uom,
+				warehouse: item.warehouse,
+				batch_no: item.batch_no,
+				serial_no: item.serial_no,
+				conversion_factor: item.conversion_factor || 1,
+				discount_percentage: Number.parseFloat(item.discount_percentage) || 0,
+				// Chia cho số lượng: trong giỏ POS `discount_amount` là mức giảm của CẢ
+				// DÒNG (recalculateItem tính trên baseAmount = qty x giá), còn ERPNext
+				// hiểu Sales Invoice Item.discount_amount là giảm trên MỘT đơn vị và tính
+				// lại rate = price_list_rate - discount_amount. Gửi nguyên số của cả dòng
+				// thì với qty >= 2 rate bị trừ thừa, thường ra ÂM (xem PM-TASK-00027).
+				discount_amount: qty ? roundCurrency((item.discount_amount || 0) / qty) : 0,
+				pricing_rules: stringifyPricingRules(item.pricing_rules),
+			}
+			if (item.is_free_item) {
+				row.is_free_item = 1
+				row.rate = 0
+				row.price_list_rate = 0
+				row.discount_percentage = 0
+				row.discount_amount = 0
+			}
+			if (item.item_tax_template) {
+				row.item_tax_template = item.item_tax_template
+			}
+			if (item.item_tax_rate) {
+				row.item_tax_rate =
+					typeof item.item_tax_rate === "string"
+						? item.item_tax_rate
+						: JSON.stringify(item.item_tax_rate)
+			}
+			return row
+		})
+	}
+
+	/**
+	 * Paid cart lines + free-qty / free-gift promo lines for invoice submit.
+	 * POS cart display includes gifts but they live outside invoiceItems.
+	 */
+	function buildItemsForSubmission(
+		paidItems,
+		{ freeGiftItems = [], warehouse = null } = {},
+	) {
+		const rows = []
+
+		for (const item of paidItems || []) {
+			rows.push(...formatItemsForSubmission([item]))
+
+			const freeQty = Number.parseFloat(item.free_qty) || 0
+			if (freeQty > 0) {
+				rows.push(
+					...formatItemsForSubmission([
+						{
+							...item,
+							quantity: freeQty,
+							rate: 0,
+							price_list_rate: 0,
+							discount_percentage: 0,
+							discount_amount: 0,
+							is_free_item: true,
+						},
+					]),
+				)
+			}
+		}
+
+		for (const gift of freeGiftItems || []) {
+			const qty = Number.parseFloat(gift.quantity || gift.qty) || 0
+			if (qty <= 0) continue
+			rows.push(
+				...formatItemsForSubmission([
+					{
+						...gift,
+						quantity: qty,
+						warehouse: gift.warehouse || warehouse,
+						rate: 0,
+						price_list_rate: 0,
+						is_free_item: true,
+					},
+				]),
+			)
+		}
+
+		return rows
 	}
 
 	function addPayment(payment) {
@@ -754,7 +1054,7 @@ export function useInvoice() {
 		}
 	}
 
-	async function saveDraft(targetDoctype = "Sales Invoice") {
+	async function saveDraft(targetDoctype = "Sales Invoice", submissionExtras = null) {
 		/**
 		 * Save invoice as draft (Step 1)
 		 * This creates the invoice with docstatus=0
@@ -762,38 +1062,47 @@ export function useInvoice() {
 		// Use toRaw() to ensure we get current, non-reactive values (prevents stale cached quantities)
 		const rawItems = toRaw(invoiceItems.value)
 		const rawPayments = toRaw(payments.value)
+		const extras = submissionExtras || {}
 
 		const invoiceData = {
 			doctype: targetDoctype,
 			pos_profile: posProfile.value,
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
-			items: formatItemsForSubmission(rawItems),
+			items: buildItemsForSubmission(rawItems, {
+				freeGiftItems: extras.freeGiftItems || [],
+				warehouse: extras.warehouse || null,
+			}),
 			payments: rawPayments.map((p) => ({
 				mode_of_payment: p.mode_of_payment,
 				amount: p.amount,
 				type: p.type,
 			})),
-			discount_amount: additionalDiscount.value || 0,
-			coupon_code: couponCode.value,
-			is_pos: 1,
-			update_stock: 1,
-		}
+		discount_amount: additionalDiscount.value || 0,
+		additional_discount_percentage: additionalDiscountPercentage.value || 0,
+		apply_discount_on: transactionApplyDiscountOn.value || undefined,
+		coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
+		remarks: (remarks.value || "").trim(),
+		is_pos: 1,
+		update_stock: 1,
+	}
 
-		if (targetDoctype === "Sales Order") {
-			const today = new Date().toISOString().split("T")[0]
-			invoiceData.delivery_date = today
-			invoiceData.transaction_date = today
-		}
+	if (targetDoctype === "Sales Order") {
+		const today = new Date().toISOString().split("T")[0]
+		invoiceData.delivery_date = today
+		invoiceData.transaction_date = today
+	}
 
-		const result = await updateInvoiceResource.submit({ data: invoiceData })
-		return result?.data || result
+	const result = await updateInvoiceResource.submit({ data: invoiceData })
+	return result?.data || result
 	}
 
 	async function submitInvoice(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		writeOffAmount = 0,
+		submissionExtras = null,
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -826,27 +1135,35 @@ export function useInvoice() {
 				const rawItems = toRaw(invoiceItems.value)
 				const rawPayments = toRaw(payments.value)
 				const rawSalesTeam = toRaw(salesTeam.value)
+				const extras = submissionExtras || {}
 
 				const invoiceData = {
 					doctype: targetDoctype,
 					pos_profile: posProfile.value,
 					posa_pos_opening_shift: posOpeningShift.value,
 					customer: customer.value?.name || customer.value,
-					items: formatItemsForSubmission(rawItems),
+					items: buildItemsForSubmission(rawItems, {
+						freeGiftItems: extras.freeGiftItems || [],
+						warehouse: extras.warehouse || null,
+					}),
 					payments: rawPayments.map((p) => ({
 						mode_of_payment: p.mode_of_payment,
 						amount: p.amount,
 						type: p.type,
 					})),
-					discount_amount: additionalDiscount.value || 0,
-					coupon_code: couponCode.value,
-					is_pos: 1,
-					update_stock: 1, // Critical: Ensures stock is updated
-				}
+				discount_amount: additionalDiscount.value || 0,
+				additional_discount_percentage: additionalDiscountPercentage.value || 0,
+				posa_transaction_pricing_rule: transactionPricingRule.value || "",
+				coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
+				remarks: (remarks.value || "").trim(),
+				is_pos: 1,
+				update_stock: 1, // Critical: Ensures stock is updated
+			}
 
-				if (targetDoctype === "Sales Order" && deliveryDate) {
-					invoiceData.delivery_date = deliveryDate
-				}
+			if (targetDoctype === "Sales Order" && deliveryDate) {
+				invoiceData.delivery_date = deliveryDate
+			}
 
 				// Add sales_team if provided
 				if (rawSalesTeam && rawSalesTeam.length > 0) {
@@ -958,21 +1275,22 @@ export function useInvoice() {
 
 	/**
 	 * Create draft invoice for SePay bank transfer (no submit).
-	 * Used when customer pays via VietQR - webhook will submit when payment received.
-	 * Supports mixed payments: existing payments (cash, etc.) are included; VietQR shows remaining amount.
+	 * Webhook submits when payment is received. Supports mixed payments.
 	 *
 	 * @param {string} targetDoctype - Sales Invoice or Sales Order
 	 * @param {string|null} deliveryDate - For Sales Order
 	 * @param {Array} existingPayments - Payments already made (e.g. cash) - [{mode_of_payment, amount, type}]
-	 * @returns {Promise<{name: string, grand_total: number, sepay_amount: number}>} Invoice name, total, and amount for VietQR
+	 * @returns {Promise<{name: string, grand_total: number, sepay_amount: number}>}
 	 */
 	async function createDraftForSePay(
 		targetDoctype = "Sales Invoice",
 		deliveryDate = null,
 		existingPayments = [],
+		submissionExtras = null,
 	) {
 		const rawItems = toRaw(invoiceItems.value)
 		const rawSalesTeam = toRaw(salesTeam.value)
+		const extras = submissionExtras || {}
 
 		const paymentsForInvoice = (existingPayments || []).map((p) => ({
 			mode_of_payment: p.mode_of_payment,
@@ -985,10 +1303,17 @@ export function useInvoice() {
 			pos_profile: posProfile.value,
 			posa_pos_opening_shift: posOpeningShift.value,
 			customer: customer.value?.name || customer.value,
-			items: formatItemsForSubmission(rawItems),
+			items: buildItemsForSubmission(rawItems, {
+				freeGiftItems: extras.freeGiftItems || [],
+				warehouse: extras.warehouse || null,
+			}),
 			payments: paymentsForInvoice,
 			discount_amount: additionalDiscount.value || 0,
+			additional_discount_percentage: additionalDiscountPercentage.value || 0,
+			apply_discount_on: transactionApplyDiscountOn.value || undefined,
+      remarks: (remarks.value || "").trim(),
 			coupon_code: couponCode.value,
+			coupon_discount_amount: couponDiscountAmount.value || 0,
 			is_pos: 1,
 			update_stock: 1,
 		}
@@ -1014,13 +1339,16 @@ export function useInvoice() {
 			throw new Error("Failed to create draft invoice for bank transfer")
 		}
 
-		const grandTotal = invoiceDoc.grand_total || grandTotal.value
+		const invoiceGrandTotal = invoiceDoc.grand_total
 		const paidAmount = (paymentsForInvoice || []).reduce((s, p) => s + (p.amount || 0), 0)
-		const sepayAmount = grandTotal - paidAmount
+		const sepayAmount =
+			invoiceDoc.outstanding_amount != null
+				? invoiceDoc.outstanding_amount
+				: invoiceGrandTotal - paidAmount
 
 		return {
 			name: invoiceDoc.name,
-			grand_total: grandTotal,
+			grand_total: invoiceGrandTotal,
 			sepay_amount: sepayAmount,
 		}
 	}
@@ -1067,7 +1395,10 @@ export function useInvoice() {
 		invoiceItems.value = []
 		payments.value = []
 		additionalDiscount.value = 0
+		additionalDiscountPercentage.value = 0
+		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1094,7 +1425,10 @@ export function useInvoice() {
 		invoiceItems.value = []
 		payments.value = []
 		additionalDiscount.value = 0
+		additionalDiscountPercentage.value = 0
+		remarks.value = ""
 		couponCode.value = null
+		couponDiscountAmount.value = 0
 
 		// Reset incremental cache
 		_cachedSubtotal.value = 0
@@ -1106,8 +1440,12 @@ export function useInvoice() {
 		setDefaultCustomer()
 
 		// Cleanup old draft invoices (older than 1 hour) in background
-		// Skip if offline to avoid network errors
-		if (!isOffline()) {
+		// Skip if offline to avoid network errors.
+		// posProfile must be set: clearCart() also runs from Login.vue's
+		// onMounted right after a logout, when posProfile is back to its
+		// initial null - and a null profile used to make the server delete
+		// every stale draft in the system (PM-TASK-00109).
+		if (!isOffline() && posProfile.value) {
 			try {
 				await cleanupDraftsResource.submit({
 					pos_profile: posProfile.value,
@@ -1125,8 +1463,21 @@ export function useInvoice() {
 		 * Load tax rules from POS Profile and tax inclusive setting from POS Settings
 		 */
 		try {
-			const result = await getTaxesResource.submit({ pos_profile: profileName })
-			taxRules.value = result?.data || result || []
+			if (isOffline()) {
+				const cached = await getSetting(`tax_rules_${profileName}`, null)
+				if (Array.isArray(cached) && cached.length > 0) {
+					taxRules.value = cached
+				}
+			} else {
+				const result = await getTaxesResource.submit({ pos_profile: profileName })
+				taxRules.value = result?.data || result || []
+				if (profileName) {
+					await setSetting(
+						`tax_rules_${profileName}`,
+						toRaw(taxRules.value),
+					).catch(() => {})
+				}
+			}
 
 			// Load tax inclusive setting from POS Settings if provided
 			if (posSettings && posSettings.tax_inclusive !== undefined) {
@@ -1142,8 +1493,10 @@ export function useInvoice() {
 			return taxRules.value
 		} catch (error) {
 			console.error("Error loading tax rules:", error)
-			taxRules.value = []
-			return []
+			if (!isOffline()) {
+				taxRules.value = []
+			}
+			return taxRules.value
 		}
 	}
 
@@ -1169,13 +1522,19 @@ export function useInvoice() {
 		posProfile,
 		posOpeningShift,
 		additionalDiscount,
+		additionalDiscountPercentage,
+		remarks,
+		transactionApplyDiscountOn,
+		transactionPricingRule,
 		couponCode,
+		couponDiscountAmount,
 		taxRules,
 		taxInclusive,
 		isSubmitting,
 
 		// Computed
 		subtotal,
+		netTotal,
 		totalTax,
 		totalDiscount,
 		grandTotal,
@@ -1192,6 +1551,7 @@ export function useInvoice() {
 		calculateDiscountAmount,
 		applyDiscount,
 		removeDiscount,
+		applyTransactionDiscountFromResponse,
 		addPayment,
 		removePayment,
 		updatePayment,
@@ -1206,7 +1566,9 @@ export function useInvoice() {
 		setTaxInclusive,
 		recalculateItem,
 		rebuildIncrementalCache,
+		findMergeableLine,
 		formatItemsForSubmission,
+		buildItemsForSubmission,
 
 		// Resources
 		updateInvoiceResource,

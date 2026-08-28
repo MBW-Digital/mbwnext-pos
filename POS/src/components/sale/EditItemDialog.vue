@@ -218,7 +218,8 @@
 																type="number"
 																min="0"
 																:max="discountType === 'percentage' ? 100 : undefined"
-																step="0.01"
+																:step="discountType === 'percentage' ? 'any' : '0.01'"
+																inputmode="decimal"
 																class="w-full h-7 border border-gray-300 rounded-lg px-3 pe-8 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
 																@input="calculateDiscount"
 															/>
@@ -360,6 +361,36 @@ const discountTypeOptions = computed(() => [
 	{ value: 'amount', label: __('Amount') }
 ])
 
+function hasPricingRules(item) {
+	const rules = item?.pricing_rules
+	if (!rules) return false
+	if (Array.isArray(rules)) return rules.length > 0
+	return String(rules).trim().length > 0
+}
+
+function initializeDiscountFromItem(newItem) {
+	const pct = Number.parseFloat(newItem.discount_percentage) || 0
+	const amt = Number.parseFloat(newItem.discount_amount) || 0
+
+	// Promo lines: server discount_amount is authoritative (percentage may be long-tail).
+	if (hasPricingRules(newItem) && amt > 0) {
+		discountType.value = "amount"
+		discountValue.value = amt
+		return
+	}
+
+	if (pct > 0) {
+		discountType.value = "percentage"
+		discountValue.value = pct
+	} else if (amt > 0) {
+		discountType.value = "amount"
+		discountValue.value = amt
+	} else {
+		discountType.value = "percentage"
+		discountValue.value = 0
+	}
+}
+
 // Initialize local state when item changes
 watch(
 	() => props.item,
@@ -386,17 +417,7 @@ watch(
 				removedSerials.value = []
 			}
 
-			// Initialize discount
-			if (newItem.discount_percentage && newItem.discount_percentage > 0) {
-				discountType.value = "percentage"
-				discountValue.value = newItem.discount_percentage
-			} else if (newItem.discount_amount && newItem.discount_amount > 0) {
-				discountType.value = "amount"
-				discountValue.value = newItem.discount_amount
-			} else {
-				discountType.value = "percentage"
-				discountValue.value = 0
-			}
+			initializeDiscountFromItem(newItem)
 
 			// Reset stock check state
 			hasStock.value = true
@@ -534,18 +555,22 @@ function handleDiscountTypeChange() {
 }
 
 function calculateDiscount() {
-	// Round to currency precision to prevent floating point precision issues (e.g., 10.000000000000002)
-	if (discountValue.value !== null && discountValue.value !== undefined && !isNaN(discountValue.value)) {
-		discountValue.value = roundCurrency(discountValue.value)
-	}
-
 	if (discountType.value === "percentage") {
 		// Ensure percentage doesn't exceed 100
 		if (discountValue.value > 100) {
 			discountValue.value = 100
 		}
+		// IMPORTANT: Do NOT round the percentage itself to currency precision here.
+		// Pricing Rules can carry a long-tail percentage (e.g. 30.013049152) computed
+		// server-side to land on an exact discount/target price. Rounding it to 2dp
+		// before multiplying (e.g. 30.01) silently changes the resulting discount
+		// amount by tens/hundreds of VND versus what's actually stored on the item.
 		calculatedDiscount.value = roundCurrency((calculatedSubtotal.value * discountValue.value) / 100)
 	} else {
+		// Amount is already a currency value, safe to round here.
+		if (discountValue.value !== null && discountValue.value !== undefined && !isNaN(discountValue.value)) {
+			discountValue.value = roundCurrency(discountValue.value)
+		}
 		// Ensure amount doesn't exceed subtotal
 		if (discountValue.value > calculatedSubtotal.value) {
 			discountValue.value = roundCurrency(calculatedSubtotal.value)
@@ -584,10 +609,23 @@ function updateItem() {
 		uom: localUom.value,
 		rate: localRate.value,
 		warehouse: localWarehouse.value,
-		discount_percentage:
-			discountType.value === "percentage" ? discountValue.value : 0,
-		discount_amount:
-			discountType.value === "amount" ? discountValue.value : 0,
+	}
+
+	if (discountType.value === "percentage") {
+		updatedItem.discount_percentage = discountValue.value
+		updatedItem.discount_amount = 0
+	} else {
+		updatedItem.discount_amount = roundCurrency(discountValue.value)
+		updatedItem.discount_percentage = 0
+	}
+
+	// Keep promo percentage intact when showing amount in the dialog.
+	if (
+		hasPricingRules(localItem.value) &&
+		discountType.value === "amount" &&
+		Number.parseFloat(localItem.value.discount_percentage) > 0
+	) {
+		updatedItem.discount_percentage = localItem.value.discount_percentage
 	}
 
 	// Update serial numbers if item has serials

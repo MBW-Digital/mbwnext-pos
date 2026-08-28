@@ -19,6 +19,7 @@ POS_SETTINGS_FIELDS = [
 	"name",
 	"enabled",
 	"tax_inclusive",
+	"allow_skip_manual_batch_selection",
 	"allow_user_to_edit_additional_discount",
 	"allow_user_to_edit_item_discount",
 	"use_percentage_discount",
@@ -35,6 +36,8 @@ POS_SETTINGS_FIELDS = [
 	"allow_sales_order",
 	"allow_select_sales_order",
 	"create_only_sales_order",
+  "allow_manual_cash_drawer",
+	"opening_closing_cash_configuration",
 ]
 
 # Default POS Settings values
@@ -42,6 +45,7 @@ POS_SETTINGS_FIELDS = [
 DEFAULT_POS_SETTINGS = {
 	"enabled": 0,
 	"tax_inclusive": 0,
+	"allow_skip_manual_batch_selection": 0,
 	"allow_user_to_edit_additional_discount": 0,
 	"allow_user_to_edit_item_discount": 1,
 	"use_percentage_discount": 0,
@@ -60,4 +64,6 @@ DEFAULT_POS_SETTINGS = {
 	"allow_sales_order": 0,
 	"allow_select_sales_order": 0,
 	"create_only_sales_order": 0,
+	"allow_manual_cash_drawer": 0,
+	"opening_closing_cash_configuration": 0,
 }

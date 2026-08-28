@@ -3,7 +3,8 @@
  * Handles numeric keypad state, input, and keyboard support for payment dialog
  */
 
-import { ref, computed, onMounted, onUnmounted } from "vue"
+import { formatNumpadDisplay, getDecimalSeparator, getPrecision } from "@/utils/currency"
+import { computed, onMounted, onUnmounted, ref } from "vue"
 
 export function usePaymentNumpad(options = {}) {
 	const numpadDisplay = ref("")
@@ -12,6 +13,14 @@ export function usePaymentNumpad(options = {}) {
 		const val = Number.parseFloat(numpadDisplay.value)
 		return Number.isNaN(val) ? 0 : val
 	})
+
+	const numpadFormattedDisplay = computed(() => formatNumpadDisplay(numpadDisplay.value))
+
+	const decimalSeparator = computed(() => getDecimalSeparator())
+
+	function currencyPrecision() {
+		return getPrecision().currency ?? 2
+	}
 
 	/**
 	 * Add a character to the numpad display
@@ -23,16 +32,16 @@ export function usePaymentNumpad(options = {}) {
 			return
 		}
 
-		// Limit decimal places to 2
+		// Limit decimal places to currency precision from System Settings
 		if (numpadDisplay.value.includes(".")) {
 			const [, decimal] = numpadDisplay.value.split(".")
-			if (decimal && decimal.length >= 2) {
+			if (decimal && decimal.length >= currencyPrecision()) {
 				return
 			}
 		}
 
-		// Limit total length to reasonable amount
-		if (numpadDisplay.value.length >= 10) {
+		// Limit total length to reasonable amount (raw digits, no separators)
+		if (numpadDisplay.value.replace(".", "").length >= 12) {
 			return
 		}
 
@@ -60,17 +69,14 @@ export function usePaymentNumpad(options = {}) {
 	 */
 	function setNumpadValue(value) {
 		if (typeof value === "number") {
-			numpadDisplay.value = value.toFixed(2)
+			numpadDisplay.value = value.toFixed(currencyPrecision())
 		} else {
 			numpadDisplay.value = String(value)
 		}
 	}
 
 	// Keyboard input handling
-	const {
-		isEnabled = ref(true),
-		onEnter = null,
-	} = options
+	const { isEnabled = ref(true), onEnter = null } = options
 
 	/**
 	 * Handle keyboard input for physical keyboard support
@@ -78,16 +84,16 @@ export function usePaymentNumpad(options = {}) {
 	 */
 	function handleKeyboardInput(event) {
 		// Check if keyboard input is enabled (e.g., dialog is open)
-		const enabled = typeof isEnabled === 'function' ? isEnabled() : isEnabled.value
+		const enabled = typeof isEnabled === "function" ? isEnabled() : isEnabled.value
 		if (!enabled) return
 
 		// Don't handle if user is typing in an input field
 		const activeElement = document.activeElement
-		const isInInput = activeElement && (
-			activeElement.tagName === 'INPUT' ||
-			activeElement.tagName === 'TEXTAREA' ||
-			activeElement.isContentEditable
-		)
+		const isInInput =
+			activeElement &&
+			(activeElement.tagName === "INPUT" ||
+				activeElement.tagName === "TEXTAREA" ||
+				activeElement.isContentEditable)
 		if (isInInput) return
 
 		const key = event.key
@@ -99,31 +105,32 @@ export function usePaymentNumpad(options = {}) {
 			return
 		}
 
-		// Handle decimal point (. or ,)
-		if (key === '.' || key === ',') {
+		// Handle decimal point (. or locale decimal separator)
+		const decSep = getDecimalSeparator()
+		if (key === "." || key === "," || key === decSep) {
 			event.preventDefault()
-			numpadInput('.')
+			numpadInput(".")
 			return
 		}
 
 		// Handle backspace
-		if (key === 'Backspace') {
+		if (key === "Backspace") {
 			event.preventDefault()
 			numpadBackspace()
 			return
 		}
 
 		// Handle Delete or Escape to clear
-		if (key === 'Delete' || key === 'Escape') {
+		if (key === "Delete" || key === "Escape") {
 			event.preventDefault()
 			numpadClear()
 			return
 		}
 
 		// Handle Enter - call custom handler if provided
-		if (key === 'Enter') {
+		if (key === "Enter") {
 			event.preventDefault()
-			if (onEnter && typeof onEnter === 'function') {
+			if (onEnter && typeof onEnter === "function") {
 				onEnter(numpadValue.value)
 			}
 			return
@@ -132,17 +139,19 @@ export function usePaymentNumpad(options = {}) {
 
 	// Set up keyboard event listeners
 	onMounted(() => {
-		window.addEventListener('keydown', handleKeyboardInput)
+		window.addEventListener("keydown", handleKeyboardInput)
 	})
 
 	onUnmounted(() => {
-		window.removeEventListener('keydown', handleKeyboardInput)
+		window.removeEventListener("keydown", handleKeyboardInput)
 	})
 
 	return {
 		// State
 		numpadDisplay,
+		numpadFormattedDisplay,
 		numpadValue,
+		decimalSeparator,
 
 		// Actions
 		numpadInput,

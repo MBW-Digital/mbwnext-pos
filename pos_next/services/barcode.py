@@ -1,31 +1,23 @@
 """
 Barcode resolver service for POS Next.
 
-This module provides an optional integration with the barcode_resolver app.
-When barcode_resolver is installed, it enables advanced barcode parsing
-for weighted and priced barcodes. When not installed, it gracefully
-returns None.
+This module integrates optional barcode_resolver rules (weighted/priced barcodes) and a built-in
+parser for fixed-layout electronic-scale labels when that app is not used.
 
-Usage:
-    from pos_next.services import resolve_barcode, is_barcode_resolver_available
-
-    # Check if feature is available
-    if is_barcode_resolver_available():
-        result = resolve_barcode("2001234001234")
-        if result:
-            print(result["item_barcode"], result["qty"])
-
-    # Or simply call resolve_barcode (returns None if app not installed)
-    result = resolve_barcode("2001234001234")
+When barcode_resolver is not installed, :func:`parse_internal_scale_barcode` still enables
+15-digit labels: prefix + **7-digit PLU** + weight (grams) + check digit (see function docstring).
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List, TypedDict
+from typing import FrozenSet, TypedDict
 
 import frappe
 from erpnext.stock.get_item_details import get_conversion_factor
+
+# Two-digit prefixes that identify "scale / weighted" internal barcodes (configurable later via POS Settings).
+_DEFAULT_SCALE_PREFIXES: FrozenSet[str] = frozenset({"21"})
 
 
 class BarcodeResult(TypedDict, total=False):
@@ -105,6 +97,87 @@ def resolve_barcode(barcode: str, pos_profile: str) -> BarcodeResult | None:
         return None
 
 
+def _weight_grams_to_integer_decimal_parts(grams: int) -> tuple[str, str]:
+    """Build integer_value / decimal_value strings like the barcode_resolver weighted format."""
+    kg = grams / 1000.0
+    text = f"{kg:.10f}".rstrip("0").rstrip(".")
+    if "." in text:
+        a, b = text.split(".", 1)
+        return a, b
+    return text, "0"
+
+
+def parse_internal_scale_barcode(
+    barcode: str,
+    allowed_prefixes: FrozenSet[str] | None = None,
+) -> BarcodeResult | None:
+    """
+    Parse fixed-layout scale barcode (electronic scale label) without barcode_resolver app.
+
+    Layout (digits only, **15 characters total**):
+    PP (2) + **mã hàng / PLU (7)** + trọng lượng gam (5) + ký tự kiểm tra (1).
+
+    Example với PLU ``4261097`` và nặng ``1.25 kg`` (1250 g):
+    Tem **15 số**: ``214261097012505`` → tiền tố ``21``, mã ``4261097``, khối ``01250`` (gam),
+    ký tự kiểm ``5``. Trên Item phải có **Item Barcode** đúng ``4261097``.
+
+    Example khác (PLU có số 0 đầu): ``210000100012505`` → PLU ``0000100``, ``01250`` g → 1.25 kg.
+
+    Weight field is interpreted as integer grams (01250 → 1250 g).
+    Check digit is not validated (many retail scales use non-GS1 check algorithms).
+    """
+    prefixes = allowed_prefixes if allowed_prefixes is not None else _DEFAULT_SCALE_PREFIXES
+    raw = (barcode or "").strip()
+    if not raw.isdigit():
+        return None
+
+    if len(raw) != 15:
+        return None
+
+    prefix, article, weight_str, _check = raw[0:2], raw[2:9], raw[9:14], raw[14]
+
+    if prefix not in prefixes:
+        return None
+
+    # Reject all-zero PLU (invalid); leading zeros like 0000100 are valid.
+    if set(article) == {"0"}:
+        return None
+
+    try:
+        grams = int(weight_str)
+    except ValueError:
+        return None
+
+    if grams <= 0:
+        return None
+
+    int_part, dec_part = _weight_grams_to_integer_decimal_parts(grams)
+
+    return {
+        "item_barcode": article,
+        "integer_value": int_part,
+        "decimal_value": dec_part,
+        "barcode_type": "Weighted",
+        "qty": grams / 1000.0,
+        "uom": frappe.db.get_value("Item Barcode", {"barcode": article}, "uom"),
+    }
+
+
+def resolve_internal_scale_barcode(barcode: str, pos_profile: str) -> BarcodeResult | None:
+    """
+    Apply internal scale barcode parsing when the optional barcode_resolver app is absent or unused.
+
+    Args:
+        barcode: Scanned value from the scale label.
+        pos_profile: Reserved for future per-profile prefix overrides.
+
+    Returns:
+        BarcodeResult compatible dict, or None if the string does not match.
+    """
+    del pos_profile  # future: POS Settings overrides
+    return parse_internal_scale_barcode(barcode)
+
+
 def compute_resolved_item_data(
     resolved_barcode: BarcodeResult | None,
     item,
@@ -129,27 +202,39 @@ def compute_resolved_item_data(
         ...     item_data = compute_resolved_item_data(resolved, item_rate=10.0)
         ...     print(f"Qty: {item_data['resolved_qty']}, UOM: {item_data['resolved_uom']}")
     """
-    if not resolved_barcode or not is_barcode_resolver_available():
+    if not resolved_barcode:
         return None
-
-    from barcode_resolver.barcode_resolver.doctype.barcode_rule.utils import BarcodeTypes
 
     barcode_type = resolved_barcode.get("barcode_type")
     barcode_uom = resolved_barcode.get("uom")
     uom_prices = item.get("uom_prices", {})
-    barcode_uom_price = uom_prices.get(barcode_uom)
+    barcode_uom_price = uom_prices.get(barcode_uom) if barcode_uom else None
     item_uom = item.get("uom")
     item_price = item.get("rate")
 
+    item_code_for_conv = item.get("name") or item.get("item_code")
+
     integer_value = resolved_barcode.get("integer_value", "0")
     decimal_value = resolved_barcode.get("decimal_value", "0")
-    if barcode_type == BarcodeTypes.WEIGHTED.value:
+
+    is_weighted = barcode_type == "Weighted"
+    if not is_weighted and is_barcode_resolver_available():
+        from barcode_resolver.barcode_resolver.doctype.barcode_rule.utils import BarcodeTypes
+
+        is_weighted = barcode_type == BarcodeTypes.WEIGHTED.value
+
+    if is_weighted:
         qty = float(f"{integer_value}.{decimal_value}")
         uom = barcode_uom
         price = barcode_uom_price
-        if barcode_uom not in uom_prices:
-            conversion_factor = get_conversion_factor(item.get("name"), barcode_uom).get("conversion_factor", 1)
+        if barcode_uom and barcode_uom not in uom_prices:
+            conversion_factor = get_conversion_factor(
+                item_code_for_conv, barcode_uom
+            ).get("conversion_factor", 1)
             qty *= conversion_factor
+            uom = item_uom
+            price = item_price
+        elif not barcode_uom:
             uom = item_uom
             price = item_price
 
@@ -159,7 +244,13 @@ def compute_resolved_item_data(
             "resolved_price": price,
             "resolved_barcode_type": barcode_type,
         }
-    elif barcode_type == BarcodeTypes.PRICED.value:
+
+    if not is_barcode_resolver_available():
+        return None
+
+    from barcode_resolver.barcode_resolver.doctype.barcode_rule.utils import BarcodeTypes
+
+    if barcode_type == BarcodeTypes.PRICED.value:
         encoded_price = float(f"{integer_value}.{decimal_value}")
         if barcode_uom in uom_prices:
             barcode_uom_price = uom_prices.get(barcode_uom)
@@ -167,7 +258,9 @@ def compute_resolved_item_data(
             uom = barcode_uom
             qty = encoded_price / price if price and price > 0 else None
         else:
-            conversion_factor = get_conversion_factor(item.get("name"), barcode_uom).get("conversion_factor", 1)
+            conversion_factor = get_conversion_factor(
+                item_code_for_conv, barcode_uom
+            ).get("conversion_factor", 1)
             uom = item_uom
             price = conversion_factor * item_price
             qty = encoded_price / price if price and price > 0 else None

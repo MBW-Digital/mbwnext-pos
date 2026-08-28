@@ -13,6 +13,7 @@
 				:current-time="shiftStore.currentTime"
 				:shift-duration="shiftStore.shiftDuration"
 				:has-open-shift="shiftStore.hasOpenShift"
+				:hr-schedule-badge="headerHrScheduleBadge"
 				:profile-name="shiftStore.profileName"
 				:user-name="userName"
 				:user-image="userImage"
@@ -142,6 +143,25 @@
 						</svg>
 						<span>{{ __("Return Invoice") }}</span>
 					</button>
+					<button
+						@click="uiStore.showKeyboardShortcutsDialog = true"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
+					>
+						<svg
+							class="w-5 h-5 text-gray-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+							/>
+						</svg>
+						<span>{{ __("Keyboard Shortcuts") }}</span>
+					</button>
 					<a
 						:href="externalAppUrl"
 						target="_blank"
@@ -192,44 +212,13 @@
 				v-if="shiftStore.hasOpenShift"
 				class="flex-1 flex flex-col overflow-hidden relative"
 			>
-				<!-- Invoice Tabs Bar -->
-				<div class="flex items-center justify-between px-2 sm:px-4 py-1.5 bg-white border-b border-gray-200 shadow-sm">
-					<div class="flex items-center gap-1 overflow-x-auto scrollbar-hide">
-						<button
-							v-for="tab in invoiceTabsStore.tabs"
-							:key="tab.id"
-							@click="handleInvoiceTabClick(tab.id)"
-							:class="[
-								'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs sm:text-sm font-medium border transition-all touch-manipulation whitespace-nowrap',
-								invoiceTabsStore.activeTabId === tab.id
-									? 'bg-red-600 text-white border-red-600 shadow-sm'
-									: 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-							]"
-						>
-							<span>{{ tab.label }}</span>
-							<button
-								v-if="invoiceTabsStore.tabs.length > 1"
-								@click.stop="handleCloseInvoiceTab(tab.id)"
-								class="p-0.5 rounded hover:bg-red-100 hover:text-red-700"
-								:aria-label="__('Close tab')"
-							>
-								<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-								</svg>
-							</button>
-						</button>
-						<button
-							@click="handleAddInvoiceTab"
-							class="ml-1 flex items-center justify-center w-7 h-7 rounded-md border border-dashed border-gray-300 text-gray-500 hover:bg-gray-50 hover:text-red-600 hover:border-red-400 flex-shrink-0"
-							:disabled="invoiceTabsStore.tabs.length >= invoiceTabsStore.maxTabs"
-							:aria-label="__('New tab')"
-						>
-							<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-							</svg>
-						</button>
-					</div>
-				</div>
+				<!-- Invoice Tabs Bar (Mobile: full width above split) -->
+				<InvoiceTabsBar
+					v-if="!uiStore.isDesktop"
+					@tab-click="handleInvoiceTabClick"
+					@add-tab="handleAddInvoiceTab"
+					@close-tab="handleCloseInvoiceTab"
+				/>
 
 				<!-- Icon-Only Management Slider - Always Visible -->
 				<div class="flex-1 flex overflow-hidden">
@@ -319,17 +308,27 @@
 							}"
 							:class="[
 								'flex flex-col bg-white overflow-hidden',
-								uiStore.isDesktop ? 'flex-shrink-0' : 'flex-1',
+								uiStore.isDesktop ? 'flex-shrink-0 min-h-0' : 'flex-1',
 							]"
 							style="contain: layout style paint"
 						>
-							<ItemsSelector
-								ref="itemsSelectorRef"
-								:pos-profile="shiftStore.profileName"
-								:cart-items="cartStore.invoiceItems"
-								:currency="shiftStore.profileCurrency"
-								@item-selected="handleItemSelected"
+							<!-- Invoice Tabs Bar (Desktop: inside left panel) -->
+							<InvoiceTabsBar
+								v-if="uiStore.isDesktop"
+								@tab-click="handleInvoiceTabClick"
+								@add-tab="handleAddInvoiceTab"
+								@close-tab="handleCloseInvoiceTab"
 							/>
+
+							<div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+								<ItemsSelector
+									ref="itemsSelectorRef"
+									:pos-profile="shiftStore.profileName"
+									:cart-items="cartStore.invoiceItems"
+									:currency="shiftStore.profileCurrency"
+									@item-selected="handleItemSelected"
+								/>
+							</div>
 						</div>
 					</keep-alive>
 
@@ -367,16 +366,19 @@
 							v-if="uiStore.isDesktop || uiStore.mobileActiveTab === 'cart'"
 							:class="[
 								'flex flex-col bg-gray-50 overflow-hidden',
-								uiStore.isDesktop ? 'flex-1' : 'flex-1',
+								uiStore.isDesktop ? 'flex-1 min-h-0' : 'flex-1',
 							]"
 							style="min-width: 300px; contain: layout style paint"
 						>
 							<InvoiceCart
-								:items="cartStore.invoiceItems"
+								ref="invoiceCartRef"
+								:items="cartStore.displayCartItems"
 								:customer="cartStore.customer"
 								:subtotal="cartStore.subtotal"
 								:tax-amount="cartStore.totalTax"
 								:discount-amount="cartStore.totalDiscount"
+								:coupon-discount="cartStore.couponDiscount"
+								:applied-coupon="cartStore.appliedCoupon"
 								:grand-total="cartStore.grandTotal"
 								:pos-profile="shiftStore.profileName"
 								:currency="shiftStore.profileCurrency"
@@ -455,138 +457,21 @@
 				</div>
 			</div>
 
-			<!-- No Shift Placeholder -->
-			<div
+			<!-- No Shift Placeholder (HR Roster aware) -->
+			<NoShiftPlaceholder
 				v-else
-				class="flex-1 flex items-center justify-center bg-gray-50"
-				style="max-height: calc(100vh - 60px - var(--header-height, 60px))"
-			>
-				<div class="text-center">
-					<div
-						class="mx-auto flex items-center justify-center h-24 w-24 rounded-full bg-blue-100"
-					>
-						<svg
-							class="h-12 w-12 text-blue-600"
-							fill="none"
-							stroke="currentColor"
-							viewBox="0 0 24 24"
-						>
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-							/>
-						</svg>
-					</div>
-					<h3 class="mt-4 text-lg font-medium text-gray-900">
-						{{ __("Welcome to MBW Next POS") }}
-					</h3>
-					<p class="mt-2 text-sm text-gray-500">
-						{{ __("Please open a shift to start making sales") }}
-					</p>
-					<!-- Trạng thái chấm công + nút thao tác (hình tròn, icon vân tay) -->
-					<div class="mt-4 space-y-3">
-						<div
-							class="inline-flex items-center px-3 py-1 rounded-full text-xs"
-							:class="[
-								attendanceState === 'checked_in'
-									? 'bg-green-50 text-green-700'
-									: attendanceState === 'checked_out'
-										? 'bg-gray-100 text-gray-700'
-										: 'bg-red-50 text-red-700',
-							]"
-						>
-							<span
-								class="w-2 h-2 rounded-full me-2"
-								:class="[
-									attendanceState === 'checked_in'
-										? 'bg-green-500'
-										: attendanceState === 'checked_out'
-											? 'bg-gray-400'
-											: 'bg-red-500',
-								]"
-							/>
-							<span class="font-medium">
-								{{ attendanceStatusLabel }}
-							</span>
-						</div>
-						<div class="flex items-center justify-center gap-8">
-							<button
-								v-if="showCheckInButton"
-								type="button"
-								:disabled="isAttendanceActionLoading"
-								@click="handleCheckIn"
-								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-red-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								<span
-									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-red-500 to-red-600 text-white hover:from-red-600 hover:to-red-700 active:scale-[0.98] transition-all duration-200 border-2 border-red-100"
-								>
-									<!-- Icon đồng hồ (chấm công vào) -->
-									<svg
-										class="w-8 h-8"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<circle cx="12" cy="12" r="9" />
-										<path d="M12 7v5l3 3" />
-									</svg>
-								</span>
-								<span class="text-sm font-semibold text-gray-800">
-									{{ __("Check In") }}
-								</span>
-							</button>
-							<button
-								v-if="showCheckOutButton"
-								type="button"
-								:disabled="isAttendanceActionLoading"
-								@click="handleCheckOut"
-								class="flex flex-col items-center gap-2 group focus:outline-none focus:ring-4 focus:ring-gray-200 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-							>
-								<span
-									class="flex items-center justify-center w-16 h-16 rounded-full bg-gradient-to-br from-gray-600 to-gray-700 text-white hover:from-gray-700 hover:to-gray-800 active:scale-[0.98] transition-all duration-200 border-2 border-gray-100"
-								>
-									<!-- Icon ra cửa / kết thúc ca -->
-									<svg
-										class="w-8 h-8"
-										fill="none"
-										stroke="currentColor"
-										stroke-width="2"
-										stroke-linecap="round"
-										stroke-linejoin="round"
-										viewBox="0 0 24 24"
-										aria-hidden="true"
-									>
-										<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-										<polyline points="16 17 21 12 16 7" />
-										<line x1="21" y1="12" x2="9" y2="12" />
-									</svg>
-								</span>
-								<span class="text-sm font-semibold text-gray-800">
-									{{ __("Check Out") }}
-								</span>
-							</button>
-						</div>
-					</div>
-					<Button
-						variant="solid"
-						theme="blue"
-						@click="uiStore.showOpenShiftDialog = true"
-						class="mt-6"
-					>
-						{{ __("Open Shift") }}
-					</Button>
-				</div>
-			</div>
+				:is-loading="todayShiftsLoading"
+				:has-employee="todayShiftsHasEmployee"
+				:require-hr-shift="requireHrShiftForWelcome"
+				:employee-name="todayShiftsEmployee"
+				:shifts="todayShifts"
+				:pos-shift-closed-today="effectivePosShiftClosedToday"
+				@open-shift="handleOpenShiftFromPlaceholder"
+			/>
 
-			<!-- Payment Dialog -->
+			<!-- Payment Dialog (state per invoice tab) -->
 		<PaymentDialog
-			v-model="uiStore.showPaymentDialog"
+			v-model="activeTabPaymentDialogModel"
 			:grand-total="cartStore.grandTotal"
 			:subtotal="cartStore.subtotal"
 			:pos-profile="shiftStore.profileName"
@@ -600,13 +485,18 @@
 			:customer="cartStore.customer"
 			:company="shiftStore.profileCompany"
 			:additional-discount="cartStore.additionalDiscount"
-			:items="cartStore.invoiceItems"
+			:remarks="cartStore.remarks"
+			:items="cartStore.displayCartItems"
 			:tax-amount="cartStore.totalTax"
 			:discount-amount="cartStore.totalDiscount"
+			:tax-inclusive="cartStore.taxInclusive"
+			:has-coupon="!!cartStore.appliedCoupon"
+			:applied-coupon="cartStore.appliedCoupon"
 			:target-doctype="cartStore.targetDoctype"
 			:is-submitting="cartStore.isSubmitting"
 			@payment-completed="handlePaymentCompleted"
 			@update-additional-discount="handleAdditionalDiscountUpdate"
+			@update:remarks="handleRemarksUpdate"
 		/>
 
 			<!-- Customer Selection Dialog -->
@@ -629,11 +519,32 @@
 				@shift-closed="handleShiftClosed"
 			/>
 
-			<!-- SePay Bank Transfer Dialog -->
+			<!-- Confirm close POS shift before HR end time -->
+			<Dialog
+				v-model="showEarlyCloseShiftConfirm"
+				:options="{ title: __('Close shift early?'), size: 'sm' }"
+			>
+				<template #body-content>
+					<p class="text-sm text-gray-600 py-2">
+						{{ earlyCloseHrConfirmMessage }}
+					</p>
+				</template>
+				<template #actions>
+					<div class="flex gap-2 w-full justify-end">
+						<Button variant="subtle" @click="cancelEarlyCloseShiftConfirm">
+							{{ __("No") }}
+						</Button>
+						<Button variant="solid" theme="red" @click="confirmEarlyCloseShiftProceed">
+							{{ __("Yes") }}
+						</Button>
+					</div>
+				</template>
+			</Dialog>
+
 			<SePayBankTransferDialog
-				v-model="uiStore.showSePayDialog"
-				:invoice-name="sePayInvoiceName"
-				:invoice-amount="sePayInvoiceAmount"
+				v-model="activeTabSePayDialogModel"
+				:invoice-name="invoiceTabsStore.activeTab?.sePayInvoiceName ?? ''"
+				:invoice-amount="invoiceTabsStore.activeTab?.sePayInvoiceAmount ?? 0"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
 				@payment-received="handleSePayPaymentReceived"
@@ -660,6 +571,7 @@
 			<CouponDialog
 				v-model="uiStore.showCouponDialog"
 				:subtotal="cartStore.subtotal"
+				:net-total="cartStore.netTotal"
 				:items="cartStore.invoiceItems"
 				:pos-profile="shiftStore.profileName"
 				:customer="cartStore.customer?.name || cartStore.customer"
@@ -690,6 +602,12 @@
 							offersDialogRef.value
 						)
 				"
+			/>
+
+			<BundleChoiceDialog
+				v-model="cartStore.showBundleChoiceDialog"
+				:choices="cartStore.bundleMatchChoices"
+				@select="cartStore.confirmBundleChoice"
 			/>
 
 			<!-- Batch/Serial Dialog -->
@@ -822,105 +740,6 @@
 							@click="confirmClearCart"
 						>
 							{{ __("Clear All") }}
-						</Button>
-					</div>
-				</template>
-			</Dialog>
-
-			<!-- Dialog chụp ảnh chấm công (đính kèm Attendance) -->
-			<Dialog
-				v-model="showPhotoDialog"
-				:options="{ title: __('Attendance Photo'), size: 'sm' }"
-				@after-close="stopAttendancePhotoCamera"
-			>
-				<template #body-content>
-					<div class="py-3 space-y-3">
-						<p class="text-sm text-gray-600">
-							{{ __("Take a photo to save to the attendance record (optional).") }}
-						</p>
-						<div class="relative bg-gray-900 rounded-lg overflow-hidden aspect-video flex items-center justify-center">
-							<video
-								ref="attendancePhotoVideoRef"
-								autoplay
-								playsinline
-								muted
-								class="absolute inset-0 w-full h-full object-cover object-center"
-							/>
-							<canvas ref="attendancePhotoCanvasRef" class="hidden" />
-							<div
-								v-if="attendancePhotoError"
-								class="absolute inset-0 flex items-center justify-center bg-black/70 text-white text-sm p-4"
-							>
-								{{ attendancePhotoError }}
-							</div>
-						</div>
-					</div>
-				</template>
-				<template #actions>
-					<div class="flex gap-2 w-full">
-						<Button
-							class="flex-1"
-							variant="subtle"
-							:loading="attendancePhotoSkipping"
-							:disabled="attendancePhotoUploading"
-							@click="skipAttendancePhoto"
-						>
-							{{ __("Skip") }}
-						</Button>
-						<Button
-							class="flex-1"
-							variant="solid"
-							theme="blue"
-							:loading="attendancePhotoUploading"
-							:disabled="attendancePhotoSkipping"
-							@click="captureAndUploadAttendancePhoto"
-						>
-							{{ __("Take Photo") }}
-						</Button>
-					</div>
-				</template>
-			</Dialog>
-
-			<!-- Dialog chọn ca làm việc cho chấm công -->
-			<Dialog
-				v-model="showShiftDialog"
-				:options="{ title: __('Select Shift'), size: 'xs' }"
-			>
-				<template #body-content>
-					<div class="py-3 space-y-3">
-						<p class="text-sm text-gray-600">
-							{{ __("Please select a shift for attendance.") }}
-						</p>
-						<select
-							v-model="tempSelectedShiftType"
-							class="mt-1 block w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 bg-white"
-						>
-							<option
-								v-for="shift in shiftTypes"
-								:key="shift.name"
-								:value="shift.name"
-							>
-								{{ shift.name }}
-							</option>
-						</select>
-					</div>
-				</template>
-				<template #actions>
-					<div class="flex gap-2 w-full">
-						<Button
-							class="flex-1"
-							variant="subtle"
-							@click="cancelShiftDialog"
-						>
-							{{ __("Cancel") }}
-						</Button>
-						<Button
-							class="flex-1"
-							variant="solid"
-							theme="blue"
-							@click="confirmShiftSelection"
-						>
-							{{ __("Confirm") }}
 						</Button>
 					</div>
 				</template>
@@ -1180,6 +999,9 @@
 				</template>
 			</Dialog>
 
+			<!-- Keyboard Shortcuts Dialog -->
+			<KeyboardShortcutsDialog v-model="uiStore.showKeyboardShortcutsDialog" />
+
 			<!-- Clear Cache Overlay -->
 			<ClearCacheOverlay
 				ref="clearCacheOverlayRef"
@@ -1196,7 +1018,9 @@
 <script setup>
 import ShiftClosingDialog from "@/components/ShiftClosingDialog.vue";
 import ShiftOpeningDialog from "@/components/ShiftOpeningDialog.vue";
+import NoShiftPlaceholder from "@/components/pos/NoShiftPlaceholder.vue";
 import ClearCacheOverlay from "@/components/common/ClearCacheOverlay.vue";
+import KeyboardShortcutsDialog from "@/components/common/KeyboardShortcutsDialog.vue";
 import LoadingSpinner from "@/components/common/LoadingSpinner.vue";
 import ManagementSlider from "@/components/pos/ManagementSlider.vue";
 import POSHeader from "@/components/pos/POSHeader.vue";
@@ -1206,10 +1030,12 @@ import CreateCustomerDialog from "@/components/sale/CreateCustomerDialog.vue";
 import CustomerDialog from "@/components/sale/CustomerDialog.vue";
 import DraftInvoicesDialog from "@/components/sale/DraftInvoicesDialog.vue";
 import InvoiceCart from "@/components/sale/InvoiceCart.vue";
+import InvoiceTabsBar from "@/components/sale/InvoiceTabsBar.vue";
 import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";
 import OffersDialog from "@/components/sale/OffersDialog.vue";
+import BundleChoiceDialog from "@/components/sale/BundleChoiceDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
@@ -1222,6 +1048,8 @@ import InvoiceDetailDialog from "@/components/invoices/InvoiceDetailDialog.vue";
 import { useRealtimeStock } from "@/composables/useRealtimeStock";
 import { usePOSEvents } from "@/composables/usePOSEvents";
 import { useLocale } from "@/composables/useLocale";
+import { usePosKeyboardShortcuts } from "@/composables/usePosKeyboardShortcuts";
+import { useWebUSBPrinter } from "@/composables/useWebUSBPrinter";
 import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
@@ -1229,7 +1057,7 @@ import { getSetting } from "@/utils/offline/db";
 import { getCachedItemByCodeOrName, cacheItems } from "@/utils/offline/items";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
-import { printInvoice, printInvoiceByName } from "@/utils/printInvoice";
+import { printInvoiceByName } from "@/utils/printInvoice";
 import { Button, Dialog, createResource } from "frappe-ui";
 import { call } from "@/utils/apiWrapper";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
@@ -1263,6 +1091,51 @@ const customerSearchStore = useCustomerSearchStore();
 // Note: settingsStore is an alias to posSettingsStore (same Pinia store singleton)
 const settingsStore = posSettingsStore;
 
+// Payment / SePay: v-model binds to active tab (computed below). Mirror into uiStore for divider / registerDialog.
+const activeTabPaymentDialogModel = computed({
+	get() {
+		return invoiceTabsStore.activeTab?.showPaymentDialog ?? false;
+	},
+	set(v) {
+		const t = invoiceTabsStore.activeTab;
+		if (t) t.showPaymentDialog = v;
+	},
+});
+
+const activeTabSePayDialogModel = computed({
+	get() {
+		return invoiceTabsStore.activeTab?.showSePayDialog ?? false;
+	},
+	set(v) {
+		const t = invoiceTabsStore.activeTab;
+		if (t) t.showSePayDialog = v;
+	},
+});
+
+watch(
+	() => [
+		invoiceTabsStore.activeTabId,
+		invoiceTabsStore.activeTab?.showPaymentDialog,
+		invoiceTabsStore.activeTab?.showSePayDialog,
+	],
+	() => {
+		const t = invoiceTabsStore.activeTab;
+		uiStore.showPaymentDialog = t?.showPaymentDialog ?? false;
+		uiStore.showSePayDialog = t?.showSePayDialog ?? false;
+	},
+	{ immediate: true },
+);
+
+function setActiveTabPaymentDialog(open) {
+	const t = invoiceTabsStore.activeTab;
+	if (t) t.showPaymentDialog = !!open;
+}
+
+function setActiveTabSePayDialog(open) {
+	const t = invoiceTabsStore.activeTab;
+	if (t) t.showSePayDialog = !!open;
+}
+
 // Real-time stock updates
 const { onStockUpdate } = useRealtimeStock();
 
@@ -1277,6 +1150,7 @@ const {
 
 // Initialize toast
 const { showSuccess, showError, showWarning } = useToast();
+const usbPrinter = useWebUSBPrinter();
 
 // Initialize logger
 const log = logger.create("POSSale");
@@ -1287,11 +1161,9 @@ const { userName, userImage } = useUserData();
 // Locale composable for RTL support
 const { isRTL } = useLocale();
 
-// Item code dịch vụ làm nóng/lạnh: lấy từ POS Profile (service_surcharge_item), fallback "Phí bảo quản lạnh"
+// Item code dịch vụ làm nóng/lạnh: chỉ dùng khi POS Profile có cấu hình service_surcharge_item
 const serviceSurchargeItemCode = computed(
-	() =>
-		shiftStore.currentProfile?.service_surcharge_item ||
-		'Phí bảo quản lạnh'
+	() => shiftStore.currentProfile?.service_surcharge_item || ''
 );
 
 // External app URL for "Open App" menu (default: site_url/app; override via site_config.json: pos_external_app_url)
@@ -1305,10 +1177,10 @@ const externalAppUrl = computed(() => {
 
 // Component refs
 const itemsSelectorRef = ref(null);
+const invoiceCartRef = ref(null);
 const offersDialogRef = ref(null);
 const containerRef = ref(null);
 const dividerRef = ref(null);
-const pendingPaymentAfterCustomer = ref(false);
 const logoutAfterClose = ref(false);
 const editCustomer = ref(null); // Customer being edited (null for create mode)
 const showClearCacheDialog = ref(false);
@@ -1347,347 +1219,217 @@ const showInvoiceManagement = ref(false);
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
 
-// Trạng thái chấm công (check-in / check-out)
-const attendanceStatus = ref(null);
-const shiftTypes = ref([]);
-const showShiftDialog = ref(false);
-const tempSelectedShiftType = ref("");
+// ─── HR Roster: today's shifts ────────────────────────────────────────────────
+const todayShifts = ref([]);
+const todayShiftsLoading = ref(false);
+const todayShiftsEmployee = ref("");
+const todayShiftsHasEmployee = ref(true);
+/** True when user has at least one POS Profile with custom_use_shift_in_pos unchecked. */
+const canOpenWithoutHrShift = ref(false);
+/** Aligns with server: blocks reopen only for single-slot days or after all roster slots ended (not after each close when multiple shifts exist). */
+const posShiftClosedToday = ref(false);
 
-// Chụp ảnh chấm công: mở sau khi chọn ca, trước khi gọi API (shift + action lưu ở đây)
-const showPhotoDialog = ref(false);
-const sePayInvoiceName = ref("");
-const sePayInvoiceAmount = ref(0);
-const pendingAttendanceParams = ref(null); // { shift, action } — chọn ca xong, chờ chụp/bỏ qua rồi mới gọi API
-const attendancePhotoVideoRef = ref(null);
-const attendancePhotoCanvasRef = ref(null);
-const attendancePhotoStream = ref(null);
-const attendancePhotoError = ref("");
-const attendancePhotoUploading = ref(false);
-const attendancePhotoSkipping = ref(false);
-const pendingAttendanceAction = ref(null);
-
-const attendanceStatusResource = createResource({
-	url: "pos_next.api.attendance.get_today_status",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-	},
+const currentProfileUsesHrShift = computed(() => {
+	const profile = shiftStore.currentProfile;
+	if (!profile) return false;
+	return !!profile.custom_use_shift_in_pos;
 });
 
-const attendanceCheckInResource = createResource({
-	url: "pos_next.api.attendance.check_in",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-		showSuccess(__("Check-in successful"));
-	},
-	onError(error) {
-		log.error("Attendance check-in error:", error);
-		showError(parseError(error));
-	},
-});
-
-const attendanceCheckOutResource = createResource({
-	url: "pos_next.api.attendance.check_out",
-	auto: false,
-	onSuccess(data) {
-		attendanceStatus.value = data;
-		showSuccess(__("Check-out successful"));
-	},
-	onError(error) {
-		log.error("Attendance check-out error:", error);
-		showError(parseError(error));
-	},
-});
-
-const attendanceState = computed(
-	() => attendanceStatus.value?.state || "not_marked"
+/** HR roster gate on welcome screen: only when every accessible profile enforces it. */
+const requireHrShiftForWelcome = computed(
+	() => !canOpenWithoutHrShift.value,
 );
 
-const attendanceStatusLabel = computed(() => {
-	if (attendanceState.value === "checked_in") {
-		return __("You have checked in today");
+/** Skip same-day close block when user can open via a non-HR-shift profile. */
+const effectivePosShiftClosedToday = computed(() =>
+	canOpenWithoutHrShift.value ? false : posShiftClosedToday.value,
+);
+
+async function loadPosShiftClosedToday() {
+	try {
+		const res = await call("pos_next.api.shifts.user_closed_pos_shift_today", {});
+		const data = res?.message ?? res ?? {};
+		posShiftClosedToday.value = !!data.closed_today;
+	} catch (err) {
+		log.error("Error loading POS closed-today flag:", err);
+		posShiftClosedToday.value = false;
 	}
-	if (attendanceState.value === "checked_out") {
-		return __("You have checked out today");
+}
+
+async function loadTodayShifts() {
+	todayShiftsLoading.value = true;
+	try {
+		await Promise.all([
+			(async () => {
+				try {
+					const res = await call("pos_next.api.roster.get_today_shifts", {});
+					const data = res?.message ?? res ?? {};
+					todayShiftsHasEmployee.value = !!data.has_employee;
+					todayShiftsEmployee.value = data.employee_name || "";
+					todayShifts.value = Array.isArray(data.shifts) ? data.shifts : [];
+					canOpenWithoutHrShift.value = !!data.can_open_without_hr_shift;
+				} catch (err) {
+					log.error("Error loading today HR shifts:", err);
+					todayShiftsHasEmployee.value = true; // soft-fail: don't block POS
+					todayShifts.value = [];
+					canOpenWithoutHrShift.value = true;
+				}
+			})(),
+			loadPosShiftClosedToday(),
+		]);
+	} finally {
+		todayShiftsLoading.value = false;
 	}
-	return __("You have not checked in today");
+}
+
+function hrTimeToMinutes(timeStr) {
+	if (!timeStr) return null;
+	const parts = String(timeStr).split(":");
+	const h = parseInt(parts[0] || "0", 10);
+	const m = parseInt(parts[1] || "0", 10);
+	return h * 60 + m;
+}
+
+/** Depends on shiftStore.currentTime so "now" updates every second during open shift */
+/** Minutes before HR roster start_time that count as same window (POS open / header / early-close messaging). */
+const HR_SCHEDULE_EARLY_OPEN_MINUTES = 30
+
+const hrNowMinutes = computed(() => {
+	void shiftStore.currentTime;
+	const d = new Date();
+	return d.getHours() * 60 + d.getMinutes();
 });
 
-const showCheckInButton = computed(
-	() =>
-		attendanceState.value === "not_marked" ||
-		attendanceState.value === "checked_out"
-);
-
-const showCheckOutButton = computed(
-	() => attendanceState.value === "checked_in"
-);
-
-const isAttendanceActionLoading = computed(
-	() =>
-		attendanceCheckInResource.loading || attendanceCheckOutResource.loading
-);
-
-const currentShiftName = computed(() => {
-	if (!shiftTypes.value.length) {
-		return null;
-	}
-
-	const now = new Date();
-	const minutesNow = now.getHours() * 60 + now.getMinutes();
-
-	// Ưu tiên ca có khoảng thời gian bao phủ thời điểm hiện tại
-	for (const shift of shiftTypes.value) {
-		const start = shift.start_time;
-		const end = shift.end_time;
-
-		if (!start || !end) continue;
-
-		const [sh, sm] = String(start).split(":").map((v) => parseInt(v || "0", 10));
-		const [eh, em] = String(end).split(":").map((v) => parseInt(v || "0", 10));
-
-		const startMinutes = sh * 60 + sm;
-		const endMinutes = eh * 60 + em;
-
-		if (minutesNow >= startMinutes && minutesNow <= endMinutes) {
-			return shift.name;
+const activeHrScheduleShift = computed(() => {
+	const nm = hrNowMinutes.value;
+	/** @type {typeof todayShifts.value} */
+	const candidates = [];
+	for (const s of todayShifts.value) {
+		const start = hrTimeToMinutes(s.start_time);
+		const end = hrTimeToMinutes(s.end_time);
+		if (start === null || end === null) continue;
+		const windowStart = Math.max(0, start - HR_SCHEDULE_EARLY_OPEN_MINUTES);
+		if (nm >= windowStart && nm <= end) {
+			candidates.push(s);
 		}
 	}
-
-	// Nếu không khớp ca nào theo giờ, dùng ca đầu tiên làm mặc định
-	return shiftTypes.value[0].name;
+	if (!candidates.length) return null;
+	// When two slots overlap on the clock (e.g. afternoon still "in hours" while evening is in 30-min early window), use the latest start_time so the header matches the shift the user opens POS for (same rule as the welcome screen).
+	return candidates.reduce((best, s) => {
+		const sm = hrTimeToMinutes(s.start_time);
+		const bm = hrTimeToMinutes(best.start_time);
+		if (sm === null) return best;
+		if (bm === null) return s;
+		return sm > bm ? s : best;
+	});
 });
 
-function isShiftActiveNow(shiftName) {
-	if (!shiftName || !shiftTypes.value.length) {
-		return false;
-	}
+/** Header badge: current HR shift line (next to POS shift duration) */
+const headerHrScheduleBadge = computed(() => {
+	if (!shiftStore.hasOpenShift || !currentProfileUsesHrShift.value) return null;
 
-	const shift = shiftTypes.value.find((s) => s.name === shiftName);
-	if (!shift || !shift.start_time || !shift.end_time) {
-		// Nếu ca không có giờ bắt đầu/kết thúc rõ ràng thì không ràng buộc
-		return true;
-	}
+	const active = activeHrScheduleShift.value;
+	if (active) {
+		const nm = hrNowMinutes.value;
+		const startM = hrTimeToMinutes(active.start_time);
+		const beforeOfficialStart = startM !== null && nm < startM;
 
-	const now = new Date();
-	const minutesNow = now.getHours() * 60 + now.getMinutes();
-
-	const [sh, sm] = String(shift.start_time)
-		.split(":")
-		.map((v) => parseInt(v || "0", 10));
-	const [eh, em] = String(shift.end_time)
-		.split(":")
-		.map((v) => parseInt(v || "0", 10));
-
-	const startMinutes = sh * 60 + sm;
-	const endMinutes = eh * 60 + em;
-
-	return minutesNow >= startMinutes && minutesNow <= endMinutes;
-}
-
-function openShiftDialog(action) {
-	pendingAttendanceAction.value = action;
-
-	// Gán giá trị mặc định là ca hiện tại (nếu có) hoặc ca đầu tiên
-	if (!tempSelectedShiftType.value) {
-		const autoShift = currentShiftName.value;
-		if (autoShift) {
-			tempSelectedShiftType.value = autoShift;
-		} else if (shiftTypes.value.length > 0) {
-			tempSelectedShiftType.value = shiftTypes.value[0].name;
+		const parts = [active.shift_type].filter(Boolean);
+		if (active.start_time && active.end_time) {
+			parts.push(`${active.start_time}–${active.end_time}`);
 		}
+		if (active.shift_location) parts.push(active.shift_location);
+		return {
+			variant: beforeOfficialStart ? "orange" : "green",
+			label: `${__("Shift")}: `,
+			value: parts.join(" · "),
+		};
 	}
 
-	showShiftDialog.value = true;
-}
-
-async function handleCheckIn() {
-	// Luôn mở popup chọn ca khi chấm công vào
-	if (!shiftTypes.value.length) {
-		showWarning(
-			__("No shift types found. Please configure Shift Type first.")
-		);
-		return;
-	}
-	openShiftDialog("check_in");
-}
-
-async function handleCheckOut() {
-	// Mở popup xác nhận ca khi chấm công ra
-	openShiftDialog("check_out");
-}
-
-function cancelShiftDialog() {
-	showShiftDialog.value = false;
-	pendingAttendanceAction.value = null;
-}
-
-async function confirmShiftSelection() {
-	if (!tempSelectedShiftType.value) {
-		showWarning(__("Please select a shift."));
-		return;
+	if (todayShiftsHasEmployee.value && todayShifts.value.length > 0) {
+		return {
+			variant: "orange",
+			label: `${__("Shift")}: `,
+			value: __("Outside scheduled hours"),
+		};
 	}
 
-	const chosenShift = tempSelectedShiftType.value;
+	if (!todayShiftsHasEmployee.value) {
+		return {
+			variant: "gray",
+			label: `${__("Shift")}: `,
+			value: __("No employee linked"),
+		};
+	}
 
-	// Chặn chấm công nếu ca không khớp giờ hiện tại
-	if (!isShiftActiveNow(chosenShift)) {
-		showWarning(
+	return {
+		variant: "gray",
+		label: `${__("Shift")}: `,
+		value: __("Schedule not loaded"),
+	};
+});
+
+/** True when POS close is initiated from "Close Shift & Sign Out" and needs early-close confirm gate */
+const earlyCloseConfirmFromLogoutFlow = ref(false);
+
+const showEarlyCloseShiftConfirm = ref(false);
+
+const earlyCloseHrConfirmMessage = computed(() => {
+	const s = activeHrScheduleShift.value;
+	if (!s) return __("Your HR shift window has ended. Closing now is not early.");
+	const end = s.end_time ? String(s.end_time) : "";
+	const name = s.shift_type || __("shift");
+	return end
+		? __(
+				"You are closing the POS shift before your scheduled HR shift ({0}) ends ({1}). Do you want to continue?",
+				[name, end]
+			)
+		: __("You are closing the POS shift before your scheduled HR shift ends. Do you want to continue?");
+});
+
+function shouldConfirmEarlyHrClose() {
+	if (!currentProfileUsesHrShift.value) return false;
+
+	const active = activeHrScheduleShift.value;
+	if (!active || !active.end_time) return false;
+	const nm = hrNowMinutes.value;
+	const end = hrTimeToMinutes(active.end_time);
+	if (end === null) return false;
+	return nm < end;
+}
+
+function confirmEarlyCloseShiftProceed() {
+	showEarlyCloseShiftConfirm.value = false;
+	earlyCloseConfirmFromLogoutFlow.value = false;
+	uiStore.showCloseShiftDialog = true;
+}
+
+function cancelEarlyCloseShiftConfirm() {
+	showEarlyCloseShiftConfirm.value = false;
+	if (earlyCloseConfirmFromLogoutFlow.value) {
+		earlyCloseConfirmFromLogoutFlow.value = false;
+		logoutAfterClose.value = false;
+		uiStore.showLogoutDialog = true;
+	}
+}
+
+/**
+ * Called when user clicks "Open Shift" on the NoShiftPlaceholder.
+ * Stores the suggested HR shift (if any) and opens the POS shift dialog.
+ */
+function handleOpenShiftFromPlaceholder(hrShift) {
+	if (effectivePosShiftClosedToday.value) {
+		showError(
 			__(
-				"The current time is not within the selected shift time range. Please choose a valid shift."
+				"You have already closed your POS shift today. You cannot open another until tomorrow."
 			)
 		);
 		return;
 	}
-
-	showShiftDialog.value = false;
-	const action = pendingAttendanceAction.value;
-	pendingAttendanceAction.value = null;
-
-	// Luồng mới: chọn ca → chụp ảnh (hoặc bỏ qua) → rồi mới gọi API
-	attendancePhotoError.value = "";
-	pendingAttendanceParams.value = { shift: chosenShift, action };
-	showPhotoDialog.value = true;
-}
-
-/** Gọi API check-in hoặc check-out theo pendingAttendanceParams. */
-async function doAttendanceSubmit() {
-	const p = pendingAttendanceParams.value;
-	if (!p) return;
-	if (p.action === "check_in") {
-		await attendanceCheckInResource.submit({
-			pos_profile: shiftStore.profileName,
-			shift: p.shift,
-		});
-	} else if (p.action === "check_out") {
-		await attendanceCheckOutResource.submit({
-			pos_profile: shiftStore.profileName,
-		});
-	}
-}
-
-// Bật/tắt camera khi mở/đóng dialog chụp ảnh chấm công
-watch(showPhotoDialog, async (isOpen) => {
-	if (isOpen) {
-		await nextTick();
-		startAttendancePhotoCamera();
-	} else {
-		stopAttendancePhotoCamera();
-		pendingAttendanceParams.value = null;
-	}
-});
-
-async function startAttendancePhotoCamera() {
-	attendancePhotoError.value = "";
-	try {
-		// Tỷ lệ 16:9 để khớp ô xem, giảm lệch khi crop
-		const stream = await navigator.mediaDevices.getUserMedia({
-			video: {
-				facingMode: "user",
-				width: { ideal: 640 },
-				height: { ideal: 360 },
-				aspectRatio: { ideal: 16 / 9 },
-			},
-		});
-		attendancePhotoStream.value = stream;
-		await nextTick();
-		const video = attendancePhotoVideoRef.value;
-		if (video && stream) {
-			video.srcObject = stream;
-		}
-	} catch (err) {
-		attendancePhotoError.value =
-			err.message || __("Cannot access camera. You can skip or use a device with camera.");
-	}
-
-}
-
-function stopAttendancePhotoCamera() {
-	const stream = attendancePhotoStream.value;
-	if (stream) {
-		stream.getTracks().forEach((t) => t.stop());
-		attendancePhotoStream.value = null;
-	}
-	const video = attendancePhotoVideoRef.value;
-	if (video) {
-		video.srcObject = null;
-	}
-	attendancePhotoError.value = "";
-}
-
-async function skipAttendancePhoto() {
-	const p = pendingAttendanceParams.value;
-	if (!p) {
-		showPhotoDialog.value = false;
-		return;
-	}
-	attendancePhotoSkipping.value = true;
-	try {
-		await doAttendanceSubmit();
-		showPhotoDialog.value = false;
-	} catch (e) {
-		// Lỗi đã được resource onError xử lý
-	} finally {
-		attendancePhotoSkipping.value = false;
-	}
-}
-
-function blobToBase64(blob) {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onloadend = () => {
-			const dataUrl = reader.result;
-			const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
-			resolve(base64);
-		};
-		reader.onerror = reject;
-		reader.readAsDataURL(blob);
-	});
-}
-
-async function captureAndUploadAttendancePhoto() {
-	const video = attendancePhotoVideoRef.value;
-	const canvas = attendancePhotoCanvasRef.value;
-	const p = pendingAttendanceParams.value;
-	if (!video || !canvas || !p) {
-		showWarning(__("Cannot capture photo. Please try again or skip."));
-		return;
-	}
-	if (video.readyState !== video.HAVE_ENOUGH_DATA) {
-		showWarning(__("Camera not ready. Please wait or skip."));
-		return;
-	}
-	attendancePhotoUploading.value = true;
-	try {
-		canvas.width = video.videoWidth;
-		canvas.height = video.videoHeight;
-		const ctx = canvas.getContext("2d");
-		ctx.drawImage(video, 0, 0);
-		const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
-		if (!blob) {
-			showWarning(__("Failed to capture image."));
-			return;
-		}
-		const imageBase64 = await blobToBase64(blob);
-		// Gọi check-in/check-out trước để có attendance_name, sau đó đính kèm ảnh
-		await doAttendanceSubmit();
-		const attendanceName = attendanceStatus.value?.attendance_name;
-		if (attendanceName) {
-			await call("pos_next.api.attendance.upload_attendance_photo", {
-				attendance_name: attendanceName,
-				image_base64: imageBase64,
-				photo_type: p.action || "check_in",
-			});
-			showSuccess(__("Photo saved to attendance."));
-		}
-		showPhotoDialog.value = false;
-	} catch (err) {
-		log.error("captureAndUploadAttendancePhoto error:", err);
-		showError(parseError(err));
-	} finally {
-		attendancePhotoUploading.value = false;
-	}
+	// hrShift = the currently active shift object or null
+	// Currently used for UX context; stored for potential future use
+	// (e.g., recording hr_shift_type on POS Opening Shift)
+	uiStore.showOpenShiftDialog = true;
 }
 
 const selectedInvoiceForView = ref(null);
@@ -1761,23 +1503,6 @@ onMounted(async () => {
 		updateLayoutBounds();
 	};
 	window.addEventListener("resize", handleResize, { passive: true });
-
-	// Load today's attendance status for the current user
-	try {
-		await attendanceStatusResource.fetch();
-	} catch (error) {
-		log.error("Error loading attendance status:", error);
-	}
-
-	// Load available shift types (dùng nội bộ để tự gán ca khi chấm công)
-	try {
-		const response = await call("pos_next.api.attendance.get_shift_types", {});
-		const data = response?.message || response || [];
-		shiftTypes.value = Array.isArray(data) ? data : [];
-	} catch (error) {
-		log.error("Error loading shift types:", error);
-		shiftTypes.value = [];
-	}
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {
@@ -1917,7 +1642,11 @@ onMounted(async () => {
 		const hasShift = await shiftStore.checkShift();
 
 		if (!hasShift) {
-			uiStore.showOpenShiftDialog = true;
+			// Load HR Roster shifts for the welcome screen (non-blocking)
+			// Do NOT auto-open the shift dialog — user will see NoShiftPlaceholder
+			// and click "Open Shift" themselves after reviewing their HR schedule.
+			loadTodayShifts();
+
 			// Offline: use last profile from IndexedDB and load items from cache
 			if (offlineStore.isOffline) {
 				try {
@@ -1965,6 +1694,9 @@ onMounted(async () => {
 				} else {
 					await offlineStore.checkOfflineCacheAvailability();
 				}
+
+				// HR roster: header schedule badge + welcome screen when no POS shift
+				loadTodayShifts();
 			}
 		}
 
@@ -2270,6 +2002,7 @@ async function handleShiftOpened() {
 		// Load tax rules with tax_inclusive setting
 		await cartStore.loadTaxRules(shiftStore.profileName, posSettingsStore.settings);
 	}
+	loadTodayShifts();
 	showSuccess(__("You can now start making sales"));
 }
 
@@ -2280,13 +2013,14 @@ function handleShiftClosed() {
 	// Check if logout should happen after closing shift
 	if (logoutAfterClose.value) {
 		logoutAfterClose.value = false;
+		invoiceTabsStore.resetPaymentUiOnAllTabs();
 		// Clear all dialog states to prevent stale state on next login
 		uiStore.resetAllDialogs();
 		session.logout.submit();
 	} else {
-		setTimeout(() => {
-			uiStore.showOpenShiftDialog = true;
-		}, 500);
+		// Reload HR shifts so NoShiftPlaceholder shows updated status.
+		// User can then click "Open Shift" themselves when their shift is active.
+		loadTodayShifts();
 	}
 }
 
@@ -2333,7 +2067,7 @@ async function handleAddColdStorageFeeLine(count = 1) {
 		};
 
 		// Gộp vào một dòng: cộng số lượng (merge: true)
-		cartStore.addItem(item, n, true, shiftStore.currentProfile, {
+		await cartStore.addItem(item, n, true, shiftStore.currentProfile, {
 			merge: true,
 		});
 	} catch (error) {
@@ -2363,9 +2097,27 @@ function handleRemoveColdStorageFeeLine(count = 1) {
 	}
 }
 
-function handleItemSelected(item, autoAdd = false) {
+/**
+ * Whether an item really offers a choice of unit.
+ *
+ * `item_uoms` is meant to hold the alternative units only, but payloads coming
+ * from different endpoints have disagreed on that, so check rather than trust
+ * the length (PM-TASK-00048).
+ */
+function hasAlternateUoms(item) {
+	return (item?.item_uoms || []).some((u) => u?.uom && u.uom !== item.stock_uom);
+}
+
+async function handleItemSelected(item, autoAdd = false) {
 	// Auto-add mode
 	if (autoAdd) {
+		const autoQty =
+			item.resolved_qty && item.resolved_barcode_type ? item.resolved_qty : 1;
+		if (settingsStore.itemRequiresBatchSerialDialog(item)) {
+			cartStore.setPendingItem(item, autoQty);
+			uiStore.showBatchSerialDialog = true;
+			return;
+		}
 		try {
 			// Check if item has resolved barcode data (weighted/priced)
 			if (item.resolved_qty && item.resolved_barcode_type) {
@@ -2380,9 +2132,9 @@ function handleItemSelected(item, autoAdd = false) {
 					price_list_rate: unitRate,
 					is_resolved_barcode: true, // Mark as readonly
 				};
-				cartStore.addItem(resolvedItem, item.resolved_qty, true, shiftStore.currentProfile);
+				await cartStore.addItem(resolvedItem, item.resolved_qty, true, shiftStore.currentProfile);
 			} else {
-				cartStore.addItem(item, 1, true, shiftStore.currentProfile);
+				await cartStore.addItem(item, 1, true, shiftStore.currentProfile);
 			}
 		} catch (error) {
 			uiStore.showError(
@@ -2399,11 +2151,16 @@ function handleItemSelected(item, autoAdd = false) {
 	// - batch/serial items (they have their own validation in the dialog)
 	// - template items with variants (variants carry their own stock)
 	// Product Bundles have calculated stock based on component availability
+	const allowsSkipBatchOnly =
+		settingsStore.isEnabled &&
+		settingsStore.allowSkipManualBatchSelection &&
+		item.has_batch_no &&
+		!item.has_serial_no;
 	if (
 		settingsStore.shouldEnforceStockValidation() &&
 		(item.is_stock_item || item.is_bundle) &&
 		!item.has_serial_no &&
-		!item.has_batch_no &&
+		(!(item.has_batch_no) || allowsSkipBatchOnly) &&
 		!item.has_variants
 	) {
 		const actualQty = Math.floor(item.actual_qty ?? item.stock_qty ?? 0);
@@ -2431,15 +2188,17 @@ function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
-	// Check for UOMs
-	if (item.item_uoms && item.item_uoms.length > 0) {
+	// Check for UOMs. Only worth asking when there is a unit OTHER than the stock
+	// one — a payload listing just the stock UOM would otherwise make the cashier
+	// pick from a single option on every scan (PM-TASK-00048).
+	if (hasAlternateUoms(item)) {
 		cartStore.setPendingItem(item, 1, "uom");
 		uiStore.showItemSelectionDialog = true;
 		return;
 	}
 
-	// Check for batch/serial
-	if (item.has_batch_no || item.has_serial_no) {
+	// Check for batch / serial selection (manual); batch-only can be skipped via POS Settings
+	if (settingsStore.itemRequiresBatchSerialDialog(item)) {
 		cartStore.setPendingItem(item, 1);
 		uiStore.showBatchSerialDialog = true;
 		return;
@@ -2447,7 +2206,7 @@ function handleItemSelected(item, autoAdd = false) {
 
 	// Add to cart
 	try {
-		cartStore.addItem(item, 1, false, shiftStore.currentProfile);
+		await cartStore.addItem(item, 1, false, shiftStore.currentProfile);
 	} catch (error) {
 		uiStore.showError(
 			__("Insufficient Stock"),
@@ -2469,15 +2228,20 @@ function handleAdditionalDiscountUpdate(discountAmount) {
 	cartStore.rebuildIncrementalCache();
 }
 
+function handleRemarksUpdate(value) {
+	cartStore.remarks = value || "";
+}
+
 function handleCustomerSelected(selectedCustomer) {
 	if (selectedCustomer) {
 		cartStore.setCustomer(selectedCustomer);
 		uiStore.showCustomerDialog = false;
 		showSuccess(__("{0} selected", [selectedCustomer.customer_name]));
 
-		if (pendingPaymentAfterCustomer.value) {
-			pendingPaymentAfterCustomer.value = false;
-			uiStore.showPaymentDialog = true;
+		const tab = invoiceTabsStore.activeTab;
+		if (tab?.pendingPaymentAfterCustomer) {
+			tab.pendingPaymentAfterCustomer = false;
+			setActiveTabPaymentDialog(true);
 		}
 	} else {
 		cartStore.setCustomer(null);
@@ -2506,11 +2270,12 @@ function handleProceedToPayment() {
 	if (!customerValue && !shiftStore.profileCustomer) {
 		showWarning(__("Please select a customer before proceeding"));
 		uiStore.showCustomerDialog = true;
-		pendingPaymentAfterCustomer.value = true;
+		const tab = invoiceTabsStore.activeTab;
+		if (tab) tab.pendingPaymentAfterCustomer = true;
 		return;
 	}
 
-	uiStore.showPaymentDialog = true;
+	setActiveTabPaymentDialog(true);
 }
 
 async function handleDeleteFailedInvoice() {
@@ -2530,7 +2295,7 @@ async function handleErrorRetry() {
 	uiStore.clearError();
 	if (uiStore.errorRetryAction === "payment") {
 		setTimeout(() => {
-			uiStore.showPaymentDialog = true;
+			setActiveTabPaymentDialog(true);
 		}, 300);
 	} else if (uiStore.errorRetryAction === "sync") {
 		await offlineStore.loadPendingInvoices();
@@ -2545,12 +2310,11 @@ async function handlePaymentCompleted(paymentData) {
 		const customerValue = cartStore.customer?.name || cartStore.customer;
 		if (!customerValue && !shiftStore.profileCustomer) {
 			showWarning(__("Please select a customer before proceeding"));
-			uiStore.showPaymentDialog = false;
+			setActiveTabPaymentDialog(false);
 			uiStore.showCustomerDialog = true;
 			return;
 		}
 
-		// SePay bank transfer flow: create draft (with existing payments if mixed), show QR for remaining, wait for webhook
 		if (paymentData.is_sepay_pending) {
 			if (paymentData.sales_team?.length) cartStore.salesTeam = paymentData.sales_team;
 			if (paymentData.delivery_date) cartStore.setDeliveryDate(paymentData.delivery_date);
@@ -2560,9 +2324,12 @@ async function handlePaymentCompleted(paymentData) {
 				paymentData.delivery_date || cartStore.deliveryDate,
 				paymentData.payments || []
 			);
-			sePayInvoiceName.value = draft.name;
-			sePayInvoiceAmount.value = draft.sepay_amount ?? draft.grand_total;
-			uiStore.showSePayDialog = true;
+			const tab = invoiceTabsStore.activeTab;
+			if (tab) {
+				tab.sePayInvoiceName = draft.name;
+				tab.sePayInvoiceAmount = draft.sepay_amount ?? draft.grand_total;
+			}
+			setActiveTabSePayDialog(true);
 			return;
 		}
 
@@ -2601,7 +2368,7 @@ async function handlePaymentCompleted(paymentData) {
 			// Use the same item transformation as online flow for consistency
 			// This ensures rate, discount_percentage, discount_amount, and pricing_rules
 			// are all correctly formatted for ERPNext
-			const preparedItems = cartStore.formatItemsForSubmission(cartStore.invoiceItems);
+			const preparedItems = cartStore.getItemsForInvoiceSubmission();
 
 			const invoiceData = {
 				pos_profile: cartStore.posProfile,
@@ -2622,7 +2389,7 @@ async function handlePaymentCompleted(paymentData) {
 				cartStore.grandTotal,
 				paymentData.paid_amount
 			);
-			uiStore.showPaymentDialog = false;
+			setActiveTabPaymentDialog(false);
 			cartStore.clearCart();
 			// Reset cart hash after successful payment
 			previousCartHash = "";
@@ -2644,7 +2411,7 @@ async function handlePaymentCompleted(paymentData) {
 				const invoiceTotal = result.grand_total || result.total || 0;
 				const paidAmount = paymentData.paid_amount || invoiceTotal;
 
-				uiStore.showPaymentDialog = false;
+				setActiveTabPaymentDialog(false);
 				cartStore.clearCart();
 				// Reset cart hash after successful payment
 				previousCartHash = "";
@@ -2678,7 +2445,7 @@ async function handlePaymentCompleted(paymentData) {
 		}
 	} catch (error) {
 		log.error("Error submitting invoice:", error);
-		uiStore.showPaymentDialog = false;
+		setActiveTabPaymentDialog(false);
 
 		const errorContext = parseError(error);
 		uiStore.showError(
@@ -2699,15 +2466,18 @@ async function handlePaymentCompleted(paymentData) {
 }
 
 async function handleSePayPaymentReceived() {
-	const invoiceName = sePayInvoiceName.value;
-	const invoiceAmount = sePayInvoiceAmount.value;
+	const tab = invoiceTabsStore.activeTab;
+	const invoiceName = tab?.sePayInvoiceName ?? "";
+	const invoiceAmount = tab?.sePayInvoiceAmount ?? 0;
 	const soldItemCodes = cartStore.invoiceItems.map((item) => item.item_code);
 
-	uiStore.showSePayDialog = false;
+	setActiveTabSePayDialog(false);
 	cartStore.clearCart();
 	previousCartHash = "";
-	sePayInvoiceName.value = "";
-	sePayInvoiceAmount.value = 0;
+	if (tab) {
+		tab.sePayInvoiceName = "";
+		tab.sePayInvoiceAmount = 0;
+	}
 
 	if (cartStore.currentDraftId) {
 		draftsStore.deleteDraft(cartStore.currentDraftId);
@@ -2753,11 +2523,16 @@ async function handleOptionSelected(option) {
 			const variant = option.data;
 
 			// Stock validation for variants (same as regular items)
+			const variantAllowsSkipBatchOnly =
+				settingsStore.isEnabled &&
+				settingsStore.allowSkipManualBatchSelection &&
+				variant.has_batch_no &&
+				!variant.has_serial_no;
 			if (
 				settingsStore.shouldEnforceStockValidation() &&
 				variant.is_stock_item &&
 				!variant.has_serial_no &&
-				!variant.has_batch_no
+				(!(variant.has_batch_no) || variantAllowsSkipBatchOnly)
 			) {
 				const actualQty = Math.floor(variant.actual_qty ?? 0);
 				if (actualQty <= 0) {
@@ -2768,18 +2543,18 @@ async function handleOptionSelected(option) {
 				}
 			}
 
-			if (variant.item_uoms && variant.item_uoms.length > 0) {
+			if (hasAlternateUoms(variant)) {
 				cartStore.setPendingItem(variant, cartStore.pendingItemQty, "uom");
 				return;
 			}
 
-			if (variant.has_batch_no || variant.has_serial_no) {
+			if (settingsStore.itemRequiresBatchSerialDialog(variant)) {
 				cartStore.setPendingItem(variant, cartStore.pendingItemQty);
 				uiStore.showItemSelectionDialog = false;
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(
+					await cartStore.addItem(
 						variant,
 						cartStore.pendingItemQty,
 						false,
@@ -2806,13 +2581,13 @@ async function handleOptionSelected(option) {
 				price_list_rate: priceListRate,
 			};
 
-			if (itemToAdd.has_batch_no || itemToAdd.has_serial_no) {
+			if (settingsStore.itemRequiresBatchSerialDialog(itemToAdd)) {
 				cartStore.setPendingItem(itemToAdd, qty);
 				uiStore.showItemSelectionDialog = false;
 				uiStore.showBatchSerialDialog = true;
 			} else {
 				try {
-					cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+					await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 					uiStore.showItemSelectionDialog = false;
 					cartStore.clearPendingItem();
 					showSuccess(__("{0} ({1}) added to cart", [itemToAdd.item_name, option.uom]));
@@ -2828,6 +2603,11 @@ async function handleOptionSelected(option) {
 }
 
 function handleCloseShift() {
+	earlyCloseConfirmFromLogoutFlow.value = false;
+	if (shiftStore.hasOpenShift && shouldConfirmEarlyHrClose()) {
+		showEarlyCloseShiftConfirm.value = true;
+		return;
+	}
 	uiStore.showCloseShiftDialog = true;
 }
 
@@ -2850,28 +2630,122 @@ function restoreTabSnapshot(tabId) {
 	}
 }
 
+/** Đóng tất cả dialog thanh toán trên tab đang active trước khi rời. */
+function _closeActiveTabDialogs() {
+	const t = invoiceTabsStore.activeTab;
+	if (!t) return;
+	t.showPaymentDialog = false;
+	t.showSePayDialog = false;
+	t.pendingPaymentAfterCustomer = false;
+}
+
+/** Sau khi switch sang tab mới, mở lại SePay dialog nếu tab đó có giao dịch đang chờ. */
+function _maybeReopenSePayOnTab(tab) {
+	if (tab?.sePayInvoiceName) {
+		nextTick(() => setActiveTabSePayDialog(true));
+	}
+}
+
 function handleAddInvoiceTab() {
+	_closeActiveTabDialogs();
 	saveActiveTabSnapshot();
 	cartStore.clearCart();
 	const newId = invoiceTabsStore.addTab();
 	invoiceTabsStore.setActiveTab(newId);
 }
 
+async function openManualCashDrawer() {
+	if (!shiftStore.profileName) {
+		showWarning(__("POS Profile not found"));
+		return;
+	}
+	if (!Number(posSettingsStore.settings?.allow_manual_cash_drawer)) {
+		showWarning(__("Manual cash drawer open is not allowed"));
+		return;
+	}
+	if (!usbPrinter.isSupported.value) {
+		showWarning(__("WebUSB is not available in this browser"));
+		return;
+	}
+	if (!usbPrinter.isConnected.value) {
+		showWarning(__("Connect the USB printer first"));
+		return;
+	}
+	try {
+		await call("pos_next.api.till_exception.log_cash_drawer_event", {
+			pos_profile: shiftStore.profileName,
+			event_type: "Manual Open",
+		});
+		await usbPrinter.kickCashDrawer();
+		showSuccess(__("Event logged and cash drawer opened"));
+	} catch (error) {
+		log.error("Manual cash drawer failed:", error);
+		showError(error.message || __("Failed to open cash drawer"));
+	}
+}
+
+function toggleFullscreen() {
+	if (typeof document === "undefined") return;
+	if (!document.fullscreenElement) {
+		document.documentElement.requestFullscreen?.();
+		return;
+	}
+	document.exitFullscreen?.();
+}
+
+usePosKeyboardShortcuts({
+	isDisabled: () => uiStore.isLoading || !shiftStore.hasOpenShift,
+	isShortcutsDialogOpen: () => uiStore.showKeyboardShortcutsDialog,
+	onShowShortcuts: () => {
+		uiStore.showKeyboardShortcutsDialog = true;
+	},
+	onAddInvoice: handleAddInvoiceTab,
+	onToggleAutoPrint: () => {
+		const enabled = shiftStore.toggleAutoPrint();
+		if (enabled === null) return;
+		showSuccess(
+			enabled ? __("Auto-print enabled") : __("Auto-print disabled"),
+		);
+	},
+	onFocusItemSearch: () => itemsSelectorRef.value?.focusSearch?.(),
+	onFocusCustomerSearch: () => {
+		document.getElementById("cart-customer-search")?.focus();
+	},
+	onToggleQuantityMode: () => itemsSelectorRef.value?.toggleBarcodeScanMode?.(),
+	onOpenCashDrawer: openManualCashDrawer,
+	onCustomerPayment: () => {
+		uiStore.showCustomerDialog = true;
+	},
+	onPayment: handleProceedToPayment,
+	onScaleBarcode: () => itemsSelectorRef.value?.toggleBarcodeScanner?.(),
+	onToggleFullscreen: toggleFullscreen,
+	onEditProductQuantity: () => invoiceCartRef.value?.keyboardFocusQuantity?.(),
+	onIncreaseQuantity: () => invoiceCartRef.value?.keyboardIncreaseQuantity?.(),
+	onDecreaseQuantity: () => invoiceCartRef.value?.keyboardDecreaseQuantity?.(),
+	onNextProduct: () => invoiceCartRef.value?.keyboardNextProduct?.(),
+	onPreviousProduct: () => invoiceCartRef.value?.keyboardPreviousProduct?.(),
+});
+
 function handleInvoiceTabClick(tabId) {
 	if (tabId === invoiceTabsStore.activeTabId) return;
+	_closeActiveTabDialogs();
 	saveActiveTabSnapshot();
 	restoreTabSnapshot(tabId);
 	invoiceTabsStore.setActiveTab(tabId);
+	// Mở lại SePay dialog nếu tab đích đang có giao dịch chờ QR
+	_maybeReopenSePayOnTab(invoiceTabsStore.activeTab);
 }
 
 function handleCloseInvoiceTab(tabId) {
 	const isActive = tabId === invoiceTabsStore.activeTabId;
 	if (isActive) {
+		_closeActiveTabDialogs();
 		saveActiveTabSnapshot();
 	}
 	const nextActiveId = invoiceTabsStore.closeTab(tabId);
 	if (isActive) {
 		restoreTabSnapshot(nextActiveId);
+		_maybeReopenSePayOnTab(invoiceTabsStore.activeTab);
 	}
 }
 
@@ -2883,15 +2757,21 @@ function confirmLogout() {
 	logoutAfterClose.value = false;
 	// Clear cart to prevent stale items on next login
 	cartStore.clearCart();
+	invoiceTabsStore.resetPaymentUiOnAllTabs();
 	// Clear all dialog states to prevent stale state on next login
 	uiStore.resetAllDialogs();
 	session.logout.submit();
 }
 
 function logoutWithCloseShift() {
-	// Open close shift dialog and remember to logout after closing
 	logoutAfterClose.value = true;
 	uiStore.showLogoutDialog = false;
+	earlyCloseConfirmFromLogoutFlow.value = true;
+	if (shiftStore.hasOpenShift && shouldConfirmEarlyHrClose()) {
+		showEarlyCloseShiftConfirm.value = true;
+		return;
+	}
+	earlyCloseConfirmFromLogoutFlow.value = false;
 	uiStore.showCloseShiftDialog = true;
 }
 
@@ -2981,7 +2861,7 @@ async function handleApplyOffer(offer) {
 	}
 }
 
-function handleBatchSerialSelected(batchSerial) {
+async function handleBatchSerialSelected(batchSerial) {
 	if (cartStore.pendingItem) {
 		// Use quantity from batchSerial if provided (for multiple serial numbers), otherwise use pendingItemQty
 		const qty = batchSerial.quantity || cartStore.pendingItemQty;
@@ -2991,7 +2871,7 @@ function handleBatchSerialSelected(batchSerial) {
 			...batchSerial,
 		};
 		try {
-			cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
+			await cartStore.addItem(itemToAdd, qty, false, shiftStore.currentProfile);
 			cartStore.clearPendingItem();
 		} catch (error) {
 			showError(error.message);
@@ -3119,7 +2999,7 @@ async function handleEditOfflineInvoice(invoice) {
 			for (const item of invoiceData.items) {
 				// Use autoAdd=true to skip stock validation when loading saved invoices
 				// Check both quantity and qty fields since items are stored with 'quantity'
-				cartStore.addItem(
+				await cartStore.addItem(
 					item,
 					item.quantity || item.qty || 1,
 					true,
@@ -3390,14 +3270,14 @@ function handleViewInvoice(invoice) {
 // Centralized print handler - uses printInvoice.js utilities
 async function handlePrintInvoice(invoiceData) {
 	try {
-		// If invoiceData is a full document with items, use printInvoice directly
-		if (invoiceData.items && Array.isArray(invoiceData.items)) {
-			await printInvoice(invoiceData);
-		} else {
-			// If it's just an invoice object with name, fetch and print
-			// printInvoiceByName will automatically fetch the print format from the invoice's POS Profile
-			await printInvoiceByName(invoiceData.name);
+		if (!invoiceData?.name) {
+			throw new Error("Invoice name is required");
 		}
+		// Luôn in qua printInvoiceByName: lấy đủ dữ liệu phiếu, Print Format
+		// từ POS Profile (vd. POS Retail Receipt), 2 liên, IN LẠI khi in lại.
+		// Không dùng printInvoice(invoiceData) khi object có items từ get_invoices —
+		// đó chỉ là summary list, không phải full doc, và sẽ rơi vào mẫu mặc định POS Next Receipt.
+		await printInvoiceByName(invoiceData.name);
 	} catch (error) {
 		log.error("Error printing invoice:", error);
 		window.frappe?.msgprint({

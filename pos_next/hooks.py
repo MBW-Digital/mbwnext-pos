@@ -49,9 +49,14 @@ _asset_version = get_build_version()
 
 # include js in doctype views
 doctype_js = {
-	"Material Request" : "controllers/js/material_request.js"
+	"Material Request": "controllers/js/material_request.js",
+	"Loyalty Program": "public/js/loyalty_program.js",
+	"Mode of Payment": "public/js/mode_of_payment.js",
+	"POS Profile": "public/js/pos_profile.js",
 }
-# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+doctype_list_js = {
+	"Sales Invoice": "public/js/sales_invoice_list.js",
+}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
 
@@ -63,7 +68,7 @@ doctype_js = {
 # Home Pages
 # ----------
 
-template_apps = ["erpnext", "pos_next"]
+template_apps = ["erpnext", "pos_next", "hrms"]
 
 # application home page (will override Website Settings)
 # home_page = "login"
@@ -82,32 +87,33 @@ template_apps = ["erpnext", "pos_next"]
 # Jinja
 # ----------
 
-# add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "pos_next.utils.jinja_methods",
-# 	"filters": "pos_next.utils.jinja_filters"
-# }
+# Receipt print helpers for POS Next Receipt (Jinja sandbox cannot use frappe.get_attr)
+jinja = {
+	"methods": [
+		"pos_next.api.receipt_print",
+	],
+}
 
 # Fixtures
 # --------
 fixtures = [
 	{
+		# Loc theo MODULE chu khong theo danh sach ten.
+		#
+		# Danh sach ten cu chi liet ke 12 field, trong khi fixtures/custom_field.json
+		# da co 75 - tuc `bench export-fixtures --app pos_next` se ghi de file bang
+		# dung 12 field va XOA 63 field con lai khoi repo, gom ca eInvoice, Sepay,
+		# coupon POS va toan bo field cua mau in. Khong ai nhan ra cho toi khi cai
+		# site moi thi thieu field.
+		#
+		# Day rat co the la cach 3 field Sepay bien mat o nhanh ha_vang: file mat
+		# field nhung api/sepay.py van doc chung.
+		#
+		# Moi Custom Field cua app deu khai module "POS Next" (75/75), va tren site
+		# cung dung 75 ban ghi mang module do - nen bo loc nay khop chinh xac va tu
+		# theo kip khi them field moi.
 		"dt": "Custom Field",
-		"filters": [
-			[
-				"name",
-				"in",
-				[
-					"Sales Invoice-posa_pos_opening_shift",
-					"Sales Invoice-posa_is_printed",
-					"Item-custom_company",
-					"POS Profile-posa_cash_mode_of_payment",
-					"POS Profile-posa_allow_delete",
-					"POS Profile-posa_block_sale_beyond_available_qty",
-					"Mode of Payment-is_wallet_payment"
-				]
-			]
-		]
+		"filters": [["module", "=", "POS Next"]],
 	},
 	{
 		"dt": "Print Format",
@@ -116,7 +122,8 @@ fixtures = [
 				"name",
 				"in",
 				[
-					"POS Next Receipt"
+					"POS Next Receipt",
+					"POS Retail Receipt",
 				]
 			]
 		]
@@ -194,7 +201,8 @@ standard_queries = {
 # Override standard doctype classes
 
 override_doctype_class = {
-	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice"
+	"Sales Invoice": "pos_next.overrides.sales_invoice.CustomSalesInvoice",
+	"Pricing Rule": "pos_next.overrides.pricing_rule.PricingRule",
 }
 
 # Document Events
@@ -206,10 +214,17 @@ doc_events = {
 		"validate": "pos_next.validations.validate_item"
 	},
 	"Customer": {
-		"before_insert": "pos_next.api.customers.set_customer_code_if_mandatory",
+		"before_insert": [
+			"pos_next.api.customers.set_default_territory_and_customer_group",
+			"pos_next.api.customers.set_customer_code_if_mandatory"
+		],
 		"after_insert": "pos_next.api.customers.auto_assign_loyalty_program"
 	},
 	"Sales Invoice": {
+        "before_validate": [
+            "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
+            "pos_next.api.sales_invoice_hooks.capture_pos_authoritative_discounts"
+        ],
 		"validate": [
 			"pos_next.api.sales_invoice_hooks.validate",
 			"pos_next.api.wallet.validate_wallet_payment"
@@ -223,8 +238,23 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
-		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event"
-	}
+		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
+	},
+	"Loyalty Program": {
+		"validate": "pos_next.api.loyalty_program_hooks.validate",
+	},
+	"Pricing Rule": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotional Scheme": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
+	"Promotion Campaign": {
+		"on_update": "pos_next.api.offers.clear_offers_cache",
+		"on_trash": "pos_next.api.offers.clear_offers_cache",
+	},
 }
 
 # Scheduled Tasks

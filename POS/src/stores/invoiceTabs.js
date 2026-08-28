@@ -1,18 +1,35 @@
 import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 
+/** Per-tab payment / SePay UI so dialogs follow the active invoice tab. */
+export function resetTabPaymentUi(tab) {
+	if (!tab) return
+	tab.showPaymentDialog = false
+	tab.showSePayDialog = false
+	tab.sePayInvoiceName = ""
+	tab.sePayInvoiceAmount = 0
+	tab.pendingPaymentAfterCustomer = false
+}
+
+function createTab(id, label) {
+	return {
+		id,
+		label,
+		snapshot: null,
+		showPaymentDialog: false,
+		showSePayDialog: false,
+		sePayInvoiceName: "",
+		sePayInvoiceAmount: 0,
+		pendingPaymentAfterCustomer: false,
+	}
+}
+
 /**
  * Store to manage multiple in-memory invoice tabs (like multiple carts).
  * Each tab holds a snapshot of cart state managed by usePOSCartStore.
  */
 export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
-	const tabs = ref([
-		{
-			id: "tab-1",
-			label: "Hóa đơn 1",
-			snapshot: null,
-		},
-	])
+	const tabs = ref([createTab("tab-1", "Hóa đơn 1")])
 
 	const activeTabId = ref("tab-1")
 	const nextIndex = ref(2)
@@ -34,11 +51,7 @@ export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
 		}
 		const id = `tab-${nextIndex.value++}`
 		const label = `Hóa đơn ${tabs.value.length + 1}`
-		tabs.value.push({
-			id,
-			label,
-			snapshot: null,
-		})
+		tabs.value.push(createTab(id, label))
 		activeTabId.value = id
 		return id
 	}
@@ -63,8 +76,10 @@ export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
 	function closeTab(id) {
 		if (tabs.value.length === 1) {
 			// Reset the single remaining tab
-			tabs.value[0].snapshot = null
-			activeTabId.value = tabs.value[0].id
+			const only = tabs.value[0]
+			only.snapshot = null
+			resetTabPaymentUi(only)
+			activeTabId.value = only.id
 			return activeTabId.value
 		}
 
@@ -82,6 +97,12 @@ export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
 		return activeTabId.value
 	}
 
+	function resetPaymentUiOnAllTabs() {
+		for (const tab of tabs.value) {
+			resetTabPaymentUi(tab)
+		}
+	}
+
 	return {
 		tabs,
 		activeTabId,
@@ -92,6 +113,8 @@ export const useInvoiceTabsStore = defineStore("invoiceTabs", () => {
 		updateTabSnapshot,
 		getTabSnapshot,
 		closeTab,
+		resetPaymentUiOnAllTabs,
+		resetTabPaymentUi,
 	}
 })
 

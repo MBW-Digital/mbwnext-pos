@@ -26,6 +26,7 @@ import { logger } from "./utils/logger"
 import { getSetting, setSetting } from "./utils/offline/db"
 import { offlineWorker } from "./utils/offline/workerClient"
 import translationPlugin from "./utils/translation"
+import { useWebUSBPrinter } from "./composables/useWebUSBPrinter"
 
 import {
 	Alert,
@@ -102,7 +103,24 @@ async function initializeApp() {
 	const csrfAwareFrappeRequest = createCSRFAwareRequest(frappeRequest)
 	setConfig("resourceFetcher", csrfAwareFrappeRequest)
 
-	// Register plugins
+	// -------------------------------------------------------------------------
+	// CSRF token must be ready before any plugin or resource fires a POST
+	// -------------------------------------------------------------------------
+
+	const existingToken = getCSRFTokenFromCookie()
+	if (existingToken) {
+		log.debug("CSRF token found in cookie")
+	} else {
+		log.debug("Fetching CSRF token...")
+		try {
+			await ensureCSRFToken({ silent: true })
+		} catch {
+			log.debug("CSRF fetch failed, will retry on first API call")
+		}
+	}
+	await syncCSRFTokenToWorker()
+
+	// Register plugins (after CSRF — translationPlugin fires POST during init)
 	app.use(pinia)
 	app.use(resourcesPlugin)
 	app.use(pageMetaPlugin)
@@ -119,40 +137,17 @@ async function initializeApp() {
 	})
 
 	// -------------------------------------------------------------------------
-	// Authentication (CSRF + User fetched in parallel for faster startup)
+	// Authentication
 	// -------------------------------------------------------------------------
 
-	const csrfPromise = (async () => {
-		const existingToken = getCSRFTokenFromCookie()
-		if (existingToken) {
-			log.debug("CSRF token found in cookie")
-			await syncCSRFTokenToWorker()
-			return true
-		}
-
-		log.debug("Fetching CSRF token...")
-		try {
-			await ensureCSRFToken({ silent: true })
-			await syncCSRFTokenToWorker()
-			return true
-		} catch {
-			log.debug("CSRF fetch failed, will retry on first API call")
-			return false
-		}
-	})()
-
-	const userPromise = (async () => {
-		try {
-			if (!userResource.loading) userResource.fetch()
-			await userResource.promise
-			return sessionUser()
-		} catch (error) {
-			log.debug("User not logged in", error?.message || "No session")
-			return null
-		}
-	})()
-
-	const [, user] = await Promise.all([csrfPromise, userPromise])
+	let user = null
+	try {
+		if (!userResource.loading) userResource.fetch()
+		await userResource.promise
+		user = sessionUser()
+	} catch (error) {
+		log.debug("User not logged in", error?.message || "No session")
+	}
 	if (user) {
 		session.user = user
 		try {
@@ -194,6 +189,29 @@ async function initializeApp() {
 	log.debug("Registering router, auth state:", session.isLoggedIn)
 	app.use(router)
 	app.mount("#app")
+
+	// ── WebUSB thermal printer: restore session after reload / PWA restart ──
+	// Chrome persists granted devices per origin; reconnect() re-opens without picker.
+	if (typeof navigator !== "undefined" && "usb" in navigator) {
+		const usb = useWebUSBPrinter()
+		usb
+			.reconnect()
+			.catch((e) => log.debug("WebUSB reconnect skipped:", e))
+
+		navigator.usb.addEventListener("connect", () => {
+			if (!usb.isConnected.value) {
+				usb.reconnect().catch(() => {})
+			}
+		})
+
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState !== "visible") return
+			if (!usb.isConnected.value) {
+				usb.reconnect().catch(() => {})
+			}
+		})
+	}
+
 	// Keep document title as app name so Chrome "Add to home screen" shows MBW Next POS
 	if (typeof document !== "undefined") {
 		document.title = "MBW Next POS"

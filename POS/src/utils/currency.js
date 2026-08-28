@@ -5,6 +5,9 @@
  * Rounding Methods (matches frappe/utils/data.py):
  * - Banker's Rounding: Rounds .5 to nearest even number
  * - Commercial Rounding: Rounds .5 away from zero
+ *
+ * Number Format (matches frappe/public/js/frappe/utils/number_format.js):
+ * Uses System Settings number_format pattern (e.g. "#.###,##")
  */
 
 // =============================================================================
@@ -27,7 +30,6 @@ export function initPrecision(data) {
 		rounding_method: data.rounding_method || "Banker's Rounding",
 		number_format: data.number_format || "#,###.##",
 	}
-	_formatterCache.clear()
 }
 
 /** Get current settings */
@@ -52,6 +54,7 @@ const SYMBOLS = {
 	EGP: "E£",
 	SAR: "\u00EA",
 	AED: "د.إ",
+	VND: "₫",
 }
 
 const _symbolCache = new Map()
@@ -79,37 +82,138 @@ function getSymbol(currency) {
 export { getSymbol as getCurrencySymbol }
 
 // =============================================================================
-// Number Formatting
+// Number Formatting (Frappe-compatible)
 // =============================================================================
 
-const _formatterCache = new Map()
+/** Matches frappe.number_format_info */
+const NUMBER_FORMAT_INFO = {
+	"#,###.##": { decimal_str: ".", group_sep: "," },
+	"#.###,##": { decimal_str: ",", group_sep: "." },
+	"# ###.##": { decimal_str: ".", group_sep: " " },
+	"# ###,##": { decimal_str: ",", group_sep: " " },
+	"#'###.##": { decimal_str: ".", group_sep: "'" },
+	"#, ###.##": { decimal_str: ".", group_sep: ", " },
+	"#,##,###.##": { decimal_str: ".", group_sep: "," },
+	"#,###.###": { decimal_str: ".", group_sep: "," },
+	"#.###": { decimal_str: "", group_sep: "." },
+	"#,###": { decimal_str: "", group_sep: "," },
+}
 
-function getFormatter(precision, locale = DEFAULT_LOCALE) {
-	const key = `${locale}:${precision}`
-	if (!_formatterCache.has(key)) {
-		_formatterCache.set(
-			key,
-			new Intl.NumberFormat(locale, {
-				minimumFractionDigits: precision,
-				maximumFractionDigits: precision,
-			}),
-		)
+function getNumberFormatInfo(format) {
+	const pattern = format || settings.number_format || "#,###.##"
+	const base = NUMBER_FORMAT_INFO[pattern] || { decimal_str: ".", group_sep: "," }
+	const precision =
+		base.decimal_str === ""
+			? 0
+			: (pattern.split(base.decimal_str).slice(1)[0] || "").length
+	return { ...base, precision }
+}
+
+function formatIntegerWithGroups(integerStr, format) {
+	const info = getNumberFormatInfo(format)
+	if (!info.group_sep) {
+		return (integerStr || "0").replace(/^0+(?=\d)/, "") || "0"
 	}
-	return _formatterCache.get(key)
+
+	let integer = (integerStr || "0").replace(/^0+(?=\d)/, "") || "0"
+	let groupPosition = 3
+	let str = ""
+	for (let i = integer.length; i >= 0; i--) {
+		let l = str.split(info.group_sep).join("").length
+		if (format === "#,##,###.##" && str.includes(",")) {
+			groupPosition = 2
+			l += 1
+		}
+		str += integer.charAt(i)
+		if (l && !((l + 1) % groupPosition) && i !== 0) {
+			str += info.group_sep
+		}
+	}
+	return str.split("").reverse().join("")
+}
+
+/** Decimal separator from System Settings number format (e.g. "," for #.###,##) */
+export function getDecimalSeparator(numberFormat = null) {
+	const info = getNumberFormatInfo(numberFormat || settings.number_format)
+	return info.decimal_str || "."
+}
+
+/**
+ * Format numpad raw input string for display (with thousand separators).
+ * Internal storage still uses "." as decimal separator for parsing.
+ */
+export function formatNumpadDisplay(rawValue, decimals = null) {
+	const format = settings.number_format || "#,###.##"
+	const info = getNumberFormatInfo(format)
+	const precision = decimals ?? settings.currency
+
+	if (!rawValue || rawValue === "") {
+		return formatNumber(0, precision)
+	}
+
+	const hasDecimal = rawValue.includes(".")
+	const [intPart = "", decPart = ""] = rawValue.split(".")
+	const formattedInt = formatIntegerWithGroups(intPart, format)
+
+	if (!hasDecimal) {
+		return formattedInt
+	}
+
+	if (decPart === "" && rawValue.endsWith(".")) {
+		return formattedInt + info.decimal_str
+	}
+
+	return formattedInt + info.decimal_str + decPart.slice(0, precision)
+}
+
+/**
+ * Format number using System Settings number_format pattern.
+ * Mirrors frappe format_number().
+ */
+export function formatNumber(value, decimals = null, numberFormat = null) {
+	const format = numberFormat || settings.number_format || "#,###.##"
+	const info = getNumberFormatInfo(format)
+	const precision = decimals ?? info.precision
+
+	let v = round(Number(value), precision)
+	if (Number.isNaN(v)) v = 0
+
+	let isNegative = false
+	if (v < 0) {
+		isNegative = true
+		v = Math.abs(v)
+	}
+
+	v = v.toFixed(precision)
+	const part = v.split(".")
+	part[0] = formatIntegerWithGroups(part[0], format)
+
+	part[1] = part[1] && info.decimal_str ? info.decimal_str + part[1] : ""
+
+	return (isNegative ? "-" : "") + part[0] + part[1]
 }
 
 /** Format value as currency string with symbol */
-export function formatCurrency(value, currency = DEFAULT_CURRENCY, locale = DEFAULT_LOCALE) {
-	if (typeof value !== "number" || Number.isNaN(value)) return ""
-	const abs = Math.abs(value)
-	const formatted = `${getSymbol(currency)} ${getFormatter(settings.currency, locale).format(abs)}`
-	return value < 0 ? `-${formatted}` : formatted
+export function formatCurrency(value, currency = DEFAULT_CURRENCY) {
+	const num = Number(value)
+	if (Number.isNaN(num)) return ""
+	const abs = Math.abs(num)
+	const formatted = `${getSymbol(currency)} ${formatNumber(abs, settings.currency)}`
+	return num < 0 ? `-${formatted}` : formatted
 }
 
 /** Format value as number string (no symbol) */
-export function formatCurrencyNumber(value, locale = DEFAULT_LOCALE) {
-	if (typeof value !== "number" || Number.isNaN(value)) return "0.00"
-	return getFormatter(settings.currency, locale).format(value)
+export function formatCurrencyNumber(value) {
+	const num = Number(value)
+	if (Number.isNaN(num)) return formatNumber(0, settings.currency)
+	return formatNumber(num, settings.currency)
+}
+
+/** Format float values using system float precision */
+export function formatFloatNumber(value) {
+	const num = Number(value)
+	if (Number.isNaN(num)) return formatNumber(0, settings.float)
+	return formatNumber(num, settings.float)
 }
 
 /** Get CSS class for positive/negative values */

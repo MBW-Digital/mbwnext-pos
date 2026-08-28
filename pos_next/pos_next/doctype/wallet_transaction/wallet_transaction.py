@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.utils import flt, today
-from erpnext.accounts.general_ledger import make_gl_entries
+from erpnext.accounts.general_ledger import make_gl_entries, make_reverse_gl_entries
 from erpnext.controllers.accounts_controller import AccountsController
 
 
@@ -46,14 +46,64 @@ class WalletTransaction(AccountsController):
 			self.customer = frappe.db.get_value("Wallet", self.wallet, "customer")
 
 	def on_submit(self):
-		"""Create GL entries on submit"""
-		self.make_gl_entries()
+		if not self.bo_but_toan_tich_diem():
+			self.make_gl_entries()
 		self.update_wallet_balance()
 
+	def bo_but_toan_tich_diem(self) -> bool:
+		"""Công ty có chọn KHÔNG ghi sổ lúc tích điểm không? (PM-TASK-00106)
+
+		Cách cũ: mỗi lần khách mua hàng được tích điểm là ghi ngay
+		Nợ (tài khoản nguồn) / Có (tài khoản ví). Vẫn là mặc định.
+
+		Có kế toán bác cách đó: điểm đã tích có thể không bao giờ được dùng, ghi
+		chi phí ngay lúc tích là ghi cho một khoản chưa chắc phát sinh. Theo
+		nguyên tắc thận trọng, chi phí chỉ ghi khi khách THỰC SỰ tiêu điểm — lúc
+		đó hoá đơn tự ghi Nợ 6418 - Chi phí bán hàng / Có 131 qua hình thức thanh
+		toán "đổi điểm".
+
+		Bỏ bút toán ở đây cũng gỡ hai lỗi cùng gốc: tài khoản ví trùng tài khoản
+		công nợ 131 nên hai vế triệt tiêu nhau, đơn trả bằng điểm treo lại đúng số
+		điểm đã dùng; và số dư ví bị tiền hàng khách còn nợ lấn át nên hàng loạt
+		ví hiển thị 0.
+
+		Ai cần cách đó thì bật cờ "Không ghi sổ khi tích điểm ví" trong hồ sơ
+		Công ty. Số dư ví đếm từ bảng Wallet Transaction nên đúng ở cả hai chế độ.
+		"""
+		if not self.company:
+			return False
+		return bool(
+			frappe.get_cached_value("Company", self.company, "pos_next_khong_ghi_so_khi_tich_diem")
+		)
+
 	def on_cancel(self):
-		"""Reverse GL entries on cancel"""
-		self.make_gl_entries(cancel=True)
+		# Must be set before post-cancel link validation (same pattern as Sales Invoice)
+		self.ignore_linked_doctypes = (
+			"GL Entry",
+			"Payment Ledger Entry",
+			"Repost Payment Ledger",
+			"Repost Payment Ledger Items",
+			"Repost Accounting Ledger",
+			"Repost Accounting Ledger Items",
+		)
+		self.dao_but_toan_cu()
 		self.update_wallet_balance()
+
+	def dao_but_toan_cu(self):
+		"""Đảo đúng những bút toán phiếu này ĐÃ ghi, nếu có.
+
+		Phiếu tạo khi công ty bật "Không ghi sổ khi tích điểm ví" không có bút
+		toán nào, huỷ là xong. Phiếu ghi theo cách cũ thì huỷ mà không đảo là bỏ
+		lại bút toán mồ côi, sổ lệch. Đảo theo đúng những gì đã ghi chứ không
+		dựng lại từ cấu hình hiện tại — cấu hình có thể đã đổi, dựng lại sẽ ra
+		tài khoản khác.
+		"""
+		co_but_toan_cu = frappe.db.exists(
+			"GL Entry",
+			{"voucher_type": self.doctype, "voucher_no": self.name, "is_cancelled": 0},
+		)
+		if co_but_toan_cu:
+			make_reverse_gl_entries(voucher_type=self.doctype, voucher_no=self.name)
 
 	def update_wallet_balance(self):
 		"""Update the wallet's current balance"""

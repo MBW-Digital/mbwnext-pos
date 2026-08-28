@@ -21,6 +21,15 @@ except Exception:  # pragma: no cover - ERPNext not installed in some environmen
     erpnext_apply_pricing_rule = None
     erpnext_get_applied_pricing_rules = None
 
+try:
+    from erpnext.accounts.doctype.pricing_rule.utils import (
+        apply_pricing_rule_on_transaction as erpnext_apply_pricing_rule_on_transaction,
+        get_other_conditions as erpnext_get_other_conditions,
+    )
+except Exception:  # pragma: no cover
+    erpnext_apply_pricing_rule_on_transaction = None
+    erpnext_get_other_conditions = None
+
 
 # ==========================================
 # Helper Functions
@@ -81,6 +90,27 @@ def _pricing_rule_to_string(value):
         return ""
 
     return ""
+
+
+def _parse_pricing_rule_names(value):
+    """Convert any pricing_rules value to a flat list of rule name strings."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(r).strip() for r in value if r]
+    if not isinstance(value, str):
+        return []
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return [str(r).strip() for r in parsed if r]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return [r.strip() for r in stripped.split(",") if r.strip()]
 
 
 def get_payment_account(mode_of_payment, company):
@@ -236,8 +266,32 @@ def _validate_stock_on_invoice(invoice_doc):
     ):
         return
 
-    # Collect all stock items to check
-    items_to_check = [d.as_dict() for d in invoice_doc.items if d.get("is_stock_item")]
+    # Mặt hàng nào là hàng quản lý tồn kho phải TRA TỪ DANH MỤC HÀNG.
+    #
+    # Dòng hàng của hoá đơn KHÔNG có trường `is_stock_item` — trước đây lọc
+    # thẳng `d.get("is_stock_item")` nên danh sách cần kiểm tra LUÔN RỖNG và
+    # chốt chặn tồn kho chưa từng chạy, dù cấu hình đã bật. Hàng bán quá tồn
+    # vẫn submit bình thường, tồn kho âm mà không ai được cảnh báo
+    # (PM-TASK-00073: mã 200770042263 tồn 0 vẫn bán tiếp, còn -1).
+    ma_hang = [d.item_code for d in invoice_doc.items if d.get("item_code")]
+    hang_ton_kho = set()
+    if ma_hang:
+        hang_ton_kho = {
+            row.name
+            for row in frappe.get_all(
+                "Item",
+                filters={"name": ["in", ma_hang], "is_stock_item": 1},
+                fields=["name"],
+            )
+        }
+
+    items_to_check = [
+        d.as_dict()
+        for d in invoice_doc.items
+        if d.get("item_code") in hang_ton_kho
+        and not cint(getattr(d, "is_free_item", 0))
+        and not cint(getattr(d, "pos_skip_stock_deduction", 0))
+    ]
 
     # Include packed items if present
     if hasattr(invoice_doc, "packed_items"):
@@ -281,6 +335,317 @@ def _auto_set_return_batches(invoice_doc):
                         d.warehouse, d.item_code
                     )
                 )
+
+
+def _pos_allow_negative_stock(pos_profile):
+    if not pos_profile:
+        return False
+    return cint(
+        frappe.db.get_value("POS Settings", {"pos_profile": pos_profile}, "allow_negative_stock") or 0
+    )
+
+
+def _fallback_batch_from_bin_stock(item_code, warehouse, stock_qty_needed, allow_negative=False):
+    """When batch ledger is empty but Bin has qty, pick oldest active batch for the item."""
+    bin_qty = flt(
+        frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
+    )
+    if bin_qty + 1e-9 < flt(stock_qty_needed) and not allow_negative:
+        return None
+
+    batch_row = frappe.db.sql(
+        """
+        SELECT b.name
+        FROM `tabBatch` b
+        WHERE b.item = %s AND IFNULL(b.disabled, 0) = 0
+        ORDER BY IFNULL(b.expiry_date, '9999-12-31') ASC, b.creation ASC
+        LIMIT 1
+        """,
+        item_code,
+    )
+    if not batch_row:
+        return None
+    return [{"batch_no": batch_row[0][0], "stock_qty": flt(stock_qty_needed)}]
+
+
+def _fifo_allocate_batches_for_stock_qty(
+    item_code, warehouse, stock_qty_needed, posting_date=None, allow_negative=False
+):
+    """
+    Split stock_qty_needed across batches in ERPNext pick order until covered.
+
+    Uses ``get_auto_batch_nos`` (respects POS reservations) with legacy
+    ``get_batch_qty`` as fallback.
+
+    Returns:
+        List of dicts [{"batch_no", "stock_qty"}, ...] if fully covered,
+        None if insufficient stock.
+    """
+    if stock_qty_needed <= 1e-9:
+        return []
+
+    posting_date = posting_date or nowdate()
+    pick_based_on = (
+        frappe.db.get_single_value("Stock Settings", "pick_serial_and_batch_based_on") or "FIFO"
+    )
+
+    try:
+        from erpnext.stock.doctype.serial_and_batch_bundle.serial_and_batch_bundle import (
+            get_auto_batch_nos,
+        )
+
+        auto_batches = get_auto_batch_nos(
+            frappe._dict(
+                {
+                    "item_code": item_code,
+                    "warehouse": warehouse,
+                    "qty": flt(stock_qty_needed),
+                    "based_on": pick_based_on,
+                    "posting_date": posting_date,
+                    "posting_time": nowtime(),
+                    "ignore_reserved_stock": True,
+                }
+            )
+        )
+        if auto_batches:
+            out = [
+                {"batch_no": b.batch_no, "stock_qty": flt(b.qty)}
+                for b in auto_batches
+                if b.batch_no and flt(b.qty) > 0
+            ]
+            allocated = sum(flt(x["stock_qty"]) for x in out)
+            if allocated + 1e-6 >= flt(stock_qty_needed):
+                return out
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS FIFO batch (get_auto_batch_nos)")
+
+    batches = get_batch_qty(item_code=item_code, warehouse=warehouse) or []
+    batches = [b for b in batches if flt(b.get("qty")) > 1e-9]
+
+    remaining = flt(stock_qty_needed)
+    out = []
+    for b in batches:
+        aq = flt(b.get("qty"))
+        if aq <= 0:
+            continue
+        take = min(aq, remaining)
+        if take <= 0:
+            continue
+        out.append({"batch_no": b.get("batch_no"), "stock_qty": take})
+        remaining -= take
+        if remaining <= 1e-9:
+            return out
+
+    return _fallback_batch_from_bin_stock(
+        item_code, warehouse, stock_qty_needed, allow_negative=allow_negative
+    )
+
+
+def _ensure_pos_item_warehouses(invoice_doc, pos_profile=None):
+    """Fill missing warehouse on invoice lines (common for free-gift promo rows)."""
+    wh = None
+    profile = pos_profile or invoice_doc.get("pos_profile")
+    if profile:
+        wh = frappe.db.get_value("POS Profile", profile, "warehouse")
+    if not wh:
+        return
+    for d in invoice_doc.get("items") or []:
+        if d.item_code and not d.get("warehouse"):
+            d.warehouse = wh
+
+
+def _pos_uses_erpnext_auto_batch_bundle(invoice_doc):
+    """When enabled, ERPNext auto-picks batch on Stock Ledger Entry — no pre-assign on invoice rows."""
+    if not cint(getattr(invoice_doc, "is_pos", 0)):
+        return False
+    return cint(
+        frappe.db.get_single_value(
+            "Stock Settings", "auto_create_serial_and_batch_bundle_for_outward"
+        )
+    )
+
+
+def _si_item_row_clone_dict(template_row):
+    """Copy child row dict for Sales Invoice Item, stripping identity fields."""
+    d = template_row.as_dict()
+    for k in list(d.keys()):
+        ks = str(k)
+        if ks.startswith("_"):
+            d.pop(k, None)
+            continue
+        if k in (
+            "name",
+            "parent",
+            "parentfield",
+            "creation",
+            "modified",
+            "modified_by",
+            "owner",
+            "idx",
+            "docstatus",
+        ):
+            d.pop(k, None)
+    return d
+
+
+def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
+    """
+    POS batch-only items usually have no batch on the cart line.
+
+    - When Stock Settings auto-creates outward bundles: skip (ERPNext picks on SLE).
+    - Otherwise assign FIFO batches for batch-only items missing ``batch_no``.
+    - POS invoices always auto-assign; non-POS only when ``allow_skip_manual_batch_selection``.
+
+    Serial-controlled items still require serial numbers in the POS UI.
+    """
+    if getattr(invoice_doc, "doctype", None) != "Sales Invoice":
+        return
+
+    if invoice_doc.get("is_return"):
+        return
+
+    if not cint(getattr(invoice_doc, "update_stock", 0)):
+        return
+
+    pos_profile = invoice_doc.get("pos_profile")
+    if not pos_profile:
+        return
+
+    is_pos = cint(getattr(invoice_doc, "is_pos", 0))
+
+    ps_flags = frappe.db.get_value(
+        "POS Settings",
+        {"pos_profile": pos_profile},
+        ["enabled", "allow_skip_manual_batch_selection"],
+        as_dict=True,
+    ) or {}
+
+    if not cint(ps_flags.get("enabled")):
+        return
+
+    # POS: lines usually have no batch — auto-assign for all batch-only items.
+    # Non-POS: only when skip-batch-picker is enabled.
+    if not is_pos and not cint(ps_flags.get("allow_skip_manual_batch_selection")):
+        return
+
+    _ensure_pos_item_warehouses(invoice_doc, pos_profile)
+
+    inv_qty_prec = frappe.get_precision("Sales Invoice Item", "qty")
+    posting_date = invoice_doc.get("posting_date") or nowdate()
+    allow_negative = _pos_allow_negative_stock(pos_profile)
+
+    indexes_to_extend = []
+
+    for idx, d in enumerate(invoice_doc.items):
+        if not d.item_code or not d.get("warehouse"):
+            continue
+
+        if flt(getattr(d, "qty", 0)) <= 0:
+            continue
+
+        if d.batch_no:
+            continue
+
+        flags = frappe.db.get_value(
+            "Item", d.item_code, ["has_batch_no", "has_serial_no"], as_dict=True
+        )
+        if not flags:
+            continue
+        if flags.get("has_serial_no"):
+            frappe.throw(
+                _(
+                    "Item {0} requires serial numbers. Skipping manual batch applies "
+                    "only to batch-only items; enter serial numbers for this line."
+                ).format(frappe.bold(d.item_code))
+            )
+
+        if not flags.get("has_batch_no"):
+            continue
+
+        cf = flt(d.conversion_factor or 1) or 1
+
+        stock_need = (
+            flt(d.stock_qty)
+            if getattr(d, "stock_qty", None) not in (None, "")
+            else flt(d.qty) * cf
+        )
+
+        allocations = _fifo_allocate_batches_for_stock_qty(
+            d.item_code,
+            d.warehouse,
+            stock_need,
+            posting_date=posting_date,
+            allow_negative=allow_negative,
+        )
+        if allocations is None:
+            if cint(getattr(d, "is_free_item", 0)):
+                # Promo gift with no batch stock: keep on invoice, skip stock deduction
+                d.pos_skip_stock_deduction = 1
+                continue
+            bin_qty = frappe.db.get_value(
+                "Bin", {"item_code": d.item_code, "warehouse": d.warehouse}, "actual_qty"
+            )
+            hint = ""
+            if flt(bin_qty) >= stock_need:
+                hint = _(
+                    " Bin shows {0} on hand but batch quantities are not enough — "
+                    "check batch stock or enable 'Auto Create Serial and Batch Bundle' in Stock Settings."
+                ).format(frappe.bold(flt(bin_qty)))
+            frappe.throw(
+                _(
+                    "Cannot assign batches automatically for {0}: insufficient quantity "
+                    "in batches at warehouse {1}.{2}"
+                ).format(frappe.bold(d.item_code), frappe.bold(d.warehouse), hint),
+                title=_("Batch Allocation"),
+            )
+
+        seg_sq_sum = sum(flt(seg["stock_qty"]) for seg in allocations)
+        if allocations and abs(seg_sq_sum - stock_need) > 1e-6:
+            allocations[-1]["stock_qty"] = flt(
+                flt(allocations[-1]["stock_qty"]) + (stock_need - seg_sq_sum)
+            )
+
+        original_qty = flt(d.qty)
+        inv_segments = []
+        accumulated_inv = 0
+        last_j = len(allocations) - 1
+
+        for j, seg in enumerate(allocations):
+            sq = flt(seg["stock_qty"])
+
+            if j == last_j:
+                iq = flt(max(original_qty - accumulated_inv, 0), inv_qty_prec)
+            else:
+                iq = flt((sq / cf) if cf else sq, inv_qty_prec)
+                accumulated_inv = flt(accumulated_inv + iq, inv_qty_prec)
+
+            inv_segments.append(
+                {"qty": iq, "stock_qty": sq, "batch_no": seg["batch_no"]}
+            )
+
+        if len(inv_segments) == 1:
+            seg0 = inv_segments[0]
+            d.batch_no = seg0["batch_no"]
+            d.stock_qty = seg0["stock_qty"]
+            d.qty = seg0["qty"]
+            continue
+
+        indexes_to_extend.append((idx, inv_segments))
+
+    for idx, inv_segments in sorted(indexes_to_extend, key=lambda x: -x[0]):
+        row = invoice_doc.items[idx]
+
+        seg0 = inv_segments[0]
+        row.batch_no = seg0["batch_no"]
+        row.stock_qty = seg0["stock_qty"]
+        row.qty = seg0["qty"]
+
+        for seg in inv_segments[1:]:
+            clone = _si_item_row_clone_dict(row)
+            clone["batch_no"] = seg["batch_no"]
+            clone["qty"] = seg["qty"]
+            clone["stock_qty"] = seg["stock_qty"]
+            invoice_doc.append("items", clone)
 
 
 # ==========================================
@@ -404,7 +769,56 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
                 ).format(item_code),
             }
 
+    # Validate free item return requirement (Option A)
+    if frappe.db.exists(f"{doctype} Item", {"parent": original_invoice_name, "is_free_item": 1}):
+        result = _check_free_item_return_requirement(original_invoice_name, return_items, doctype)
+        if result:
+            return result
+
     return {"valid": True}
+
+
+def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
+    """Record the POS Coupon used on the invoice in the custom_pos_coupons child table.
+
+    The discount itself is already carried by the invoice's discount_amount; this table
+    only makes visible WHICH coupon produced it and how much of the discount it accounts
+    for, so the value can be reported on without re-deriving it from the coupon config.
+
+    Args:
+        invoice_doc: The Sales Invoice document being saved
+        coupon: The validated POS Coupon document (from check_coupon_code)
+        coupon_discount_amount: Amount the POS UI actually discounted for this coupon.
+            Falls back to recomputing from the coupon config when not supplied.
+    """
+    if not coupon or not invoice_doc.meta.get_field("custom_pos_coupons"):
+        return
+
+    amount = flt(coupon_discount_amount)
+    if amount <= 0:
+        # No amount from the client — recompute from the coupon config so the row is
+        # never silently zero. net_total is the base for "Net Total" coupons.
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import apply_coupon_discount
+
+        result = apply_coupon_discount(
+            coupon,
+            flt(invoice_doc.get("total")),
+            flt(invoice_doc.get("net_total")) or flt(invoice_doc.get("total")),
+        )
+        if result.get("valid"):
+            amount = flt(result.get("discount"))
+
+    invoice_doc.set("custom_pos_coupons", [])
+    invoice_doc.append(
+        "custom_pos_coupons",
+        {
+            "coupon": coupon.name,
+            "coupon_code": coupon.coupon_code,
+            "discount_type": coupon.discount_type,
+            "discount_percentage": flt(coupon.discount_percentage),
+            "discount_amount": amount,
+        },
+    )
 
 
 # ==========================================
@@ -462,19 +876,25 @@ def update_invoice(data):
 
         if company and invoice_doc.get("payments") and doctype == "Sales Invoice":
             for payment in invoice_doc.payments:
-                mode_of_payment = payment.get("mode_of_payment")
-                if mode_of_payment and not payment.get("account"):
-                    try:
-                        account_info = get_payment_account(
-                            mode_of_payment, company
-                        )
-                        if account_info:
-                            payment["account"] = account_info.get("account")
-                    except Exception as e:
-                        frappe.log_error(
-                            f"Failed to get payment account for {mode_of_payment}: {e}",
-                            "Payment Account Lookup"
-                        )
+                mode_of_payment = payment.get("mode_of_payment") if isinstance(payment, dict) else payment.mode_of_payment
+                if not mode_of_payment:
+                    continue
+                existing_account = payment.get("account") if isinstance(payment, dict) else payment.account
+                if existing_account:
+                    continue
+                try:
+                    account_info = get_payment_account(mode_of_payment, company)
+                    if account_info:
+                        account = account_info.get("account")
+                        if isinstance(payment, dict):
+                            payment["account"] = account
+                        else:
+                            payment.account = account
+                except Exception as e:
+                    frappe.log_error(
+                        f"Failed to get payment account for {mode_of_payment}: {e}",
+                        "Payment Account Lookup",
+                    )
 
         # Validate return items if this is a return invoice
         if (data.get("is_return") or invoice_doc.get("is_return")) and invoice_doc.get(
@@ -496,21 +916,31 @@ def update_invoice(data):
                     {
                         "doctype": "Customer",
                         "customer_name": customer_name,
-                        "customer_group": "All Customer Groups",
-                        "territory": "All Territories",
                         "customer_type": "Individual",
                     }
                 )
                 cust.flags.ignore_permissions = True
+                cust.flags.pos_profile = pos_profile
+                # territory/customer_group filled by
+                # pos_next.api.customers.set_default_territory_and_customer_group
+                # (before_insert hook) - avoids hardcoding a literal like "All
+                # Territories" that may not exist as a real record on every site.
                 cust.insert()
                 invoice_doc.customer = cust.name
                 invoice_doc.customer_name = cust.customer_name
             except Exception as e:
                 frappe.log_error(f"Failed to create customer {customer_name}: {e}")
+                frappe.throw(
+                    _("Could not create Customer from POS: {0}. Please choose another customer or fix naming.")
+                    .format(str(e))
+                )
 
-        # Disable automatic pricing rules (we handle discounts manually from POS)
-        invoice_doc.ignore_pricing_rule = 1
-        invoice_doc.flags.ignore_pricing_rule = True
+        # set_missing_values → set_pos_fields expects Customer to exist (ERPNext unpacks get_value result)
+        if invoice_doc.get("customer") and not frappe.db.exists("Customer", invoice_doc.customer):
+            frappe.throw(
+                _("Invalid Customer link on invoice: {0}. Open Customer master or re-select customer on POS.")
+                .format(invoice_doc.customer)
+            )
 
         # ========================================================================
         # DISCOUNT CALCULATION - CRITICAL LOGIC
@@ -561,26 +991,33 @@ def update_invoice(data):
                         # Keep original value - malformed JSON will be handled by standardize_pricing_rules
                         item.pricing_rules = ""
 
+        # Save transaction pricing rule (for KM reclaim on return)
+        transaction_pricing_rule = data.get("posa_transaction_pricing_rule")
+        if transaction_pricing_rule and frappe.db.has_column("Sales Invoice", "posa_transaction_pricing_rule"):
+            invoice_doc.posa_transaction_pricing_rule = transaction_pricing_rule
+
         # Set invoice flags BEFORE calculations
         if doctype == "Sales Invoice":
             invoice_doc.is_pos = 1
             invoice_doc.update_stock = 1
 
+        if not invoice_doc.get("posting_date"):
+            invoice_doc.posting_date = nowdate()
+
         # ========================================================================
         # ROUNDING CONFIGURATION
         # ========================================================================
-        # Load rounding preference from POS Settings
-        # When disabled (0): ERPNext rounds to nearest whole number
-        # When enabled (1): Shows exact amount without rounding
+        # ERPNext: disable_rounded_total is on POS Profile (not POS Settings).
+        # When 0: rounded totals; when 1: exact grand total.
         # ========================================================================
         disable_rounded = 1  # Default: disable rounding for POS (show exact amounts)
 
         if pos_profile:
             try:
                 pos_settings_value = frappe.db.get_value(
-                    "POS Settings",
-                    {"pos_profile": pos_profile},
-                    "disable_rounded_total"
+                    "POS Profile",
+                    pos_profile,
+                    "disable_rounded_total",
                 )
                 if pos_settings_value is not None:
                     disable_rounded = cint(pos_settings_value)
@@ -590,8 +1027,34 @@ def update_invoice(data):
 
         invoice_doc.disable_rounded_total = disable_rounded
 
+        # Snapshot POS's rate/discount_amount before set_missing_values()
+        # below can corrupt them; restored by the "validate" doc-event hook
+        # (see sales_invoice_hooks.py for why).
+        from pos_next.api.sales_invoice_hooks import capture_pos_authoritative_discounts
+        from pos_next.controllers.python.sales_invoice import apply_selling_item_tax_templates
+        capture_pos_authoritative_discounts(invoice_doc)
+
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
+
+        # Dựng bảng `taxes` TRƯỚC khi tính tổng. ERPNext bỏ qua bước này khi
+        # is_pos=1, nên chỗ duy nhất dựng nó là apply_selling_item_tax_templates()
+        # — mà hàm đó chạy ở doc_event `before_validate`, tức MÃI SAU lời gọi
+        # calculate_taxes_and_totals() ngay dưới đây.
+        #
+        # Thiếu nó thì lần tính này thấy một hoá đơn KHÔNG THUẾ: grand_total
+        # bằng đúng net_total. Với PHIẾU TRẢ, ERPNext so tổng thanh toán
+        # (-528.000, đã gồm thuế) với grand_total tạm (-480.000) ra
+        # pending = +48.000 > 0, và set_total_amount_to_default_mop() XOÁ SẠCH
+        # bảng payments rồi thay bằng đúng một dòng 48.000. Khối "ensure
+        # payments are negative" bên dưới lật thành -48.000.
+        # Hậu quả: tiền hoàn 480.000 biến mất, treo công nợ 480.000 trên CẢ
+        # phiếu trả lẫn đơn gốc, trong khi thu ngân đã đưa khách đủ tiền.
+        # Dính mọi phiếu trả của hoá đơn có thuế.
+        #
+        # Hàm này idempotent (`if doc.get("taxes"): return`), nên lần chạy lại
+        # ở before_validate không dựng chồng.
+        apply_selling_item_tax_templates(invoice_doc)
 
         # Calculate totals and apply discounts (with rounding disabled)
         invoice_doc.calculate_taxes_and_totals()
@@ -602,19 +1065,31 @@ def update_invoice(data):
 
         # Set accounts for payment methods before saving
         for payment in invoice_doc.payments:
-            mode_of_payment = payment.get("mode_of_payment")
-            if mode_of_payment and not payment.get("account"):
-                try:
-                    account_info = get_payment_account(
-                        mode_of_payment, invoice_doc.company
-                    )
-                    if account_info:
-                        payment.account = account_info.get("account")
-                except Exception as e:
-                    frappe.log_error(
-                        f"Failed to get payment account for {mode_of_payment}: {e}",
-                        "Payment Account Lookup"
-                    )
+            mode_of_payment = (
+                payment.get("mode_of_payment")
+                if isinstance(payment, dict)
+                else payment.mode_of_payment
+            )
+            if not mode_of_payment:
+                continue
+            existing_account = (
+                payment.get("account") if isinstance(payment, dict) else payment.account
+            )
+            if existing_account:
+                continue
+            try:
+                account_info = get_payment_account(mode_of_payment, invoice_doc.company)
+                if account_info:
+                    account = account_info.get("account")
+                    if isinstance(payment, dict):
+                        payment["account"] = account
+                    else:
+                        payment.account = account
+            except Exception as e:
+                frappe.log_error(
+                    f"Failed to get payment account for {mode_of_payment}: {e}",
+                    "Payment Account Lookup",
+                )
 
         # For return invoices, ensure payments are negative
         if invoice_doc.get("is_return"):
@@ -649,6 +1124,17 @@ def update_invoice(data):
 
                 # Store coupon code on invoice for tracking
                 invoice_doc.coupon_code = coupon_code
+
+                _set_applied_pos_coupons(
+                    invoice_doc,
+                    coupon_result.get("coupon"),
+                    data.get("coupon_discount_amount"),
+                )
+
+        # Assign FIFO batches before save (includes free-gift lines without batch)
+        if doctype == "Sales Invoice":
+            _ensure_pos_item_warehouses(invoice_doc, pos_profile)
+            _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
 
         # Save as draft
         invoice_doc.flags.ignore_permissions = True
@@ -879,6 +1365,63 @@ def check_offline_invoice_synced(offline_id):
     return result
 
 
+def submit_pos_invoice_for_bank_transfer(invoice_name):
+    """
+    Submit a draft POS Sales Invoice before recording a bank transfer.
+    Uses the same preparation as submit_invoice (payment accounts, FIFO batches, stock check).
+    """
+    invoice_doc = frappe.get_doc("Sales Invoice", invoice_name)
+    if invoice_doc.docstatus != 0:
+        return invoice_doc
+
+    invoice_doc.update_stock = 1
+    pos_profile = invoice_doc.get("pos_profile")
+
+    if invoice_doc.get("payments"):
+        for payment in invoice_doc.payments:
+            if payment.mode_of_payment and not payment.account:
+                account_info = get_payment_account(payment.mode_of_payment, invoice_doc.company)
+                if account_info:
+                    payment.account = account_info.get("account")
+
+    if pos_profile and not invoice_doc.get("branch"):
+        try:
+            pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+            if hasattr(pos_profile_doc, "branch") and pos_profile_doc.branch:
+                invoice_doc.branch = pos_profile_doc.branch
+                for item in invoice_doc.get("items", []):
+                    if not item.get("branch"):
+                        item.branch = pos_profile_doc.branch
+        except Exception as e:
+            frappe.log_error(
+                f"Failed to set branch from POS Profile {pos_profile}: {e}",
+                "POS Profile Branch",
+            )
+
+    _auto_set_return_batches(invoice_doc)
+    _ensure_pos_item_warehouses(invoice_doc, invoice_doc.get("pos_profile"))
+    _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
+
+    pos_settings_allow_negative = False
+    if pos_profile:
+        pos_settings_allow_negative = cint(
+            frappe.db.get_value(
+                "POS Settings",
+                {"pos_profile": pos_profile},
+                "allow_negative_stock",
+            )
+            or 0
+        )
+    if not pos_settings_allow_negative:
+        _validate_stock_on_invoice(invoice_doc)
+
+    invoice_doc.flags.ignore_permissions = True
+    frappe.flags.ignore_account_permission = True
+    invoice_doc.save()
+    invoice_doc.submit()
+    return invoice_doc
+
+
 @frappe.whitelist()
 def submit_invoice(invoice=None, data=None):
     """Submit the invoice (Step 2)."""
@@ -1040,6 +1583,10 @@ def submit_invoice(invoice=None, data=None):
         # Auto-set batch numbers for returns
         _auto_set_return_batches(invoice_doc)
 
+        # POS: auto FIFO batch for lines without batch (incl. free gifts)
+        _ensure_pos_item_warehouses(invoice_doc, pos_profile)
+        _auto_assign_pos_sale_batches_if_enabled(invoice_doc)
+
         # Handle write-off amount if provided
         write_off_amount = flt(data.get("write_off_amount") or invoice.get("write_off_amount") or 0)
         if write_off_amount > 0 and doctype == "Sales Invoice":
@@ -1047,8 +1594,16 @@ def submit_invoice(invoice=None, data=None):
             if pos_profile:
                 try:
                     pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-                    write_off_account = pos_profile_doc.write_off_account
-                    write_off_cost_center = pos_profile_doc.write_off_cost_center
+                    write_off_account = (
+                        data.get("write_off_account")
+                        or invoice.get("write_off_account")
+                        or pos_profile_doc.write_off_account
+                    )
+                    write_off_cost_center = (
+                        data.get("write_off_cost_center")
+                        or invoice.get("write_off_cost_center")
+                        or pos_profile_doc.write_off_cost_center
+                    )
                     write_off_limit = flt(pos_profile_doc.write_off_limit or 0)
 
                     # Validate write-off amount is within limit
@@ -1119,6 +1674,16 @@ def submit_invoice(invoice=None, data=None):
                     indicator="orange"
                 )
 
+        try:
+            from pos_next.api.einvoice_self_service import ensure_self_service_einvoice_token
+
+            ensure_self_service_einvoice_token(invoice_doc.name)
+        except Exception:
+            frappe.log_error(
+                frappe.get_traceback(),
+                "POS self-service e-invoice token generation",
+            )
+
         # Return complete invoice details
         result = {
             "name": invoice_doc.name,
@@ -1182,18 +1747,42 @@ def get_invoice(invoice_name):
 @frappe.whitelist()
 def get_print_receipt_data(invoice_name, include_sepay_qr=True):
 	"""
-	Get invoice data for printing receipt, with optional SePay VietQR for bank transfer.
-
-	Returns invoice dict plus sepay_qr when SePay is enabled and invoice has amount to pay.
-	Used by POS to print receipt with QR code for customer to scan and pay.
+	Receipt for thermal print, optional SePay VietQR for bank transfer.
 	"""
 	data = get_invoice(invoice_name)
+	from pos_next.api.receipt_print import (
+		enrich_invoice_dict_for_print,
+		retail_receipt_meta_for_jinja,
+	)
+
+	data.update(enrich_invoice_dict_for_print(data))
+
+	# Bổ sung đúng bộ trường mà mẫu in "HÓA ĐƠN BÁN LẺ" dùng, để phiếu in thẳng
+	# xuống máy in nhiệt lấy chung một nguồn số liệu với mẫu in của hệ thống.
+	# Thiếu bộ này thì bản in USB tự bịa lấy nhãn và tổng tiền riêng — đó là gốc
+	# của chuyện một cửa hàng in ra hai mẫu khác nhau (PM-TASK-00116).
+	try:
+		data.update(retail_receipt_meta_for_jinja(frappe.get_doc("Sales Invoice", invoice_name)))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "get_print_receipt_data: retail_receipt_meta")
+
+	try:
+		from pos_next.api.einvoice_self_service import get_self_service_qr_payload
+
+		es = get_self_service_qr_payload(invoice_name)
+		if es:
+			data["einvoice_self_service_qr"] = es
+	except Exception:
+		pass
+
 	if not cint(include_sepay_qr) or not data.get("pos_profile"):
 		return data
 
-	amount = flt(data.get("outstanding_amount")) or flt(data.get("grand_total"))
-	if amount <= 0:
+	outstanding = flt(data.get("outstanding_amount"))
+	if outstanding <= 0:
 		return data
+
+	amount = outstanding
 
 	try:
 		from pos_next.api.sepay import get_vietqr_url
@@ -1208,6 +1797,25 @@ def get_print_receipt_data(invoice_name, include_sepay_qr=True):
 	except Exception:
 		pass
 	return data
+
+@frappe.whitelist()
+def mark_invoice_printed(invoice_name):
+	"""Đánh dấu hóa đơn đã in — lần in sau hiển thị IN LẠI trên phiếu."""
+	if not invoice_name or not frappe.db.exists("Sales Invoice", invoice_name):
+		frappe.throw(_("Sales Invoice {0} not found").format(invoice_name))
+	if not frappe.get_meta("Sales Invoice").has_field("posa_is_printed"):
+		return {"ok": True, "skipped": True}
+	if cint(frappe.db.get_value("Sales Invoice", invoice_name, "posa_is_printed")):
+		return {"ok": True, "already_printed": True}
+	frappe.db.set_value(
+		"Sales Invoice",
+		invoice_name,
+		"posa_is_printed",
+		1,
+		update_modified=False,
+	)
+	frappe.db.commit()
+	return {"ok": True}
 
 
 @frappe.whitelist()
@@ -1340,22 +1948,45 @@ def delete_invoice(invoice):
 @frappe.whitelist()
 def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
     """
-    Clean up old draft invoices to prevent stock reservation issues.
+    Clean up old draft POS invoices to prevent stock reservation issues.
     Deletes drafts older than max_age_hours (default 24 hours).
+
+    Scope is deliberately narrow - see the two guards below. The delete itself
+    runs with ignore_permissions because cashiers hold no delete permission on
+    Sales Invoice, so anything this function is allowed to see, it WILL delete.
     """
     from datetime import datetime, timedelta
 
     doctype = "Sales Invoice"
+
+    # pos_profile is mandatory. Without it the filters below match EVERY draft
+    # Sales Invoice in the system - manually entered and Data Import ones
+    # included - and the elevated delete happily wipes them (PM-TASK-00109: 43
+    # imported drafts of another user destroyed in one logout). A missing value
+    # is normal rather than exceptional: clearCart() also runs on the login
+    # screen, where posProfile is still null.
+    if not pos_profile:
+        return {"deleted": 0, "message": "POS Profile is required"}
+
+    # The caller must actually operate this till, otherwise any logged-in user
+    # could clear another store's drafts just by passing its profile name.
+    # Same access rule as get_pos_profile_data() in pos_next/api/pos_profile.py.
+    if not frappe.db.exists(
+        "POS Profile User", {"parent": pos_profile, "user": frappe.session.user}
+    ):
+        frappe.throw(_("You don't have access to POS Profile {0}").format(pos_profile))
+
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
     filters = {
         "docstatus": 0,  # Draft only
+        # is_pos is set unconditionally on every invoice this app creates (see
+        # update_invoice()), so POS drafts are never missed - but invoices typed
+        # into the desk are, and they are none of this function's business.
+        "is_pos": 1,
+        "pos_profile": pos_profile,
         "modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
     }
-
-    # Optionally filter by POS profile
-    if pos_profile:
-        filters["pos_profile"] = pos_profile
 
     # Get old drafts
     old_drafts = frappe.get_all(
@@ -1453,6 +2084,10 @@ def get_returnable_invoices(limit=50, pos_profile=None):
         .limit(cint(limit))
     )
 
+    # Only show invoices from the current POS Profile
+    if pos_profile:
+        query = query.where(si.pos_profile == pos_profile)
+
     # Add date filter if return validity is configured
     if return_validity_days > 0:
         cutoff_date = add_days(today(), -return_validity_days)
@@ -1472,15 +2107,15 @@ def get_returnable_invoices(limit=50, pos_profile=None):
 
 @frappe.whitelist()
 def search_invoice_by_number(search_term, pos_profile=None):
-    """Search for invoices by invoice number across the entire database.
-    No date restrictions - searches all returnable invoices matching the term.
+    """Search for invoices by invoice number for the current POS Profile.
+    No date restrictions - searches returnable invoices matching the term.
 
     Uses query builder with LEFT JOINs to calculate remaining returnable quantities.
     Only returns invoices that have items available for return.
 
     Args:
         search_term: Invoice number or partial number to search for (min 3 chars)
-        pos_profile: Optional POS profile for context (reserved for future use)
+        pos_profile: Current POS Profile — only invoices from this profile are returned
 
     Returns:
         List of matching invoices with return availability info (max 10 results)
@@ -1500,6 +2135,15 @@ def search_invoice_by_number(search_term, pos_profile=None):
     ret_item = frappe.qb.DocType("Sales Invoice Item").as_("ret_item")
 
     # Build query with query builder
+    conditions = (
+        (si.docstatus == 1)
+        & (si.is_return == 0)
+        & (si.is_pos == 1)
+        & (si.name.like(f"%{search_term}%"))
+    )
+    if pos_profile:
+        conditions = conditions & (si.pos_profile == pos_profile)
+
     query = (
         frappe.qb.from_(si)
         .left_join(si_item).on(si_item.parent == si.name)
@@ -1523,12 +2167,7 @@ def search_invoice_by_number(search_term, pos_profile=None):
             Coalesce(Sum(Case().when(ret_item.qty.isnotnull(), Abs(ret_item.qty)).else_(0)), 0).as_("total_returned_qty"),
             Coalesce(Sum(Case().when(si_item.qty.isnotnull(), si_item.qty).else_(0)), 0).as_("total_original_qty"),
         )
-        .where(
-            (si.docstatus == 1)
-            & (si.is_return == 0)
-            & (si.is_pos == 1)
-            & (si.name.like(f"%{search_term}%"))
-        )
+        .where(conditions)
         .groupby(si.name)
         .orderby(si.posting_date, order=frappe.qb.desc)
         .orderby(si.creation, order=frappe.qb.desc)
@@ -1547,12 +2186,12 @@ def search_invoice_by_number(search_term, pos_profile=None):
 
 
 @frappe.whitelist()
-def check_invoice_return_validity(invoice_name):
-    """Check if an invoice is within the return validity period.
+def check_invoice_return_validity(invoice_name, pos_profile=None):
+    """Check if an invoice is within the return validity period and same POS Profile.
 
     Returns detailed information for the UI to display, including:
     - valid: Boolean indicating if return is allowed
-    - error_type: 'not_found' or 'return_period_expired' if invalid
+    - error_type: 'not_found', 'wrong_pos_profile', or 'return_period_expired' if invalid
     - Additional context (invoice_date, days_since, allowed_days) for expired returns
     """
     from frappe.utils import date_diff, getdate, formatdate
@@ -1573,6 +2212,15 @@ def check_invoice_return_validity(invoice_name):
         }
 
     invoice_info = invoice_data[0]
+
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        return {
+            "valid": False,
+            "error_type": "wrong_pos_profile",
+            "message": _(
+                "Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS."
+            ).format(invoice_name, invoice_info.pos_profile),
+        }
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -1724,8 +2372,289 @@ def _build_item_tax_map(taxes: list) -> dict:
     return dict(tax_map)
 
 
+def _check_free_item_return_requirement(original_invoice_name, return_items, doctype="Sales Invoice"):
+    """Check that free items are included when their paired paid items are returned (Option A).
+
+    Returns {"valid": False, "message": "..."} if validation fails, else None.
+    """
+    from frappe.query_builder.functions import Sum, Abs, Coalesce
+
+    si_item = frappe.qb.DocType(f"{doctype} Item")
+    orig_items = (
+        frappe.qb.from_(si_item)
+        .select(si_item.name, si_item.item_code, si_item.qty, si_item.pricing_rules, si_item.is_free_item)
+        .where(si_item.parent == original_invoice_name)
+    ).run(as_dict=True)
+
+    all_rule_names = set()
+    for item in orig_items:
+        all_rule_names.update(_parse_pricing_rule_names(item.get("pricing_rules")))
+
+    if not all_rule_names:
+        return None
+
+    product_rule_names = set(frappe.get_all(
+        "Pricing Rule",
+        filters={"name": ["in", list(all_rule_names)], "price_or_product_discount": "Product"},
+        pluck="name",
+    ))
+
+    if not product_rule_names:
+        return None
+
+    # Previously returned quantities (to detect free items already returned)
+    ret_si = frappe.qb.DocType(doctype)
+    ret_item_q = frappe.qb.DocType(f"{doctype} Item")
+    returned_rows = (
+        frappe.qb.from_(ret_si)
+        .inner_join(ret_item_q).on(ret_item_q.parent == ret_si.name)
+        .select(
+            Coalesce(ret_item_q.sales_invoice_item, ret_item_q.item_code).as_("key_field"),
+            Sum(Abs(ret_item_q.qty)).as_("returned_qty"),
+        )
+        .where(
+            (ret_si.return_against == original_invoice_name)
+            & (ret_si.docstatus == 1)
+            & (ret_si.is_return == 1)
+        )
+        .groupby(Coalesce(ret_item_q.sales_invoice_item, ret_item_q.item_code))
+    ).run(as_dict=True)
+    returned_qty_map = {r["key_field"]: flt(r["returned_qty"]) for r in returned_rows}
+
+    # Build rule → free items map (only items still returnable)
+    free_by_rule = {}
+    for item in orig_items:
+        if not item.get("is_free_item"):
+            continue
+        rules = [r for r in _parse_pricing_rule_names(item.get("pricing_rules")) if r in product_rule_names]
+        remaining = flt(item.qty) - flt(returned_qty_map.get(item.name, 0))
+        if remaining <= 0:
+            continue
+        for rule in rules:
+            free_by_rule.setdefault(rule, []).append({
+                "row_id": item.name,
+                "item_code": item.item_code,
+            })
+
+    if not free_by_rule:
+        return None
+
+    returning_row_ids = {
+        item.get("sales_invoice_item")
+        for item in return_items
+        if item.get("sales_invoice_item")
+    }
+    orig_by_row_id = {item.name: item for item in orig_items}
+
+    for ret_item_data in return_items:
+        row_id = ret_item_data.get("sales_invoice_item")
+        if not row_id:
+            continue
+        orig = orig_by_row_id.get(row_id)
+        if not orig or orig.get("is_free_item"):
+            continue
+
+        paid_rules = [r for r in _parse_pricing_rule_names(orig.get("pricing_rules")) if r in product_rule_names]
+        for rule in paid_rules:
+            for free_entry in free_by_rule.get(rule, []):
+                if free_entry["row_id"] not in returning_row_ids:
+                    return {
+                        "valid": False,
+                        "message": _(
+                            "Mặt hàng {0} được bán kèm hàng tặng ({1}). "
+                            "Vui lòng chọn trả kèm hàng tặng."
+                        ).format(orig.item_code, free_entry["item_code"]),
+                    }
+
+    return None
+
+
+def _compute_free_item_linkage(items, invoice_name):
+    """Annotate return items with free item pairing for frontend enforcement (Option A).
+
+    Reads pricing_rules from the ORIGINAL invoice (not the return doc) because
+    make_sales_return may clear pricing_rules on copied items.
+
+    Adds to paid items:  free_item_row_ids = [original Sales Invoice Item names of free items]
+    Adds to free items:  paired_paid_item_row_id = original Sales Invoice Item name of paid item
+    """
+    # Quick exit if no free items present
+    if not any(item.get("is_free_item") for item in items):
+        return
+
+    # Read original invoice items' pricing_rules directly from DB (reliable source)
+    si_item = frappe.qb.DocType("Sales Invoice Item")
+    orig_items = (
+        frappe.qb.from_(si_item)
+        .select(si_item.name, si_item.item_code, si_item.pricing_rules, si_item.is_free_item)
+        .where(si_item.parent == invoice_name)
+    ).run(as_dict=True)
+
+    all_rule_names = set()
+    for oi in orig_items:
+        all_rule_names.update(_parse_pricing_rule_names(oi.get("pricing_rules")))
+
+    if not all_rule_names:
+        return
+
+    product_rule_names = set(frappe.get_all(
+        "Pricing Rule",
+        filters={"name": ["in", list(all_rule_names)], "price_or_product_discount": "Product"},
+        pluck="name",
+    ))
+
+    if not product_rule_names:
+        return
+
+    # Build rule → original item name maps
+    paid_by_rule = {}
+    free_by_rule = {}
+    for oi in orig_items:
+        rules = [r for r in _parse_pricing_rule_names(oi.get("pricing_rules")) if r in product_rule_names]
+        if not rules:
+            continue
+        bucket = free_by_rule if oi.get("is_free_item") else paid_by_rule
+        for rule in rules:
+            bucket.setdefault(rule, []).append(oi.name)
+
+    orig_by_name = {oi.name: oi for oi in orig_items}
+
+    # Annotate return doc items via sales_invoice_item → original item linkage
+    for item in items:
+        orig_row_id = item.get("sales_invoice_item")
+        if not orig_row_id:
+            continue
+        orig = orig_by_name.get(orig_row_id)
+        if not orig:
+            continue
+
+        rules = [r for r in _parse_pricing_rule_names(orig.get("pricing_rules")) if r in product_rule_names]
+        if not rules:
+            continue
+
+        if orig.get("is_free_item"):
+            for rule in rules:
+                paid_list = paid_by_rule.get(rule, [])
+                if paid_list:
+                    item["paired_paid_item_row_id"] = paid_list[0]
+                    break
+        else:
+            linked = []
+            for rule in rules:
+                for free_orig_id in free_by_rule.get(rule, []):
+                    if free_orig_id not in linked:
+                        linked.append(free_orig_id)
+            if linked:
+                item["free_item_row_ids"] = linked
+
+
+def _build_return_transaction_rule_data(invoice_name, invoice_info, has_tpr_field):
+    """Build KM reclaim metadata for bill-level (Transaction) pricing rules on return."""
+    from frappe.utils import cstr
+
+    header_discount = flt(invoice_info.get("discount_amount") or 0)
+    add_disc_pct = flt(invoice_info.get("additional_discount_percentage") or 0)
+
+    if header_discount <= 0 and add_disc_pct <= 0:
+        return None
+
+    tpr_name = None
+    if has_tpr_field:
+        tpr_name = cstr(invoice_info.get("posa_transaction_pricing_rule") or "").strip() or None
+
+    company = invoice_info.get("company") or frappe.db.get_value(
+        "Sales Invoice", invoice_name, "company"
+    )
+
+    if not tpr_name and company:
+        candidates = frappe.get_all(
+            "Pricing Rule",
+            filters={
+                "apply_on": "Transaction",
+                "disable": 0,
+                "selling": 1,
+                "company": company,
+                "price_or_product_discount": "Price",
+            },
+            fields=["name", "discount_percentage", "discount_amount"],
+            order_by="priority desc, name asc",
+        )
+        for row in candidates:
+            if (
+                header_discount > 0
+                and row.discount_amount
+                and abs(flt(row.discount_amount) - header_discount) < 0.01
+            ):
+                tpr_name = row.name
+                break
+            if (
+                add_disc_pct > 0
+                and row.discount_percentage
+                and abs(flt(row.discount_percentage) - add_disc_pct) < 0.01
+            ):
+                tpr_name = row.name
+                break
+
+        if not tpr_name:
+            for row in candidates:
+                try:
+                    rule_doc = frappe.get_cached_doc("Pricing Rule", row.name)
+                    pct, amt = _get_rule_discount_values(rule_doc)
+                except Exception:
+                    continue
+                if header_discount > 0 and amt and abs(flt(amt) - header_discount) < 0.01:
+                    tpr_name = row.name
+                    break
+                if add_disc_pct > 0 and pct and abs(flt(pct) - add_disc_pct) < 0.01:
+                    tpr_name = row.name
+                    break
+
+    if not tpr_name:
+        return None
+
+    rule_info = frappe.db.get_value(
+        "Pricing Rule",
+        tpr_name,
+        ["min_amt", "discount_amount", "discount_percentage"],
+        as_dict=True,
+    )
+    if not rule_info:
+        return None
+
+    if header_discount <= 0 and add_disc_pct > 0:
+        try:
+            rule_doc = frappe.get_cached_doc("Pricing Rule", tpr_name)
+            pct, amt = _get_rule_discount_values(rule_doc)
+            if amt:
+                header_discount = amt
+            elif pct:
+                base = flt(invoice_info.get("net_total") or 0) + flt(
+                    invoice_info.get("discount_amount") or 0
+                )
+                header_discount = base * pct / 100
+        except Exception:
+            pass
+
+    if header_discount <= 0:
+        return None
+
+    discount_account = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"parent": invoice_name, "is_free_item": 0},
+        "discount_account",
+    )
+
+    return {
+        "rule_name": tpr_name,
+        "min_amount": flt(rule_info.min_amt),
+        "header_discount_amount": header_discount,
+        "original_subtotal": flt(invoice_info.get("net_total") or 0) + header_discount,
+        "discount_account": discount_account,
+    }
+
+
 @frappe.whitelist()
-def prepare_return_invoice(invoice_name, pos_opening_shift=None):
+def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=None):
     """Prepare a return invoice using ERPNext's make_sales_return.
 
     This uses ERPNext's standard return document creation which properly copies
@@ -1737,11 +2666,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     The function validates:
     - Invoice exists and is submitted (docstatus = 1)
     - Invoice is not already a return
+    - Invoice belongs to the current POS Profile (when pos_profile is provided)
     - Return is within the validity period (if configured in POS Settings)
 
     Args:
         invoice_name: The original Sales Invoice name to create return against
         pos_opening_shift: The current POS Opening Shift name
+        pos_profile: Current POS Profile — rejects invoices from other profiles
 
     Returns:
         dict: The prepared return invoice document with:
@@ -1755,22 +2686,25 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
 
     # Validate invoice and get fields needed for return period check
     si = frappe.qb.DocType("Sales Invoice")
+
+    has_tpr_field = frappe.db.has_column("Sales Invoice", "posa_transaction_pricing_rule")
+    select_fields = [
+        si.docstatus, si.is_return, si.pos_profile, si.posting_date,
+        si.is_pos, si.grand_total, si.paid_amount, si.outstanding_amount,
+        si.customer, si.customer_name, si.company, si.net_total,
+        si.total, si.total_taxes_and_charges, si.discount_amount,
+        si.additional_discount_percentage,
+        # Cần để màn hình trả hàng biết cửa hàng THỰC NHẬN bao nhiêu: hoá đơn
+        # từng bị nhập thừa dòng thanh toán thì phần dư nằm ở đây, cộng hết các
+        # dòng thanh toán sẽ ra số lớn hơn tiền cần hoàn (PM-TASK-00072)
+        si.change_amount,
+    ]
+    if has_tpr_field:
+        select_fields.append(si.posa_transaction_pricing_rule)
+
     invoice_check = (
         frappe.qb.from_(si)
-        .select(
-            si.docstatus,
-            si.is_return,
-            si.pos_profile,
-            si.posting_date,
-            si.is_pos,
-            si.grand_total,
-            si.paid_amount,
-            si.outstanding_amount,
-            si.customer,
-            si.customer_name,
-            si.net_total,
-            si.total_taxes_and_charges
-        )
+        .select(*select_fields)
         .where(si.name == invoice_name)
     ).run(as_dict=True)
 
@@ -1786,6 +2720,14 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
     # Check if it's already a return
     if invoice_info.is_return:
         frappe.throw(_("Cannot create return against a return invoice"))
+
+    # Only allow returns for invoices from the current POS Profile
+    if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
+        frappe.throw(
+            _("Invoice {0} belongs to POS Profile {1}. Returns can only be processed from the same POS.").format(
+                invoice_name, invoice_info.pos_profile
+            )
+        )
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -1856,11 +2798,19 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         .where(si_payment.parent == invoice_name)
     ).run(as_dict=True)
 
+    transaction_rule_data = _build_return_transaction_rule_data(
+        invoice_name, invoice_info, has_tpr_field
+    )
+
     # Include original invoice data for reference (payments, amounts, etc.)
     return_dict["_original_invoice"] = {
         "name": invoice_name,
         "grand_total": invoice_info.grand_total,
+        # Tổng tiền hàng TRƯỚC chiết khấu bill — dùng làm mẫu số để phân bổ
+        # chiết khấu bill cho phần hàng trả lại (PM-TASK-00100)
+        "total": flt(invoice_info.get("total") or 0),
         "paid_amount": invoice_info.paid_amount,
+        "change_amount": flt(invoice_info.get("change_amount") or 0),
         "outstanding_amount": invoice_info.outstanding_amount,
         "customer": invoice_info.customer,
         "customer_name": invoice_info.customer_name,
@@ -1868,6 +2818,20 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         "payments": payments_data,
         "net_total": invoice_info.net_total,
         "total_taxes_and_charges": invoice_info.total_taxes_and_charges,
+        "discount_amount": flt(invoice_info.get("discount_amount") or 0),
+        "additional_discount_percentage": flt(
+            invoice_info.get("additional_discount_percentage") or 0
+        ),
+        "posa_transaction_pricing_rule": (
+            invoice_info.get("posa_transaction_pricing_rule") if has_tpr_field else None
+        ),
+        "transaction_min_amount": (
+            flt(transaction_rule_data.get("min_amount")) if transaction_rule_data else 0
+        ),
+        "discount_account": (
+            transaction_rule_data.get("discount_account") if transaction_rule_data else None
+        ),
+        "transaction_rule_data": transaction_rule_data,
     }
 
     item_tax_map = _build_item_tax_map(return_dict.get("taxes", []))
@@ -1881,8 +2845,13 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         if remaining_qty <= 0:
             return None
 
-        # Get rate breakdown for display - use 3 decimal precision for rates
+        # item['rate'] is already the tax-inclusive gross rate charged
+        # (copied verbatim by ERPNext's make_sales_return()) - keep it as
+        # `gross_rate` for the submission. net_rate/discount_per_unit/
+        # tax_per_unit below are for display only; do NOT put net_rate back
+        # into "rate" - that silently drops the tax portion from the refund.
         price_list_rate = flt(item.get("price_list_rate") or item.get("rate"), 3)
+        gross_rate = flt(item.get("rate"), 3)
         net_rate = flt(item.get("net_rate") or item.get("rate"), 3)
         discount_per_unit = flt(price_list_rate - net_rate, 3)
         tax_per_unit = flt(item_tax_map.get(item.get("item_code"), 0) / original_qty, 3) if original_qty else 0
@@ -1894,9 +2863,10 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
             "remaining_qty": remaining_qty,
             "qty": -remaining_qty,
             "price_list_rate": price_list_rate,
-            "rate": net_rate,
+            "rate": gross_rate,
+            "net_rate": net_rate,
             "discount_per_unit": discount_per_unit,
-            "amount": flt(net_rate * -remaining_qty, 3),
+            "amount": flt(gross_rate * -remaining_qty, 3),
             "tax_per_unit": tax_per_unit,
             "rate_with_tax": flt(net_rate + tax_per_unit, 3),
         }
@@ -1905,6 +2875,9 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None):
         processed for item in return_dict.get("items", [])
         if (processed := process_return_item(item)) is not None
     ]
+
+    # Annotate items with free item pairing for frontend enforcement (Option A)
+    _compute_free_item_linkage(return_dict["items"], invoice_name)
 
     # Check if all items have been fully returned
     if not return_dict["items"]:
@@ -2157,6 +3130,892 @@ def search_invoices_for_return(
 # ==========================================
 
 
+def _get_rule_discount_values(rule_doc):
+    """Discount %/amount from Pricing Rule or its Promotional Scheme slab."""
+    pct = flt(rule_doc.discount_percentage)
+    amt = flt(rule_doc.discount_amount)
+
+    if (pct or amt) or not rule_doc.get("promotional_scheme"):
+        return pct, amt
+
+    slab = frappe.db.sql(
+        """
+        SELECT discount_percentage, discount_amount
+        FROM `tabPromotional Scheme Price Discount`
+        WHERE parent = %s AND disable = 0
+        ORDER BY min_amount ASC, min_qty ASC
+        LIMIT 1
+        """,
+        rule_doc.promotional_scheme,
+        as_dict=True,
+    )
+    if slab:
+        pct = flt(slab[0].get("discount_percentage"))
+        amt = flt(slab[0].get("discount_amount"))
+
+    return pct, amt
+
+
+def _fetch_transaction_pricing_rules(company, selected_offer_names=None):
+    """Load Transaction apply_on pricing rules.
+
+    Non-coupon-based rules are always fetched (auto-applied by ERPNext regardless of selection).
+    Coupon-based rules are only fetched when explicitly selected.
+    """
+    base_filters = {
+        "apply_on": "Transaction",
+        "disable": 0,
+        "selling": 1,
+        "company": company,
+        "price_or_product_discount": "Price",
+    }
+
+    # Always include auto-applicable (non-coupon-based) transaction rules
+    auto_filters = {**base_filters, "coupon_code_based": 0}
+    auto_rules = frappe.get_all(
+        "Pricing Rule",
+        filters=auto_filters,
+        fields=["*"],
+        order_by="priority desc, name asc",
+    )
+
+    # Also include explicitly selected coupon-based rules
+    coupon_rules = []
+    if selected_offer_names:
+        coupon_filters = {
+            **base_filters,
+            "coupon_code_based": 1,
+            "name": ["in", list(selected_offer_names)],
+        }
+        coupon_rules = frappe.get_all(
+            "Pricing Rule",
+            filters=coupon_filters,
+            fields=["*"],
+            order_by="priority desc, name asc",
+        )
+
+    seen = set()
+    merged = []
+    for r in auto_rules + coupon_rules:
+        if r.name not in seen:
+            seen.add(r.name)
+            merged.append(r)
+    merged.sort(key=lambda r: (-cint(r.get("priority") or 0), r.name))
+    return merged
+
+
+def _resolve_transaction_pricing_rule(doc, company, selected_offer_names, discount_pct, discount_amt):
+    """Match applied header discount to a Transaction pricing rule name."""
+    if not discount_pct and not discount_amt:
+        return None
+
+    if selected_offer_names:
+        for rule_name in selected_offer_names:
+            try:
+                rule = frappe.get_cached_doc("Pricing Rule", rule_name)
+            except Exception:
+                continue
+            if rule.apply_on != "Transaction" or rule.coupon_code_based:
+                continue
+            if discount_pct and flt(rule.discount_percentage) == flt(discount_pct):
+                return rule.name
+            if discount_amt and flt(rule.discount_amount) == flt(discount_amt):
+                return rule.name
+
+    if not erpnext_get_other_conditions:
+        return None
+
+    conditions = "apply_on = 'Transaction'"
+    values = {}
+    conditions = erpnext_get_other_conditions(conditions, values, doc)
+
+    rules = frappe.db.sql(
+        f"""
+        SELECT name, discount_percentage, discount_amount, priority
+        FROM `tabPricing Rule`
+        WHERE {conditions} AND disable = 0
+        ORDER BY priority DESC, name
+        """,
+        values,
+        as_dict=True,
+    )
+
+    for rule in rules:
+        if selected_offer_names and rule.name not in selected_offer_names:
+            continue
+        if discount_pct and flt(rule.discount_percentage) == flt(discount_pct):
+            return rule.name
+        if discount_amt and flt(rule.discount_amount) == flt(discount_amt):
+            return rule.name
+
+    return None
+
+
+def _build_invoice_preview_item_row(item, profile):
+    """Build Sales Invoice Item row for ERPNext tax/discount preview."""
+    qty = flt(item.get("qty") or item.get("quantity") or 0)
+    row = {
+        "doctype": "Sales Invoice Item",
+        "item_code": item.get("item_code"),
+        "item_name": item.get("item_name"),
+        "qty": qty,
+        "rate": flt(item.get("rate") or item.get("price_list_rate")),
+        "price_list_rate": flt(item.get("price_list_rate") or item.get("rate")),
+        "discount_percentage": flt(item.get("discount_percentage")),
+        "discount_amount": flt(item.get("discount_amount")),
+        "pricing_rules": item.get("pricing_rules") or "",
+        "uom": item.get("uom"),
+        "conversion_factor": flt(item.get("conversion_factor") or 1) or 1,
+        "warehouse": item.get("warehouse") or profile.warehouse,
+    }
+    if item.get("item_tax_template"):
+        row["item_tax_template"] = item.get("item_tax_template")
+    if item.get("item_tax_rate"):
+        row["item_tax_rate"] = item.get("item_tax_rate")
+    return row
+
+
+def _apply_transaction_pricing_rules(
+    pricing_args, prepared_items, profile, invoice, selected_offer_names
+):
+    """Evaluate Transaction-level pricing rules (additional invoice discount)."""
+    if not prepared_items:
+        return frappe._dict()
+
+    doc_items = []
+    for item in prepared_items:
+        qty = flt(item.get("qty") or item.get("quantity") or 0)
+        if not item.get("item_code") or qty <= 0:
+            continue
+        doc_items.append(_build_invoice_preview_item_row(item, profile))
+
+    if not doc_items:
+        return frappe._dict()
+
+    doc = frappe.get_doc(
+        {
+            "doctype": invoice.get("doctype") or "Sales Invoice",
+            "company": pricing_args.get("company"),
+            "customer": pricing_args.get("customer"),
+            "customer_group": pricing_args.get("customer_group"),
+            "territory": pricing_args.get("territory"),
+            "currency": pricing_args.get("currency"),
+            "conversion_rate": pricing_args.get("conversion_rate") or 1,
+            "selling_price_list": pricing_args.get("price_list"),
+            "posting_date": pricing_args.get("posting_date"),
+            "posting_time": pricing_args.get("posting_time"),
+            "transaction_date": pricing_args.get("transaction_date")
+            or pricing_args.get("posting_date"),
+            "is_pos": 1,
+            "coupon_code": invoice.get("coupon_code"),
+            "items": doc_items,
+        }
+    )
+    doc.flags.ignore_permissions = True
+
+    applied_rule_name = None
+
+    try:
+        doc.set_missing_values()
+        doc.calculate_taxes_and_totals()
+
+        company = pricing_args.get("company")
+        candidates = _fetch_transaction_pricing_rules(company, selected_offer_names)
+
+        if candidates:
+            from erpnext.accounts.doctype.pricing_rule.utils import (
+                filter_pricing_rule_based_on_condition,
+                filter_pricing_rules_for_qty_amount,
+            )
+
+            try:
+                from pos_next.pricing_rule_time_window import (
+                    filter_pricing_rules_by_pos_time_window,
+                )
+
+                candidates = filter_pricing_rules_by_pos_time_window(
+                    candidates, pricing_args, doc
+                )
+            except Exception:
+                pass
+
+            candidates = filter_pricing_rules_for_qty_amount(
+                doc.total_qty, doc.total, candidates
+            )
+            candidates = filter_pricing_rule_based_on_condition(candidates, doc) or []
+
+            for rule_row in candidates:
+                rule_doc = (
+                    rule_row
+                    if isinstance(rule_row, frappe.model.document.Document)
+                    else frappe.get_cached_doc("Pricing Rule", rule_row.get("name"))
+                )
+                if rule_doc.coupon_code_based and not _coupon_unlocks_rule(
+                    doc.get("coupon_code"), rule_doc, pricing_args
+                ):
+                    continue
+
+                # _fetch_transaction_pricing_rules() loads every Transaction rule of
+                # the company and the filters above only cover qty/amount/condition,
+                # so a rule limited to one customer group would otherwise be granted
+                # to everyone (PM-TASK-00033 follow-up). qty/amount is already
+                # filtered above against the real doc totals — only the customer
+                # scope is missing.
+                if not _rule_applicable_for_matches(rule_doc, pricing_args):
+                    continue
+
+                pct, amt = _get_rule_discount_values(rule_doc)
+                if not pct and not amt:
+                    continue
+
+                if rule_doc.apply_discount_on:
+                    doc.apply_discount_on = rule_doc.apply_discount_on
+
+                if pct:
+                    doc.additional_discount_percentage = pct
+                if amt:
+                    doc.discount_amount = amt
+
+                doc.calculate_taxes_and_totals()
+                applied_rule_name = rule_doc.name
+                break
+
+        # Fallback: ERPNext's bundled transaction applier
+        if not applied_rule_name and erpnext_apply_pricing_rule_on_transaction:
+            erpnext_apply_pricing_rule_on_transaction(doc)
+            applied_rule_name = _resolve_transaction_pricing_rule(
+                doc,
+                company,
+                selected_offer_names,
+                flt(doc.get("additional_discount_percentage")),
+                flt(doc.get("discount_amount")),
+            )
+
+            # ERPNext checks the coupon-to-rule link here but not the coupon's
+            # validity, so an expired or fully-redeemed coupon still releases the
+            # discount (PM-TASK-00039). Undo it when our own check disagrees.
+            if applied_rule_name:
+                try:
+                    applied_rule = frappe.get_cached_doc("Pricing Rule", applied_rule_name)
+                except Exception:
+                    applied_rule = None
+                if (
+                    applied_rule
+                    and applied_rule.coupon_code_based
+                    and not _coupon_unlocks_rule(
+                        doc.get("coupon_code"), applied_rule, pricing_args
+                    )
+                ):
+                    doc.additional_discount_percentage = 0
+                    doc.discount_amount = 0
+                    doc.calculate_taxes_and_totals()
+                    applied_rule_name = None
+
+        # Last resort: apply selected Transaction rules directly (POS preview)
+        if not applied_rule_name and selected_offer_names:
+            for rule_name in selected_offer_names:
+                try:
+                    rule_doc = frappe.get_cached_doc("Pricing Rule", rule_name)
+                except Exception:
+                    continue
+                if rule_doc.apply_on != "Transaction" or rule_doc.coupon_code_based:
+                    continue
+
+                pct, amt = _get_rule_discount_values(rule_doc)
+                if not pct and not amt:
+                    continue
+
+                # This branch bypasses the qty/amount filtering the `candidates`
+                # path above already does, so it has to do its own.
+                if not _rule_eligible_for_forced_discount(
+                    rule_doc, prepared_items, pricing_args
+                ):
+                    continue
+
+                if rule_doc.apply_discount_on:
+                    doc.apply_discount_on = rule_doc.apply_discount_on
+                if pct:
+                    doc.additional_discount_percentage = pct
+                if amt:
+                    doc.discount_amount = amt
+
+                doc.calculate_taxes_and_totals()
+                applied_rule_name = rule_doc.name
+                break
+
+    except Exception as e:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "Apply Offers Transaction",
+        )
+        return frappe._dict()
+
+    discount_pct = flt(doc.get("additional_discount_percentage"))
+    discount_amt = flt(doc.get("discount_amount"))
+
+    line_net = _compute_line_net_from_prepared_items(prepared_items)
+
+    if not discount_pct and not discount_amt:
+        return frappe._dict()
+
+    if not applied_rule_name:
+        applied_rule_name = _resolve_transaction_pricing_rule(
+            doc,
+            pricing_args.get("company"),
+            selected_offer_names,
+            discount_pct,
+            discount_amt,
+        )
+
+    if (
+        selected_offer_names
+        and applied_rule_name
+        and applied_rule_name not in selected_offer_names
+    ):
+        # Chỉ bỏ qua rule coupon-based (cần chọn thủ công).
+        # Rule không phải coupon-based thì luôn auto-apply dù không trong selected_offer_names.
+        try:
+            is_coupon = frappe.db.get_value("Pricing Rule", applied_rule_name, "coupon_code_based")
+        except Exception:
+            is_coupon = False
+        if is_coupon:
+            return frappe._dict()
+
+    return frappe._dict(
+        additional_discount_percentage=discount_pct,
+        additional_discount_amount=discount_amt,
+        apply_discount_on=doc.get("apply_discount_on"),
+        transaction_pricing_rule=applied_rule_name,
+    )
+
+
+def _compute_line_net_from_prepared_items(prepared_items):
+    """Sum of line nets after item-level discounts (ERPNext net total before additional discount)."""
+    line_net = 0
+    for item in prepared_items:
+        qty = flt(item.get("qty") or item.get("quantity") or 0)
+        if qty <= 0:
+            continue
+        price_list_rate = flt(item.get("price_list_rate") or item.get("rate") or 0)
+        line_discount = flt(item.get("discount_amount") or 0)
+        if line_discount:
+            line_net += price_list_rate * qty - line_discount
+        else:
+            line_net += flt(item.get("amount") or 0) or price_list_rate * qty
+    return flt(line_net)
+
+
+def _cart_matches_pricing_rule(rule_doc, prepared_items):
+    """Whether any cart line matches a non-Transaction pricing rule."""
+    if rule_doc.apply_on == "Transaction":
+        return True
+
+    item_codes = {cstr(i.get("item_code")) for i in prepared_items if i.get("item_code")}
+
+    if rule_doc.apply_on == "Item Code":
+        rule_codes = {cstr(row.item_code) for row in (rule_doc.items or [])}
+        return bool(item_codes & rule_codes)
+
+    if rule_doc.apply_on == "Item Group":
+        from erpnext.accounts.doctype.pricing_rule.utils import get_pricing_rule_items
+
+        rule_groups = set(get_pricing_rule_items(rule_doc) or [])
+        if not rule_groups:
+            rule_groups = {cstr(row.item_group) for row in (rule_doc.item_groups or [])}
+        for item in prepared_items:
+            if cstr(item.get("item_group")) in rule_groups:
+                return True
+        return False
+
+    if rule_doc.apply_on == "Brand":
+        rule_brands = {cstr(row.brand) for row in (rule_doc.brands or [])}
+        for item in prepared_items:
+            if cstr(item.get("brand")) in rule_brands:
+                return True
+        return False
+
+    return False
+
+
+def _coupon_unlocks_rule(coupon_code, rule_doc, pricing_args=None):
+    """Whether the coupon entered on the cart actually releases this rule.
+
+    A ``coupon_code_based`` Pricing Rule is meant to stay locked until a coupon
+    that POINTS AT IT is presented. POS used to accept any non-empty string, so
+    a coupon belonging to another promotion — or a made-up code sent straight to
+    the API — handed out the rule's discount (PM-TASK-00039).
+
+    Both coupon doctypes are honoured: ERPNext's own ``Coupon Code`` (which the
+    Pricing Rule is designed around) and this app's ``POS Coupon``, whose
+    ``pricing_rule`` field expresses the same link. A coupon with no link is a
+    standalone discount and releases nothing.
+    """
+    code = cstr(coupon_code).strip()
+    if not code:
+        return False
+
+    # ERPNext Coupon Code — validate_coupon_code() checks dates and usage limits
+    # and throws when the coupon is not usable.
+    if frappe.db.table_exists("Coupon Code"):
+        linked = frappe.db.get_value(
+            "Coupon Code",
+            {"coupon_code": code},
+            ["name", "pricing_rule"],
+            as_dict=True,
+        )
+        if linked and linked.pricing_rule == rule_doc.name:
+            try:
+                from erpnext.accounts.doctype.pricing_rule.utils import (
+                    validate_coupon_code,
+                )
+
+                validate_coupon_code(linked.name)
+                return True
+            except Exception:
+                return False
+
+    # POS Coupon — reuse the app's own validation (disabled / dates / usage /
+    # company / customer) instead of re-implementing it here.
+    pos_coupon = frappe.db.get_value(
+        "POS Coupon",
+        {"coupon_code": code.upper()},
+        ["name", "pricing_rule"],
+        as_dict=True,
+    )
+    if not pos_coupon or pos_coupon.pricing_rule != rule_doc.name:
+        return False
+
+    try:
+        from pos_next.pos_next.doctype.pos_coupon.pos_coupon import check_coupon_code
+
+        result = check_coupon_code(
+            code,
+            customer=(pricing_args or {}).get("customer"),
+            company=(pricing_args or {}).get("company"),
+        )
+        return bool(result.get("coupon"))
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS Coupon Rule Unlock")
+        return False
+
+
+def _rule_scoped_cart_rows(rule_doc, prepared_items):
+    """Cart lines that fall inside a rule's apply_on scope."""
+    rows = [
+        item
+        for item in prepared_items
+        if item.get("item_code") and flt(item.get("qty") or item.get("quantity") or 0) > 0
+    ]
+
+    if rule_doc.apply_on == "Transaction":
+        return rows
+
+    if rule_doc.apply_on == "Item Code":
+        codes = {cstr(row.item_code) for row in (rule_doc.items or [])}
+        return [r for r in rows if cstr(r.get("item_code")) in codes]
+
+    if rule_doc.apply_on == "Item Group":
+        from erpnext.accounts.doctype.pricing_rule.utils import get_pricing_rule_items
+
+        groups = set(get_pricing_rule_items(rule_doc) or [])
+        if not groups:
+            groups = {cstr(row.item_group) for row in (rule_doc.item_groups or [])}
+        return [r for r in rows if cstr(r.get("item_group")) in groups]
+
+    if rule_doc.apply_on == "Brand":
+        brands = {cstr(row.brand) for row in (rule_doc.brands or [])}
+        return [r for r in rows if cstr(r.get("brand")) in brands]
+
+    return []
+
+
+def _rule_applicable_for_matches(rule_doc, pricing_args):
+    """Whether a rule scoped by ``applicable_for`` matches this transaction.
+
+    ERPNext enforces this inside get_pricing_rules() before its engine ever sees
+    the rule. The POS forced-discount path below never reaches that engine, so it
+    has to check for itself — otherwise a promo restricted to one customer is
+    handed to every customer.
+
+    When the scope cannot be verified from the POS payload (Sales Partner,
+    Campaign — the cart never carries them) we refuse rather than guess: granting
+    money on an unverifiable condition is the one outcome we must not risk.
+    """
+    applicable_for = rule_doc.get("applicable_for")
+    if not applicable_for:
+        return True
+
+    fieldname = frappe.scrub(applicable_for)
+    expected = rule_doc.get(fieldname)
+    if not expected:
+        return True
+
+    actual = pricing_args.get(fieldname)
+    if not actual:
+        return False
+
+    if cstr(actual) == cstr(expected):
+        return True
+
+    # Customer Group and Territory are trees: a rule on the parent covers children.
+    if fieldname in ("customer_group", "territory"):
+        doctype = "Customer Group" if fieldname == "customer_group" else "Territory"
+        try:
+            from frappe.utils.nestedset import get_descendants_of
+
+            return cstr(actual) in (get_descendants_of(doctype, expected) or [])
+        except Exception:
+            return False
+
+    return False
+
+
+def _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args):
+    """Whether the cart satisfies the rule's own min/max qty and amount.
+
+    ERPNext checks this in filter_pricing_rules_for_qty_amount() while its engine
+    walks each line. A rule the engine deliberately refused must not then be paid
+    out invoice-wide — without this a "buy 2-3 get 20%" rule pays out at qty 1 and
+    at qty 5 alike (PM-TASK-00031 follow-up).
+
+    Aggregation follows the rule's own semantics: mixed_conditions / is_cumulative
+    / Transaction rules measure the whole matching set, everything else is judged
+    per line exactly as the engine judges it.
+    """
+    from erpnext.accounts.doctype.pricing_rule.utils import (
+        filter_pricing_rules_for_qty_amount,
+    )
+
+    if not (
+        flt(rule_doc.min_qty)
+        or flt(rule_doc.max_qty)
+        or flt(rule_doc.min_amt)
+        or flt(rule_doc.max_amt)
+    ):
+        return True
+
+    rows = _rule_scoped_cart_rows(rule_doc, prepared_items)
+    if not rows:
+        return False
+
+    rule_args = [
+        frappe._dict(
+            {
+                "name": rule_doc.name,
+                "min_qty": flt(rule_doc.min_qty),
+                "max_qty": flt(rule_doc.max_qty),
+                "min_amt": flt(rule_doc.min_amt),
+                "max_amt": flt(rule_doc.max_amt),
+            }
+        )
+    ]
+
+    def _qty_amt(row):
+        qty = flt(row.get("qty") or row.get("quantity") or 0)
+        stock_qty = qty * (flt(row.get("conversion_factor") or 1) or 1)
+        rate = flt(row.get("price_list_rate") or row.get("rate") or 0)
+        return stock_qty, stock_qty * rate
+
+    aggregate = (
+        rule_doc.apply_on == "Transaction"
+        or rule_doc.mixed_conditions
+        or rule_doc.is_cumulative
+    )
+
+    if aggregate:
+        total_qty = total_amt = 0
+        for row in rows:
+            qty, amt = _qty_amt(row)
+            total_qty += qty
+            total_amt += amt
+
+        if rule_doc.is_cumulative:
+            # Cumulative rules also count qty already invoiced in the valid period.
+            from erpnext.accounts.doctype.pricing_rule.utils import (
+                get_qty_amount_data_for_cumulative,
+                get_pricing_rule_items,
+            )
+
+            past = get_qty_amount_data_for_cumulative(
+                rule_doc, pricing_args, get_pricing_rule_items(rule_doc) or []
+            )
+            if past:
+                total_qty += flt(past[0])
+                total_amt += flt(past[1])
+
+        return bool(
+            filter_pricing_rules_for_qty_amount(total_qty, total_amt, rule_args)
+        )
+
+    for row in rows:
+        qty, amt = _qty_amt(row)
+        if filter_pricing_rules_for_qty_amount(qty, amt, rule_args):
+            return True
+
+    return False
+
+
+def _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
+    """Gate for the two paths that hand a rule's discount to the whole invoice
+    without ERPNext's engine having agreed to it."""
+    try:
+        if not _rule_applicable_for_matches(rule_doc, pricing_args):
+            return False
+        return _rule_qty_amount_satisfied(rule_doc, prepared_items, pricing_args)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Apply Offers Rule Eligibility")
+        # Cannot verify -> do not grant the discount.
+        return False
+
+
+def _supplement_additional_discount_for_unapplied(
+    pricing_args,
+    prepared_items,
+    profile,
+    invoice,
+    selected_offer_names,
+    applied_rules,
+    existing_result=None,
+):
+    """
+    When a selected rule did not win at item-level (priority), still apply it as
+    Additional Discount on the invoice — matches ERPNext POS invoice behaviour.
+    """
+    if not selected_offer_names:
+        return existing_result or frappe._dict()
+
+    from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+
+    if existing_result and existing_result.get("transaction_pricing_rule"):
+        return existing_result
+
+    missing = [name for name in selected_offer_names if name not in applied_rules]
+    if not missing:
+        return existing_result or frappe._dict()
+
+    for rule_name in sorted(missing, key=lambda n: cint(
+        frappe.db.get_value("Pricing Rule", n, "priority") or 0
+    ), reverse=True):
+        try:
+            rule_doc = frappe.get_cached_doc("Pricing Rule", rule_name)
+        except Exception:
+            continue
+
+        if not is_pricing_rule_in_time_window(rule_doc, pricing_args):
+            continue
+
+        if rule_doc.coupon_code_based:
+            continue
+
+        pct, amt = _get_rule_discount_values(rule_doc)
+        if not pct and not amt:
+            continue
+
+        if not _cart_matches_pricing_rule(rule_doc, prepared_items):
+            continue
+
+        # ERPNext refused this rule at item level. That can mean "lost on
+        # priority" (fine to fall back to an invoice discount) or "cart does not
+        # qualify" (must NOT be paid out). Only the second case is filtered here.
+        if not _rule_eligible_for_forced_discount(rule_doc, prepared_items, pricing_args):
+            continue
+
+        doc_items = []
+        for item in prepared_items:
+            qty = flt(item.get("qty") or item.get("quantity") or 0)
+            if not item.get("item_code") or qty <= 0:
+                continue
+            doc_items.append(
+                {
+                    "doctype": "Sales Invoice Item",
+                    "item_code": item.get("item_code"),
+                    "qty": qty,
+                    "rate": flt(item.get("rate") or item.get("price_list_rate")),
+                    "price_list_rate": flt(item.get("price_list_rate") or item.get("rate")),
+                    "discount_percentage": flt(item.get("discount_percentage")),
+                    "discount_amount": flt(item.get("discount_amount")),
+                    "pricing_rules": item.get("pricing_rules") or "",
+                    "uom": item.get("uom"),
+                    "conversion_factor": flt(item.get("conversion_factor") or 1) or 1,
+                    "warehouse": item.get("warehouse") or profile.warehouse,
+                }
+            )
+
+        if not doc_items:
+            continue
+
+        doc = frappe.get_doc(
+            {
+                "doctype": invoice.get("doctype") or "Sales Invoice",
+                "company": pricing_args.get("company"),
+                "customer": pricing_args.get("customer"),
+                "customer_group": pricing_args.get("customer_group"),
+                "territory": pricing_args.get("territory"),
+                "currency": pricing_args.get("currency"),
+                "conversion_rate": pricing_args.get("conversion_rate") or 1,
+                "selling_price_list": pricing_args.get("price_list"),
+                "posting_date": pricing_args.get("posting_date"),
+                "is_pos": 1,
+                "items": doc_items,
+            }
+        )
+        line_net = _compute_line_net_from_prepared_items(prepared_items)
+        if not line_net:
+            continue
+
+        apply_on = rule_doc.apply_discount_on or "Net Total"
+
+        if pct:
+            discount_amt = flt(line_net * pct / 100)
+            discount_pct = pct
+        elif amt:
+            discount_amt = flt(amt)
+            discount_pct = flt((discount_amt / line_net) * 100) if line_net else 0
+        else:
+            continue
+
+        return frappe._dict(
+            additional_discount_percentage=discount_pct,
+            additional_discount_amount=discount_amt,
+            apply_discount_on=apply_on,
+            transaction_pricing_rule=rule_doc.name,
+        )
+
+    return existing_result or frappe._dict()
+
+
+def _preview_cart_totals(pricing_args, prepared_items, profile, invoice, transaction_result=None):
+    """ERPNext calculate_taxes_and_totals preview so POS matches submitted Sales Invoice."""
+    doc_items = []
+    for item in prepared_items:
+        qty = flt(item.get("qty") or item.get("quantity") or 0)
+        if not item.get("item_code") or qty <= 0:
+            continue
+        doc_items.append(_build_invoice_preview_item_row(item, profile))
+
+    if not doc_items:
+        return {}
+
+    doc = frappe.get_doc(
+        {
+            "doctype": invoice.get("doctype") or "Sales Invoice",
+            "company": pricing_args.get("company"),
+            "customer": pricing_args.get("customer"),
+            "customer_group": pricing_args.get("customer_group"),
+            "territory": pricing_args.get("territory"),
+            "currency": pricing_args.get("currency"),
+            "conversion_rate": pricing_args.get("conversion_rate") or 1,
+            "selling_price_list": pricing_args.get("price_list"),
+            "posting_date": pricing_args.get("posting_date"),
+            "is_pos": 1,
+            "coupon_code": invoice.get("coupon_code"),
+            "items": doc_items,
+        }
+    )
+    doc.flags.ignore_permissions = True
+
+    if transaction_result:
+        apply_on = transaction_result.get("apply_discount_on")
+        pct = flt(transaction_result.get("additional_discount_percentage"))
+        amt = flt(transaction_result.get("additional_discount_amount"))
+        if apply_on:
+            doc.apply_discount_on = apply_on
+        doc.additional_discount_percentage = 0
+        doc.discount_amount = 0
+        # Let ERPNext derive discount_amount from apply_discount_on + percentage
+        if pct:
+            doc.additional_discount_percentage = pct
+        elif amt:
+            doc.discount_amount = amt
+
+    try:
+        doc.set_missing_values()
+        doc.calculate_taxes_and_totals()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS Preview Cart Totals")
+        return {}
+
+    return {
+        "net_total": flt(doc.net_total),
+        "grand_total": flt(doc.grand_total),
+        "rounded_total": flt(doc.rounded_total or doc.grand_total),
+        "total_tax": flt(doc.total_taxes_and_charges),
+        "discount_amount": flt(doc.discount_amount),
+        "additional_discount_percentage": flt(doc.additional_discount_percentage),
+    }
+
+
+def _deduplicate_free_item_rows(free_items):
+    """One free line per (free_item_code, pricing_rule), matching ERPNext Sales Invoice.
+
+    ERPNext's apply_pricing_rule_for_free_items builds
+    {(item_code, pricing_rules): row} before appending to the document. POS evaluates
+    pricing per cart line, so the same product rule can appear on every matching item
+    (e.g. rule lists Test 1 + Test 2 → one Test 3 gift, not one per trigger line).
+    """
+    if not free_items:
+        return []
+
+    merged = {}
+    order = []
+
+    for row in free_items:
+        if not row:
+            continue
+
+        item_code = row.get("item_code")
+        if not item_code:
+            continue
+
+        rule_name = row.get("pricing_rules") or ""
+        key = (item_code, rule_name)
+
+        if key not in merged:
+            order.append(key)
+            merged[key] = row
+            continue
+
+        # Same free gift from multiple trigger lines — keep the first row (qty already
+        # computed by ERPNext for that rule; do not sum duplicates).
+        existing_qty = flt(merged[key].get("qty"))
+        new_qty = flt(row.get("qty"))
+        if new_qty > existing_qty:
+            merged[key] = row
+
+    return [merged[key] for key in order]
+
+
+def _build_apply_offers_response(
+    prepared_items,
+    free_items,
+    applied_rules,
+    transaction_result=None,
+    preview_totals=None,
+):
+    response = {
+        "items": [dict(item) for item in prepared_items],
+        "free_items": [dict(item) for item in free_items],
+        "applied_pricing_rules": sorted(applied_rules),
+    }
+
+    if transaction_result:
+        response["additional_discount_percentage"] = flt(
+            transaction_result.get("additional_discount_percentage")
+        )
+        response["additional_discount_amount"] = flt(
+            transaction_result.get("additional_discount_amount")
+        )
+        response["apply_discount_on"] = transaction_result.get("apply_discount_on")
+        response["transaction_pricing_rule"] = transaction_result.get(
+            "transaction_pricing_rule"
+        )
+
+    if preview_totals:
+        response["preview_totals"] = preview_totals
+
+    return response
+
+
 @frappe.whitelist()
 def apply_offers(invoice_data, selected_offers=None):
     """Calculate and apply promotional offers using ERPNext Pricing Rules.
@@ -2296,7 +4155,8 @@ def apply_offers(invoice_data, selected_offers=None):
 
         # If still no customer_group, use default
         if not customer_group:
-            customer_group = "All Customer Groups"
+            from pos_next.api.customers import default_customer_group
+            customer_group = default_customer_group()
 
         pricing_args = frappe._dict(
             {
@@ -2305,6 +4165,7 @@ def apply_offers(invoice_data, selected_offers=None):
                 "company": profile.company,
                 "transaction_date": invoice.get("posting_date") or nowdate(),
                 "posting_date": invoice.get("posting_date") or nowdate(),
+                "posting_time": invoice.get("posting_time") or nowtime(),
                 "currency": invoice.get("currency")
                 or profile.get("currency")
                 or company_currency,
@@ -2320,6 +4181,26 @@ def apply_offers(invoice_data, selected_offers=None):
             }
         )
 
+        from pos_next.pricing_rule_time_window import is_pricing_rule_in_time_window
+        from pos_next.pricing_rule_warehouse import (
+            filter_pricing_rule_names_by_warehouse,
+            resolve_transaction_warehouse,
+        )
+
+        transaction_warehouse = resolve_transaction_warehouse(profile, items)
+
+        if selected_offer_names:
+            selected_offer_names = {
+                name
+                for name in selected_offer_names
+                if is_pricing_rule_in_time_window(name, pricing_args)
+            }
+            selected_offer_names = set(
+                filter_pricing_rule_names_by_warehouse(
+                    selected_offer_names, transaction_warehouse
+                )
+            )
+
         # Call ERPNext pricing engine - it handles all conflicts based on priority
         #
         # Why we pass pricing_args twice:
@@ -2332,9 +4213,6 @@ def apply_offers(invoice_data, selected_offers=None):
         #
         # See: erpnext/accounts/doctype/pricing_rule/utils.py -> get_qty_and_rate_for_mixed_conditions()
         pricing_results = erpnext_apply_pricing_rule(pricing_args, doc=pricing_args) or []
-
-        if not pricing_results:
-            return {"items": items}
 
         raw_rule_names = set()
         for result in pricing_results:
@@ -2353,6 +4231,16 @@ def apply_offers(invoice_data, selected_offers=None):
                 elif isinstance(raw_rules, (list, tuple, set)):
                     rules = list(raw_rules)
             raw_rule_names.update(rules)
+            for free_item in result.get("free_item_data") or []:
+                rule_name = free_item.get("pricing_rules")
+                if rule_name:
+                    raw_rule_names.add(rule_name)
+
+        # Include explicitly selected offers so product-discount rules are in rule_map
+        # even when ERPNext only returns them via free_item_data.
+        candidate_rule_names = set(raw_rule_names)
+        if selected_offer_names:
+            candidate_rule_names.update(selected_offer_names)
 
         # Build a map of applicable pricing rules from the ERPNext engine results.
         #
@@ -2372,10 +4260,10 @@ def apply_offers(invoice_data, selected_offers=None):
         # (those require explicit coupon entry and are handled separately).
         #
         rule_map = {}
-        if raw_rule_names:
+        if candidate_rule_names:
             rule_records = frappe.get_all(
                 "Pricing Rule",
-                filters={"name": ["in", list(raw_rule_names)]},
+                filters={"name": ["in", list(candidate_rule_names)]},
                 fields=[
                     "name",
                     "promotional_scheme",
@@ -2400,133 +4288,202 @@ def apply_offers(invoice_data, selected_offers=None):
                 if name in selected_offer_names
             }
 
-        if not rule_map:
-            return {"items": items}
-
         applied_rules = set()
         free_items = []
 
-        for result, item_index in zip(pricing_results, index_map):
-            if not result:
-                continue
-
-            if erpnext_get_applied_pricing_rules:
-                rule_names = erpnext_get_applied_pricing_rules(
-                    result.get("pricing_rules")
-                )
-            else:
-                raw_rules = result.get("pricing_rules") or []
-                if isinstance(raw_rules, str):
-                    if raw_rules.startswith("["):
-                        rule_names = json.loads(raw_rules)
-                    else:
-                        rule_names = [
-                            r.strip() for r in raw_rules.split(",") if r.strip()
-                        ]
-                elif isinstance(raw_rules, (list, tuple, set)):
-                    rule_names = list(raw_rules)
-                else:
-                    rule_names = []
-
-            applicable_rule_names = [
-                name for name in rule_names or [] if name in rule_map
-            ]
-
-            if not applicable_rule_names:
-                continue
-
-            applied_rules.update(applicable_rule_names)
-
-            item_doc = prepared_items[item_index]
-            qty = flt(item_doc.get("qty") or item_doc.get("quantity") or 0)
-            price_list_rate = flt(
-                result.get("price_list_rate")
-                or item_doc.get("price_list_rate")
-                or item_doc.get("rate")
-                or 0
-            )
-
-            # Get discount from result or fetch from pricing rule
-            discount_percentage = flt(result.get("discount_percentage") or 0)
-            per_unit_discount = flt(result.get("discount_amount") or 0)
-
-            # If ERPNext didn't calculate discount (validate_applied_rule=1),
-            # we need to fetch and apply it manually
-            if (
-                not discount_percentage
-                and not per_unit_discount
-                and applicable_rule_names
-            ):
-                for rule_name in applicable_rule_names:
-                    rule_doc = rule_map.get(rule_name)
-                    if not rule_doc:
-                        continue
-
-                    # Fetch full pricing rule to get discount values
-                    full_rule = frappe.get_cached_doc("Pricing Rule", rule_name)
-
-                    if (
-                        full_rule.rate_or_discount == "Discount Percentage"
-                        and full_rule.discount_percentage
-                    ):
-                        discount_percentage += flt(full_rule.discount_percentage)
-                    elif (
-                        full_rule.rate_or_discount == "Discount Amount"
-                        and full_rule.discount_amount
-                    ):
-                        per_unit_discount += flt(full_rule.discount_amount)
-                    elif full_rule.rate_or_discount == "Rate" and full_rule.rate:
-                        # Apply fixed rate
-                        price_list_rate = flt(full_rule.rate)
-
-            line_discount_amount = 0
-            if discount_percentage and qty and price_list_rate:
-                line_discount_amount = price_list_rate * qty * discount_percentage / 100
-            elif per_unit_discount and qty:
-                line_discount_amount = per_unit_discount * qty
-            else:
-                line_discount_amount = per_unit_discount
-
-            if (
-                not discount_percentage
-                and line_discount_amount
-                and qty
-                and price_list_rate
-            ):
-                base_amount = price_list_rate * qty
-                if base_amount:
-                    discount_percentage = (line_discount_amount / base_amount) * 100
-
-            item_doc.discount_percentage = discount_percentage
-            item_doc.discount_amount = line_discount_amount
-            item_doc.price_list_rate = price_list_rate
-            item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
-            # ERPNext expects pricing_rules as comma-separated string, not a list
-            item_doc.pricing_rules = ",".join(applicable_rule_names) if applicable_rule_names else ""
-
-            item_doc.applied_promotional_schemes = list(
-                {
-                    rule_map[name].promotional_scheme
-                    for name in applicable_rule_names
-                    if rule_map[name].promotional_scheme
-                }
-            )
-
-            for free_item in result.get("free_item_data") or []:
-                rule_name = free_item.get("pricing_rules")
-                if not rule_name or rule_name not in rule_map:
+        if rule_map:
+            for result, item_index in zip(pricing_results, index_map):
+                if not result:
                     continue
-                free_item_doc = frappe._dict(free_item)
-                free_item_doc.applied_promotional_scheme = rule_map[
-                    rule_name
-                ].promotional_scheme
-                free_items.append(free_item_doc)
 
-        return {
-            "items": [dict(item) for item in prepared_items],
-            "free_items": [dict(item) for item in free_items],
-            "applied_pricing_rules": sorted(applied_rules),
-        }
+                if erpnext_get_applied_pricing_rules:
+                    rule_names = erpnext_get_applied_pricing_rules(
+                        result.get("pricing_rules")
+                    )
+                else:
+                    raw_rules = result.get("pricing_rules") or []
+                    if isinstance(raw_rules, str):
+                        if raw_rules.startswith("["):
+                            rule_names = json.loads(raw_rules)
+                        else:
+                            rule_names = [
+                                r.strip() for r in raw_rules.split(",") if r.strip()
+                            ]
+                    elif isinstance(raw_rules, (list, tuple, set)):
+                        rule_names = list(raw_rules)
+                    else:
+                        rule_names = []
+
+                applicable_rule_names = [
+                    name for name in rule_names or [] if name in rule_map
+                ]
+
+                # Product-discount rules may only return free_item_data (no line discount).
+                for free_item in result.get("free_item_data") or []:
+                    rule_name = free_item.get("pricing_rules")
+                    if not rule_name or rule_name not in rule_map:
+                        continue
+                    applied_rules.add(rule_name)
+                    free_item_doc = frappe._dict(free_item)
+                    free_item_doc.applied_promotional_scheme = rule_map[
+                        rule_name
+                    ].promotional_scheme
+                    free_items.append(free_item_doc)
+
+                if not applicable_rule_names:
+                    continue
+
+                applied_rules.update(applicable_rule_names)
+
+                item_doc = prepared_items[item_index]
+                qty = flt(item_doc.get("qty") or item_doc.get("quantity") or 0)
+                price_list_rate = flt(
+                    result.get("price_list_rate")
+                    or item_doc.get("price_list_rate")
+                    or item_doc.get("rate")
+                    or 0
+                )
+
+                # Get discount from result or fetch from pricing rule
+                discount_percentage = flt(result.get("discount_percentage") or 0)
+                per_unit_discount = flt(result.get("discount_amount") or 0)
+
+                # Quy tắc loại "Rate" ẤN ĐỊNH giá bán chứ không giảm giá (PM-TASK-00125).
+                # ERPNext chỉ trả về `price_list_rate` mới kèm `pricing_rule_for = "Rate"`,
+                # KHÔNG có discount_percentage/discount_amount nào — nên nếu vẫn giữ `rate`
+                # cũ trong giỏ thì tổng tiền không đổi, POS báo "Applied" mà giá y nguyên.
+                # Trên desk không lộ vì form JS tự tính lại rate từ price_list_rate.
+                an_dinh_gia = cstr(result.get("pricing_rule_for")) == "Rate"
+
+                # If ERPNext didn't calculate discount (validate_applied_rule=1),
+                # we need to fetch and apply it manually
+                if (
+                    not discount_percentage
+                    and not per_unit_discount
+                    and applicable_rule_names
+                ):
+                    for rule_name in applicable_rule_names:
+                        rule_doc = rule_map.get(rule_name)
+                        if not rule_doc:
+                            continue
+
+                        # Fetch full pricing rule to get discount values
+                        full_rule = frappe.get_cached_doc("Pricing Rule", rule_name)
+
+                        if not is_pricing_rule_in_time_window(
+                            full_rule, pricing_args
+                        ):
+                            continue
+
+                        if (
+                            full_rule.rate_or_discount == "Discount Percentage"
+                            and full_rule.discount_percentage
+                        ):
+                            discount_percentage += flt(full_rule.discount_percentage)
+                        elif (
+                            full_rule.rate_or_discount == "Discount Amount"
+                            and full_rule.discount_amount
+                        ):
+                            per_unit_discount += flt(full_rule.discount_amount)
+                        elif full_rule.rate_or_discount == "Rate" and full_rule.rate:
+                            # Apply fixed rate
+                            price_list_rate = flt(full_rule.rate)
+                            an_dinh_gia = True
+
+                line_discount_amount = 0
+                if discount_percentage and qty and price_list_rate:
+                    line_discount_amount = (
+                        price_list_rate * qty * discount_percentage / 100
+                    )
+                elif per_unit_discount and qty:
+                    line_discount_amount = per_unit_discount * qty
+                else:
+                    line_discount_amount = per_unit_discount
+
+                if (
+                    not discount_percentage
+                    and line_discount_amount
+                    and qty
+                    and price_list_rate
+                ):
+                    base_amount = price_list_rate * qty
+                    if base_amount:
+                        discount_percentage = (line_discount_amount / base_amount) * 100
+
+                item_doc.discount_percentage = discount_percentage
+                item_doc.discount_amount = line_discount_amount
+                item_doc.price_list_rate = price_list_rate
+                if an_dinh_gia:
+                    # Giá chương trình ĐÈ lên giá thu ngân vừa gõ — khách chốt 22/08,
+                    # giống hệt cách màn Hoá đơn bán hàng đang chạy.
+                    gia_ap_dung = price_list_rate
+                    if discount_percentage:
+                        gia_ap_dung = gia_ap_dung * (1 - discount_percentage / 100.0)
+                    elif per_unit_discount:
+                        gia_ap_dung = gia_ap_dung - per_unit_discount
+                    item_doc.rate = flt(gia_ap_dung)
+                else:
+                    item_doc.rate = flt(item_doc.get("rate") or price_list_rate)
+                # ERPNext expects pricing_rules as comma-separated string, not a list
+                item_doc.pricing_rules = (
+                    ",".join(applicable_rule_names) if applicable_rule_names else ""
+                )
+
+                item_doc.applied_promotional_schemes = list(
+                    {
+                        rule_map[name].promotional_scheme
+                        for name in applicable_rule_names
+                        if rule_map[name].promotional_scheme
+                    }
+                )
+
+        # Enrich lines with item master data for group/brand rule matching
+        for item in prepared_items:
+            cached = item_details_map.get(item.get("item_code"))
+            if cached:
+                if not item.get("item_group"):
+                    item.item_group = cached.item_group
+                if not item.get("brand"):
+                    item.brand = cached.brand
+
+        transaction_result = _apply_transaction_pricing_rules(
+            pricing_args,
+            prepared_items,
+            profile,
+            invoice,
+            selected_offer_names,
+        )
+
+        transaction_result = _supplement_additional_discount_for_unapplied(
+            pricing_args,
+            prepared_items,
+            profile,
+            invoice,
+            selected_offer_names,
+            applied_rules,
+            transaction_result,
+        )
+
+        if transaction_result.get("transaction_pricing_rule"):
+            applied_rules.add(transaction_result.transaction_pricing_rule)
+
+        preview_totals = _preview_cart_totals(
+            pricing_args,
+            prepared_items,
+            profile,
+            invoice,
+            transaction_result,
+        )
+
+        free_items = _deduplicate_free_item_rows(free_items)
+
+        return _build_apply_offers_response(
+            prepared_items,
+            free_items,
+            applied_rules,
+            transaction_result,
+            preview_totals,
+        )
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Apply Offers Error")
         frappe.throw(_("Error applying offers: {0}").format(str(e)))

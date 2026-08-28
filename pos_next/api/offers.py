@@ -10,10 +10,11 @@ Promotional Schemes and standalone Pricing Rules.
 """
 
 from typing import Dict, List, Optional
-from dataclasses import dataclass, asdict
+import datetime
+from dataclasses import dataclass, asdict, field
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, nowdate
+from frappe.utils import flt, getdate, nowdate, cint
 
 
 # ============================================================================
@@ -38,6 +39,20 @@ class OfferSource:
 	"""Offer source constants"""
 	PROMOTIONAL_SCHEME = "Promotional Scheme"
 	PRICING_RULE = "Pricing Rule"
+
+
+# Cache for get_offers(): avoids re-scanning `tabPricing Rule` (can be tens of
+# thousands of rows) on every POS item add. Invalidated explicitly whenever a
+# Pricing Rule / Promotional Scheme / Promotion Campaign is saved or deleted
+# (see hooks.py doc_events -> clear_offers_cache), with a TTL as a safety net.
+OFFERS_CACHE_KEY_PREFIX = "pos_offers_v1"
+OFFERS_CACHE_TTL_SECONDS = 3600
+
+
+def clear_offers_cache(doc=None, method=None):
+	"""Invalidate cached POS offers. Hooked to Pricing Rule / Promotional
+	Scheme / Promotion Campaign on_update and on_trash."""
+	frappe.cache().delete_keys(OFFERS_CACHE_KEY_PREFIX)
 
 
 # ============================================================================
@@ -86,10 +101,116 @@ class Offer:
 	is_recursive: int = 0  # 1 if offer applies recursively (e.g., buy 2 get 1 free for every 2)
 	recurse_for: float = 0  # Give free item for every N quantity (used when is_recursive=1)
 	apply_recursion_over: float = 0  # Qty for which recursion isn't applicable
+	# Transaction-level discount base (Net Total / Grand Total)
+	apply_discount_on: Optional[str] = None
+	# POS Next: daily time window on Pricing Rule (custom fields)
+	apply_time_window: int = 0
+	valid_time_from: Optional[str] = None
+	valid_time_to: Optional[str] = None
+	warehouse: Optional[str] = None
+	# Whether the rule measures qty/amount over the whole matching set (1) or per
+	# cart line (0). The POS has to mirror this or it offers promos ERPNext will
+	# refuse — see PM-TASK-00035.
+	mixed_conditions: int = 0
+	# Customer scoping (PM-TASK-00034). `applicable_values` is the resolved set of
+	# names that satisfy the scope, tree descendants already expanded, so the POS
+	# can match with a plain lookup instead of walking the tree in the browser.
+	applicable_for: Optional[str] = None
+	applicable_values: List[str] = field(default_factory=list)
 
 	def to_dict(self) -> Dict:
 		"""Convert to dictionary for API response"""
 		return asdict(self)
+
+
+# ============================================================================
+# Helpers (customer scoping)
+# ============================================================================
+
+# applicable_for -> the Pricing Rule field holding the scoped value.
+_APPLICABLE_FOR_FIELD = {
+	"Customer": "customer",
+	"Customer Group": "customer_group",
+	"Territory": "territory",
+	"Sales Partner": "sales_partner",
+	"Campaign": "campaign",
+}
+
+# Scopes that are trees: a rule on a parent node also covers every node under it.
+_APPLICABLE_FOR_TREE = {
+	"Customer Group": "Customer Group",
+	"Territory": "Territory",
+}
+
+
+def _resolve_applicable_scope(rule: Dict) -> tuple:
+	"""Return (applicable_for, values) describing who a rule is limited to.
+
+	Descendants are expanded here, on the server, so the POS can decide with a
+	set lookup — the browser has no way to walk a Customer Group tree.
+	Returns ("", []) for an unrestricted rule, which every customer satisfies.
+	"""
+	applicable_for = rule.get("applicable_for") or ""
+	fieldname = _APPLICABLE_FOR_FIELD.get(applicable_for)
+	if not fieldname:
+		return "", []
+
+	value = rule.get(fieldname)
+	if not value:
+		# Scope selected but left blank: ERPNext treats it as unrestricted.
+		return "", []
+
+	values = [value]
+	tree_doctype = _APPLICABLE_FOR_TREE.get(applicable_for)
+	if tree_doctype:
+		try:
+			from frappe.utils.nestedset import get_descendants_of
+
+			values.extend(get_descendants_of(tree_doctype, value) or [])
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "POS Offers Scope Resolution")
+
+	return applicable_for, list(dict.fromkeys(values))
+
+
+def _applicable_sql_columns() -> str:
+	"""Extra SELECT columns needed to resolve customer scoping."""
+	return ", applicable_for, customer, customer_group, territory, sales_partner, campaign"
+
+
+# ============================================================================
+# Helpers (time window on Pricing Rule)
+# ============================================================================
+
+def _pricing_rule_time_sql_columns() -> str:
+	"""Extra SELECT columns when Custom Fields exist on Pricing Rule."""
+	if not frappe.db.has_column("Pricing Rule", "apply_time_window"):
+		return ""
+	return ", apply_time_window, valid_time_from, valid_time_to"
+
+
+def _format_time_for_offer(val) -> Optional[str]:
+	if val is None:
+		return None
+	if isinstance(val, datetime.timedelta):
+		secs = int(val.total_seconds()) % 86400
+		if secs < 0:
+			secs += 86400
+		h = secs // 3600
+		m = (secs % 3600) // 60
+		s = secs % 60
+		return f"{h:02d}:{m:02d}:{s:02d}"
+	if isinstance(val, datetime.time):
+		return f"{val.hour:02d}:{val.minute:02d}:{val.second:02d}"
+	st = str(val)
+	return st.split(".")[0] if st else None
+
+
+def _time_window_from_rule(rule: Dict) -> tuple:
+	aw = cint(rule.get("apply_time_window") or 0)
+	tf = _format_time_for_offer(rule.get("valid_time_from"))
+	tt = _format_time_for_offer(rule.get("valid_time_to"))
+	return aw, tf, tt
 
 
 # ============================================================================
@@ -268,6 +389,47 @@ class SlabFetcher:
 
 		return slabs_map
 
+	@staticmethod
+	def fetch_price_slabs_by_id(slab_names: List[str]) -> Dict[str, Dict]:
+		"""Fetch price discount slabs keyed by child row name (promotional_scheme_id)."""
+		if not slab_names:
+			return {}
+
+		results = frappe.db.sql(
+			"""
+			SELECT
+				name, parent, min_qty, max_qty, min_amount, max_amount,
+				rate_or_discount, rate, discount_amount, discount_percentage,
+				apply_multiple_pricing_rules
+			FROM `tabPromotional Scheme Price Discount`
+			WHERE name IN %s AND disable = 0
+			""",
+			[slab_names],
+			as_dict=1,
+		)
+		return {row["name"]: row for row in results}
+
+	@staticmethod
+	def fetch_product_slabs_by_id(slab_names: List[str]) -> Dict[str, Dict]:
+		"""Fetch product discount slabs keyed by child row name (promotional_scheme_id)."""
+		if not slab_names:
+			return {}
+
+		results = frappe.db.sql(
+			"""
+			SELECT
+				name, parent, min_qty, max_qty, min_amount, max_amount,
+				apply_multiple_pricing_rules,
+				free_item, free_qty, free_item_uom, same_item, is_recursive,
+				recurse_for, apply_recursion_over
+			FROM `tabPromotional Scheme Product Discount`
+			WHERE name IN %s AND disable = 0
+			""",
+			[slab_names],
+			as_dict=1,
+		)
+		return {row["name"]: row for row in results}
+
 
 # ============================================================================
 # Offer Builders
@@ -305,10 +467,13 @@ class OfferBuilder:
 		# Determine offer type
 		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
+		aw, tf, tt = _time_window_from_rule(rule)
+		scope_for, scope_values = _resolve_applicable_scope(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule.get("promotional_scheme") or rule["name"],
-			description=rule.get("title") or rule.get("promotional_scheme") or "",
+			description=rule.get("custom_promotion_campaign") or "",
 			apply_on=rule["apply_on"],
 			offer="Item Price" if is_price_discount else "Give Product",
 			auto=is_auto,
@@ -336,7 +501,15 @@ class OfferBuilder:
 			same_item=1 if slab.get("same_item") and not is_price_discount else 0,
 			is_recursive=1 if slab.get("is_recursive") and not is_price_discount else 0,
 			recurse_for=flt(slab.get("recurse_for", 0)) if not is_price_discount else 0,
-			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0
+			apply_recursion_over=flt(slab.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
+			warehouse=rule.get("warehouse") or None,
+			mixed_conditions=cint(rule.get("mixed_conditions")),
+			applicable_for=scope_for or None,
+			applicable_values=scope_values,
 		)
 
 	@staticmethod
@@ -344,10 +517,11 @@ class OfferBuilder:
 		rule: Dict,
 		eligibility: OfferEligibility
 	) -> Offer:
-		"""Build offer from standalone pricing rule"""
+		"""Build offer from standalone pricing rule (price or product discount)."""
 
 		# Standalone rules auto-apply unless coupon-based
 		is_auto = 0 if rule.get("coupon_code_based") else 1
+		is_price_discount = rule.get("price_or_product_discount") == DiscountType.PRICE
 
 		# Extract eligibility based on apply_on
 		eligible_items = []
@@ -361,22 +535,25 @@ class OfferBuilder:
 		elif rule["apply_on"] == ApplyOn.BRAND:
 			eligible_brands = eligibility.brands
 
+		aw, tf, tt = _time_window_from_rule(rule)
+		scope_for, scope_values = _resolve_applicable_scope(rule)
+
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule["name"],
 			description=rule.get("title") or f"Pricing Rule: {rule['name']}",
 			apply_on=rule["apply_on"],
-			offer="Item Price",
+			offer="Item Price" if is_price_discount else "Give Product",
 			auto=is_auto,
 			coupon_based=1 if rule.get("coupon_code_based") else 0,
 			min_qty=flt(rule.get("min_qty", 0)),
 			max_qty=flt(rule.get("max_qty", 0)),
 			min_amt=flt(rule.get("min_amt", 0)),
 			max_amt=flt(rule.get("max_amt", 0)),
-			discount_type=rule.get("rate_or_discount"),
-			rate=flt(rule.get("rate", 0)),
-			discount_amount=flt(rule.get("discount_amount", 0)),
-			discount_percentage=flt(rule.get("discount_percentage", 0)),
+			discount_type=rule.get("rate_or_discount") if is_price_discount else None,
+			rate=flt(rule.get("rate", 0)) if is_price_discount else 0,
+			discount_amount=flt(rule.get("discount_amount", 0)) if is_price_discount else 0,
+			discount_percentage=flt(rule.get("discount_percentage", 0)) if is_price_discount else 0,
 			valid_from=rule.get("valid_from"),
 			valid_upto=rule.get("valid_upto"),
 			source=OfferSource.PRICING_RULE,
@@ -384,7 +561,22 @@ class OfferBuilder:
 			promotional_scheme_id=None,
 			eligible_items=eligible_items,
 			eligible_item_groups=eligible_item_groups,
-			eligible_brands=eligible_brands
+			eligible_brands=eligible_brands,
+			free_item=rule.get("free_item") if not is_price_discount else None,
+			free_qty=flt(rule.get("free_qty", 0)) if not is_price_discount else 0,
+			free_item_uom=rule.get("free_item_uom") if not is_price_discount else None,
+			same_item=1 if rule.get("same_item") and not is_price_discount else 0,
+			is_recursive=1 if rule.get("is_recursive") and not is_price_discount else 0,
+			recurse_for=flt(rule.get("recurse_for", 0)) if not is_price_discount else 0,
+			apply_recursion_over=flt(rule.get("apply_recursion_over", 0)) if not is_price_discount else 0,
+			apply_discount_on=rule.get("apply_discount_on") or None,
+			apply_time_window=aw,
+			valid_time_from=tf,
+			valid_time_to=tt,
+			warehouse=rule.get("warehouse") or None,
+			mixed_conditions=cint(rule.get("mixed_conditions")),
+			applicable_for=scope_for or None,
+			applicable_values=scope_values,
 		)
 
 
@@ -403,36 +595,147 @@ def get_offers(pos_profile: str) -> List[Dict]:
 	Returns:
 		List of offer dictionaries
 	"""
+	cache_key = f"{OFFERS_CACHE_KEY_PREFIX}::{pos_profile}"
+	cached = frappe.cache().get_value(cache_key, expires=True)
+	if cached is not None:
+		return cached
+
 	try:
 		profile = frappe.get_doc("POS Profile", pos_profile)
 		date = nowdate()
 
 		offers = []
 
+		pos_warehouse = profile.warehouse
+
 		# Get offers from promotional schemes
-		scheme_offers = _get_promotional_scheme_offers(profile.company, date)
+		scheme_offers = _get_promotional_scheme_offers(profile.company, date, pos_warehouse)
 		offers.extend(scheme_offers)
 
 		# Get standalone pricing rule offers
-		standalone_offers = _get_standalone_pricing_rule_offers(profile.company, date)
+		standalone_offers = _get_standalone_pricing_rule_offers(
+			profile.company, date, pos_warehouse
+		)
 		offers.extend(standalone_offers)
 
-		return [offer.to_dict() for offer in offers]
+		from pos_next.pricing_rule_time_window import filter_offer_dicts_by_time_window
+		from pos_next.pricing_rule_warehouse import filter_offer_dicts_by_warehouse
+
+		offer_dicts = filter_offer_dicts_by_time_window([offer.to_dict() for offer in offers])
+		result = filter_offer_dicts_by_warehouse(offer_dicts, pos_warehouse)
+
+		frappe.cache().set_value(cache_key, result, expires_in_sec=OFFERS_CACHE_TTL_SECONDS)
+		return result
 
 	except Exception as e:
 		frappe.log_error(f"Error fetching offers: {str(e)}", "Offers API")
 		return []
 
 
-def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
+def _campaign_valid_on_date(campaign_name: str, date) -> bool:
+	"""Valid From <= date <= Valid Upto (blank date bounds are ignored)."""
+	if not campaign_name:
+		return False
+	if not frappe.db.exists("Promotion Campaign", campaign_name):
+		return False
+	meta = frappe.get_meta("Promotion Campaign")
+	check_date = getdate(date)
+	if meta.has_field("custom_valid_from"):
+		valid_from = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_from")
+		if valid_from and getdate(valid_from) > check_date:
+			return False
+	if meta.has_field("custom_valid_upto"):
+		valid_upto = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_upto")
+		if valid_upto and getdate(valid_upto) < check_date:
+			return False
+	return True
+
+
+def _campaign_matches_pos_warehouse(campaign_name: str, pos_warehouse: Optional[str]) -> bool:
+	"""Child table Promotional Scheme Warehouse must include a row matching POS warehouse."""
+	if not campaign_name or not pos_warehouse:
+		return False
+
+	meta = frappe.get_meta("Promotion Campaign")
+	child_field = "custom_promotional_scheme_warehouse"
+	if not meta.has_field(child_field):
+		return False
+
+	child_rows = frappe.get_all(
+		"Promotional Scheme Warehouse",
+		filters={
+			"parent": campaign_name,
+			"parenttype": "Promotion Campaign",
+			"parentfield": child_field,
+		},
+		fields=["warehouse"],
+		pluck="warehouse",
+	)
+	if not child_rows:
+		return False
+
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
+
+	return any(
+		pricing_rule_matches_warehouse(row_warehouse, pos_warehouse) for row_warehouse in child_rows
+	)
+
+
+@frappe.whitelist()
+def get_promotion_campaigns_for_pos(pos_profile: str) -> List[Dict]:
+	"""Promotion Campaign names for POS: valid today and warehouse matches POS Profile."""
+	if not pos_profile:
+		return []
+	if not frappe.db.exists("DocType", "Promotion Campaign"):
+		return []
+	if not frappe.db.exists("POS Profile", pos_profile):
+		return []
+
+	pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
+	if not pos_warehouse:
+		return []
+
+	date = getdate()
+	result = []
+
+	for row in frappe.get_all(
+		"Promotion Campaign",
+		fields=["name", "promotion_name"],
+		order_by="promotion_name asc",
+		limit_page_length=100,
+	):
+		if not _campaign_valid_on_date(row.name, date):
+			continue
+		if not _campaign_matches_pos_warehouse(row.name, pos_warehouse):
+			continue
+		result.append(
+			{
+				"name": row.name,
+				"promotion_name": row.promotion_name or row.name,
+			}
+		)
+
+	return result
+
+
+def _get_promotional_scheme_offers(
+	company: str, date: str, pos_warehouse: Optional[str] = None
+) -> List[Offer]:
 	"""Fetch offers from promotional schemes"""
 
+	time_cols = _pricing_rule_time_sql_columns()
+	applicable_cols = _applicable_sql_columns()
+
 	# Fetch pricing rules linked to promotional schemes
-	pricing_rules = frappe.db.sql("""
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
-			price_or_product_discount, priority, valid_from, valid_upto
+			price_or_product_discount, apply_discount_on, priority,
+			warehouse, valid_from, valid_upto, custom_promotion_campaign,
+			mixed_conditions
+			{applicable_cols}
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0
@@ -447,46 +750,69 @@ def _get_promotional_scheme_offers(company: str, date: str) -> List[Offer]:
 	if not pricing_rules:
 		return []
 
-	# Get unique scheme names
-	scheme_names = list({rule["promotional_scheme"] for rule in pricing_rules})
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
 
-	# Fetch all slabs and eligibility in batch
-	price_slabs = SlabFetcher.fetch_price_slabs(scheme_names)
-	product_slabs = SlabFetcher.fetch_product_slabs(scheme_names)
-	eligibility_map = EligibilityFetcher.fetch_all(scheme_names)
+	if pos_warehouse:
+		pricing_rules = [
+			r
+			for r in pricing_rules
+			if pricing_rule_matches_warehouse(r.get("warehouse"), pos_warehouse)
+		]
+
+	if not pricing_rules:
+		return []
+
+	slab_ids = list(
+		{r["promotional_scheme_id"] for r in pricing_rules if r.get("promotional_scheme_id")}
+	)
+	price_slabs = SlabFetcher.fetch_price_slabs_by_id(slab_ids)
+	product_slabs = SlabFetcher.fetch_product_slabs_by_id(slab_ids)
+	eligibility_map = EligibilityFetcher.fetch_all([r["name"] for r in pricing_rules])
 
 	# Build offers
 	offers = []
 	for rule in pricing_rules:
-		scheme_name = rule["promotional_scheme"]
+		slab_id = rule.get("promotional_scheme_id")
+		if not slab_id:
+			continue
 
-		# Get appropriate slab
 		if rule.get("price_or_product_discount") == DiscountType.PRICE:
-			slab = price_slabs.get(scheme_name)
+			slab = price_slabs.get(slab_id)
 		else:
-			slab = product_slabs.get(scheme_name)
+			slab = product_slabs.get(slab_id)
 
 		if not slab:
 			continue
 
-		eligibility = eligibility_map.get(scheme_name, OfferEligibility([], [], []))
+		eligibility = eligibility_map.get(rule["name"], OfferEligibility([], [], []))
 		offer = OfferBuilder.build_from_scheme_rule(rule, slab, eligibility)
 		offers.append(offer)
 
 	return offers
 
 
-def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
-	"""Fetch offers from standalone pricing rules"""
+def _get_standalone_pricing_rule_offers(
+	company: str, date: str, pos_warehouse: Optional[str] = None
+) -> List[Offer]:
+	"""Fetch offers from standalone pricing rules (price and product discounts)."""
 
-	# Fetch standalone pricing rules (not linked to schemes)
-	pricing_rules = frappe.db.sql("""
+	time_cols = _pricing_rule_time_sql_columns()
+	applicable_cols = _applicable_sql_columns()
+
+	# Fetch standalone pricing rules (not linked to schemes).
+	# Include both Price discounts (%, amount) and Product discounts (free items).
+	pricing_rules = frappe.db.sql(f"""
 		SELECT
 			name, title, apply_on, selling,
-			coupon_code_based, price_or_product_discount,
+			coupon_code_based, price_or_product_discount, apply_discount_on,
 			rate_or_discount, rate, discount_amount, discount_percentage,
 			min_qty, max_qty, min_amt, max_amt,
-			priority, valid_from, valid_upto
+			free_item, free_qty, free_item_uom, same_item, is_recursive,
+			recurse_for, apply_recursion_over,
+			priority, warehouse, valid_from, valid_upto,
+			mixed_conditions
+			{applicable_cols}
+			{time_cols}
 		FROM `tabPricing Rule`
 		WHERE
 			disable = 0
@@ -495,17 +821,31 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 			AND company = %(company)s
 			AND (valid_from IS NULL OR valid_from <= %(date)s)
 			AND (valid_upto IS NULL OR valid_upto >= %(date)s)
-			AND price_or_product_discount = %(discount_type)s
+			AND price_or_product_discount IN (%(price_type)s, %(product_type)s)
 		ORDER BY priority DESC, name
-	""", {"company": company, "date": date, "discount_type": DiscountType.PRICE}, as_dict=1)
+	""", {
+		"company": company,
+		"date": date,
+		"price_type": DiscountType.PRICE,
+		"product_type": DiscountType.PRODUCT,
+	}, as_dict=1)
 
 	if not pricing_rules:
 		return []
 
-	# Get rule names
-	rule_names = [rule["name"] for rule in pricing_rules]
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
 
-	# Fetch eligibility in batch
+	if pos_warehouse:
+		pricing_rules = [
+			r
+			for r in pricing_rules
+			if pricing_rule_matches_warehouse(r.get("warehouse"), pos_warehouse)
+		]
+
+	if not pricing_rules:
+		return []
+
+	rule_names = [rule["name"] for rule in pricing_rules]
 	eligibility_map = EligibilityFetcher.fetch_all(rule_names)
 
 	# Build offers
@@ -523,9 +863,17 @@ def _get_standalone_pricing_rule_offers(company: str, date: str) -> List[Offer]:
 # ============================================================================
 
 @frappe.whitelist()
-def get_active_coupons(customer: str, company: str) -> List[Dict]:
-	"""Get active gift card coupons for a customer"""
+def get_active_coupons(customer: str = None, company: str = None) -> List[Dict]:
+	"""Get active gift card coupons for a customer.
+
+	Both arguments are optional on purpose: a cart with no customer picked yet sends
+	null, and a bare ``customer: str`` annotation makes Frappe reject the call with
+	FrappeTypeError before this function ever runs.
+	"""
 	if not frappe.db.table_exists("POS Coupon"):
+		return []
+
+	if not customer or not company:
 		return []
 
 	coupons = frappe.get_all(
@@ -543,10 +891,20 @@ def get_active_coupons(customer: str, company: str) -> List[Dict]:
 
 
 @frappe.whitelist()
-def validate_coupon(coupon_code: str, customer: str, company: str) -> Dict:
-	"""Validate a coupon code and return its details"""
+def validate_coupon(coupon_code: str, customer: str = None, company: str = None) -> Dict:
+	"""Validate a coupon code and return its details.
+
+	``customer`` is optional: a walk-in sale reaches the coupon dialog with no
+	customer picked and the POS then sends null. With a bare ``customer: str``
+	annotation Frappe rejected that call with FrappeTypeError, which the dialog
+	showed the cashier as the generic "Failed to apply coupon" — the same wording
+	as the offline failure, so the two got mistaken for one bug.
+	"""
 	if not frappe.db.table_exists("POS Coupon"):
 		return {"valid": False, "message": _("Coupons are not enabled")}
+
+	if not company:
+		company = frappe.defaults.get_user_default("Company")
 
 	date = getdate()
 
@@ -589,3 +947,75 @@ def validate_coupon(coupon_code: str, customer: str, company: str) -> Dict:
 		"valid": True,
 		"coupon": coupon
 	}
+
+
+@frappe.whitelist()
+def get_offline_coupons(company: str) -> List[Dict]:
+	"""Mã giảm giá được phép áp khi POS mất mạng (PM-TASK-00071).
+
+	Chỉ trả về mã mà máy POS có thể tự kiểm tra ĐÚNG khi không hỏi được máy chủ:
+
+	- Không giới hạn số lượt dùng (`maximum_use = 0`): mã có giới hạn thì phải
+	  biết đã dùng bao nhiêu lần trên TOÀN hệ thống mới kết luận được, mà con số
+	  đó chỉ máy chủ có. Cho áp offline là mở đường cho một mã bị dùng vượt hạn
+	  ở nhiều cửa hàng cùng lúc.
+	- Không gán riêng khách (`customer` trống): mã gán riêng cần đối chiếu khách
+	  đang chọn, mà POS offline có thể đang dùng khách lưu sẵn không còn đúng.
+	- Không phải "dùng một lần mỗi khách" (`one_use`): điều kiện này chỉ trả lời
+	  được bằng cách đếm hoá đơn cũ của khách trên toàn hệ thống.
+	- Không phải Gift Card: thẻ quà tặng dùng một lần, cũng cần máy chủ chốt.
+
+	Mã KHÔNG đủ điều kiện vẫn được liệt kê, nhưng chỉ có mã trơn kèm cờ
+	`requires_server` — đủ để POS báo thu ngân "chờ có mạng" thay vì báo nhầm là
+	"mã không hợp lệ", mà không đẩy giá trị chiết khấu xuống máy. Riêng Gift Card
+	thì không liệt kê: mã thẻ là chuỗi ngẫu nhiên phát cho từng khách, không có lý
+	do gì để nằm trên mọi máy POS, và đằng nào cũng không dùng offline được.
+
+	Ngày hiệu lực thì trả kèm để máy POS tự lọc theo ngày bán, không lọc sẵn ở
+	đây — danh sách được lưu trên máy nhiều ngày, lọc sẵn theo hôm nay sẽ sai
+	vào những ngày sau.
+	"""
+	if not frappe.db.table_exists("POS Coupon"):
+		return []
+
+	rows = frappe.get_all(
+		"POS Coupon",
+		filters={
+			"company": company,
+			"disabled": 0,
+			"coupon_type": "Promotional",
+		},
+		fields=[
+			"name", "coupon_name", "coupon_code", "coupon_type", "company",
+			"discount_type", "discount_percentage", "discount_amount",
+			"min_amount", "max_amount", "apply_on",
+			"valid_from", "valid_upto", "pricing_rule",
+			"customer", "maximum_use", "one_use",
+		],
+		limit_page_length=0,
+	)
+
+	coupons = []
+	for row in rows:
+		self_validatable = (
+			not row.get("customer")
+			and not cint(row.get("maximum_use"))
+			and not cint(row.get("one_use"))
+		)
+
+		if not self_validatable:
+			coupons.append({
+				"coupon_code": row.get("coupon_code"),
+				"coupon_name": row.get("coupon_name"),
+				"company": row.get("company"),
+				"requires_server": 1,
+			})
+			continue
+
+		# Bỏ 3 trường chỉ dùng để phân loại, máy POS không cần tới
+		for field in ("customer", "maximum_use", "one_use"):
+			row.pop(field, None)
+		row["requires_server"] = 0
+		coupons.append(row)
+
+	return coupons

@@ -2,7 +2,7 @@ import { call } from "@/utils/apiWrapper"
 import { getSetting, setSetting } from "@/utils/offline/db"
 import { isOffline } from "@/utils/offline"
 import { offlineWorker } from "@/utils/offline/workerClient"
-import { cacheItems, getCachedVariants, updateItemBatchSerialData, searchCachedItems as searchCachedItemsMain } from "@/utils/offline/items"
+import { cacheItems, getCachedItemByCodeOrName, getCachedVariants, updateItemBatchSerialData, searchCachedItems as searchCachedItemsMain } from "@/utils/offline/items"
 import { performanceConfig } from "@/utils/performanceConfig"
 import { logger } from "@/utils/logger"
 import { createResource } from "frappe-ui"
@@ -10,6 +10,7 @@ import { defineStore } from "pinia"
 import { computed, ref } from "vue"
 import { useStockStore } from "./stock"
 import { usePOSShiftStore } from "./posShift"
+import { usePOSSettingsStore } from "./posSettings"
 import { useRealtimePosProfile } from "@/composables/useRealtimePosProfile"
 
 const log = logger.create('ItemSearch')
@@ -151,6 +152,9 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 	// Get shift store for warehouse info (for batch/serial caching)
 	const shiftStore = usePOSShiftStore()
 
+	// Get settings store for hide_out_of_stock_items
+	const settingsStore = usePOSSettingsStore()
+
 	// Real-time POS Profile updates
 	const { onPosProfileUpdate } = useRealtimePosProfile()
 
@@ -161,6 +165,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 	const selectedItemGroup = ref(null)
 	const itemGroups = ref([])
 	const profileItemGroups = ref([]) // Item groups from POS Profile filter
+	const profileBrandGroups = ref([]) // Brand groups from POS Profile filter
 	const loading = ref(false)
 	const loadingMore = ref(false)
 	const searching = ref(false) // Separate loading state for search
@@ -459,6 +464,21 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 		})
 	}
 
+	function findItemByCode(itemCode) {
+		if (!itemCode) return null
+
+		const bucket = itemRegistry.get(itemCode)
+		if (bucket?.size) {
+			return [...bucket][0]
+		}
+
+		return (
+			allItems.value.find((item) => item.item_code === itemCode) ||
+			searchResults.value.find((item) => item.item_code === itemCode) ||
+			null
+		)
+	}
+
 	function replaceAllItems(items) {
 		const next = Array.isArray(items) ? items : []
 		removeRegisteredItems(registeredAllItems)
@@ -582,7 +602,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 
 		// Step 4: Inject live stock quantities (optimized)
 		// Use a simple map operation - O(n) complexity
-		const itemsWithStock = list.map(item => {
+		let itemsWithStock = list.map(item => {
 			// Get display stock (includes reservations from cart)
 			const displayStock = stockStore.getDisplayStock(item.item_code)
 			// Get original server stock (without reservations)
@@ -596,6 +616,20 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 				original_stock: originalStock
 			}
 		})
+
+		// Step 4b: Hide out-of-stock items if setting enabled
+		// Non-stock items (services, templates) are always shown
+		if (settingsStore.hideOutOfStockItems) {
+			itemsWithStock = itemsWithStock.filter(item =>
+				!item.is_stock_item || item.has_variants || item.actual_qty > 0
+			)
+		}
+
+		// Step 4c: Brand whitelist filter (from POS Profile brand_groups)
+		if (profileBrandGroups.value && profileBrandGroups.value.length > 0) {
+			const allowedBrands = new Set(profileBrandGroups.value.map(g => g.brand))
+			itemsWithStock = itemsWithStock.filter(item => allowedBrands.has(item.brand))
+		}
 
 		// Step 5: Conditional sorting - only sort when user explicitly triggers a sort filter
 		// This optimizes performance by avoiding unnecessary sorting on every render
@@ -1447,14 +1481,23 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 
 	async function getItem(itemCode) {
 		try {
+			const fromMemory = findItemByCode(itemCode)
+			if (fromMemory?.item_code) {
+				return fromMemory
+			}
+
 			const cacheReady = await offlineWorker.isCacheReady()
 			if (isOffline() || cacheReady) {
-				const items = await offlineWorker.searchCachedItems(itemCode, 1)
-				return items?.[0] || null
-			} else {
-				// Fallback to server (implement if needed)
-				return null
+				const exact = await getCachedItemByCodeOrName(itemCode)
+				if (exact?.item_code) {
+					return exact
+				}
+				const items = await offlineWorker.searchCachedItems(itemCode, 20)
+				return (
+					items?.find((row) => row.item_code === itemCode) || items?.[0] || null
+				)
 			}
+			return null
 		} catch (error) {
 			log.error("Error getting item", error)
 			return null
@@ -1582,6 +1625,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 		// Offline: skip API, load items from cache only
 		if (profile && isOffline()) {
 			profileItemGroups.value = []
+			profileBrandGroups.value = []
 			if (autoLoadItems) await loadAllItems(profile)
 			return
 		}
@@ -1602,6 +1646,14 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 					log.info("No item group filters in POS Profile")
 				}
 
+				// Extract brand_groups from the profile
+				if (data?.pos_profile?.custom_brand_groups) {
+					profileBrandGroups.value = data.pos_profile.custom_brand_groups
+					log.info(`Loaded ${profileBrandGroups.value.length} brand filters from POS Profile`)
+				} else {
+					profileBrandGroups.value = []
+				}
+
 				// Set up real-time listener for POS Profile updates
 				posProfileUpdateCleanup = onPosProfileUpdate(async (updateData) => {
 					await handlePosProfileUpdateWithRecovery(updateData, profile)
@@ -1618,11 +1670,13 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 			} catch (error) {
 				log.error("Error fetching POS Profile item groups", error)
 				profileItemGroups.value = []
+				profileBrandGroups.value = []
 				// Still try to load items (from server or cache) so user sees list
 				if (autoLoadItems) await loadAllItems(profile)
 			}
 		} else {
 			profileItemGroups.value = []
+			profileBrandGroups.value = []
 		}
 	}
 
@@ -1645,6 +1699,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 		selectedItemGroup,
 		itemGroups,
 		profileItemGroups,
+		profileBrandGroups,
 		loading,
 		loadingMore,
 		searching,
@@ -1673,6 +1728,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 		loadItemGroups,
 		searchByBarcode,
 		getItem,
+		findItemByCode,
 		setSearchTerm,
 		clearSearch,
 		setSelectedItemGroup,

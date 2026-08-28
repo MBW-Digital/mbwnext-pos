@@ -91,6 +91,56 @@
 					</div>
 				</div>
 
+				<!-- Territory (Required) -->
+				<div>
+					<label class="block text-start text-sm font-medium text-gray-700 mb-2">
+						{{ __("Territory") }} <span v-if="!isEditMode" class="text-red-500">*</span>
+					</label>
+					<select
+						v-model="customerData.territory"
+						class="w-full px-8 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+					>
+						<option value="">{{ __("Select Territory") }}</option>
+						<option v-for="territory in territories" :key="territory" :value="territory">
+							{{ territory }}
+						</option>
+					</select>
+				</div>
+
+				<!-- Gender: 2 ô tích loại trừ nhau, tích lại lần nữa để bỏ chọn -->
+				<div>
+					<label class="block text-start text-sm font-medium text-gray-700 mb-2">
+						{{ __("Gender") }}
+					</label>
+					<div class="flex items-center gap-6">
+						<label
+							v-for="option in genderOptions"
+							:key="option.value"
+							class="flex items-center gap-2 cursor-pointer select-none"
+						>
+							<input
+								type="checkbox"
+								class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+								:checked="customerData.gender === option.value"
+								@change="toggleGender(option.value)"
+							/>
+							<span class="text-sm text-gray-700">{{ option.label }}</span>
+						</label>
+					</div>
+				</div>
+
+				<!-- Birthday -->
+				<div>
+					<label class="block text-start text-sm font-medium text-gray-700 mb-2">
+						{{ __("Customer Birthday") }}
+					</label>
+					<input
+						v-model="customerData.custom_birthday"
+						type="date"
+						class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-start"
+					/>
+				</div>
+
 				<!-- Email -->
 				<div>
 					<label class="block text-start text-sm font-medium text-gray-700 mb-2">
@@ -111,22 +161,6 @@
 						<option value="">{{ __("Select Customer Group") }}</option>
 						<option v-for="group in customerGroups" :key="group" :value="group">
 							{{ group }}
-						</option>
-					</select>
-				</div>
-
-				<!-- Territory -->
-				<div>
-					<label class="block text-start text-sm font-medium text-gray-700 mb-2">
-						{{ __("Territory") }}
-					</label>
-					<select
-						v-model="customerData.territory"
-						class="w-full px-8 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-					>
-						<option value="">{{ __("Select Territory") }}</option>
-						<option v-for="territory in territories" :key="territory" :value="territory">
-							{{ territory }}
 						</option>
 					</select>
 				</div>
@@ -227,15 +261,29 @@ const dropdownRef = ref(null)
 const countrySearchRef = ref(null)
 
 const customerGroups = ref(["Commercial", "Individual", "Non Profit", "Government"])
-const territories = ref(["All Territories"])
+// Loaded from the real Territory list (see territoriesResource below) - not
+// seeded with a literal like "All Territories", which isn't guaranteed to
+// exist as a record (ERPNext's root Territory name is locale-dependent).
+const territories = ref([])
 
 const customerData = ref({
 	customer_name: "",
 	mobile_no: "",
 	email_id: "",
 	customer_group: "Individual",
-	territory: "All Territories",
+	territory: "",
+	gender: "",
+	custom_birthday: "",
 })
+
+// Lưu vào Customer.gender là "Male"/"Female" (bản ghi Gender sẵn có của hệ thống),
+// KHÔNG tạo bản ghi Gender mới "Nam"/"Nữ": Gender là translated_doctype nên
+// tiếng Việt tự hiện "Nam"/"Nữ" ở mọi nơi, mà dữ liệu vẫn dùng chung một tập giá
+// trị với các khách hàng đã có sẵn.
+const genderOptions = computed(() => [
+	{ value: "Male", label: __("Male") },
+	{ value: "Female", label: __("Female") },
+])
 
 // =============================================================================
 // Computed
@@ -267,6 +315,11 @@ const filteredCountries = computed(() => {
 // =============================================================================
 
 const handleFlagError = (e) => (e.target.style.display = "none")
+
+/** Chỉ được chọn 1 trong 2; tích lại đúng ô đang chọn thì bỏ chọn. */
+const toggleGender = (value) => {
+	customerData.value.gender = customerData.value.gender === value ? "" : value
+}
 
 const selectCountry = (country) => {
 	selectedCountryCode.value = country.isd
@@ -306,6 +359,11 @@ const setCountryFromName = (countryName) => {
 const updateTerritoryFromCountry = () => {
 	if (!territories.value.length) return
 
+	// Không ghi đè khu vực người dùng/khách hàng đã có. Watcher selectedCountryCode
+	// chạy cả ở chế độ sửa (sau khi POS Profile set mã quốc gia), nếu ghi đè thì
+	// khu vực thật của khách bị thay bằng khu vực suy từ quốc gia.
+	if (customerData.value.territory) return
+
 	const country = countriesStore.countries.find((c) => c.isd === selectedCountryCode.value)
 	if (!country) return
 
@@ -339,9 +397,14 @@ const createCustomerResource = createResource({
 			customer_name: customerData.value.customer_name,
 			customer_type: "Individual",
 			customer_group: customerData.value.customer_group || __("Individual"),
-			territory: customerData.value.territory || __("All Territories"),
+			territory: customerData.value.territory || "",
 			mobile_no: customerData.value.mobile_no || "",
 			email_id: customerData.value.email_id || "",
+			gender: customerData.value.gender || "",
+			custom_birthday: customerData.value.custom_birthday || null,
+			// Read by pos_next's set_customer_code_if_mandatory (before_insert
+			// hook) to generate the <shop_code><sequence> customer_code, e.g. AP1.
+			pos_profile: props.posProfile || "",
 		},
 	}),
 	onSuccess: (data) => {
@@ -363,9 +426,11 @@ const updateCustomerResource = createResource({
 		fieldname: {
 			customer_name: customerData.value.customer_name,
 			customer_group: customerData.value.customer_group || __("Individual"),
-			territory: customerData.value.territory || __("All Territories"),
+			territory: customerData.value.territory || "",
 			mobile_no: customerData.value.mobile_no || "",
 			email_id: customerData.value.email_id || "",
+			gender: customerData.value.gender || "",
+			custom_birthday: customerData.value.custom_birthday || null,
 		},
 	}),
 	onSuccess: (data) => {
@@ -397,6 +462,30 @@ const createListResource = (doctype, onSuccess) =>
 const customerGroupsResource = createListResource("Customer Group", (names) => (customerGroups.value = names))
 const territoriesResource = createListResource("Territory", (names) => (territories.value = names))
 
+// Ở chế độ sửa, object customer truyền vào chỉ có name/customer_name/mobile_no/
+// email_id (đúng các field mà pos_next.api.customers.get_customers trả về), nên
+// phải đọc thêm các field còn lại. Quan trọng vì Khu vực nay là bắt buộc: không
+// nạp sẵn thì người dùng buộc phải chọn lại và ghi đè mất khu vực cũ của khách.
+const customerDetailsResource = createResource({
+	url: "frappe.client.get_value",
+	makeParams: () => ({
+		doctype: "Customer",
+		filters: { name: props.customer?.name },
+		fieldname: ["customer_group", "territory", "gender", "custom_birthday", "email_id", "mobile_no"],
+	}),
+	auto: false,
+	onSuccess: (data) => {
+		if (!data) return
+		customerData.value.customer_group = data.customer_group || "Individual"
+		customerData.value.territory = data.territory || ""
+		customerData.value.gender = data.gender || ""
+		customerData.value.custom_birthday = data.custom_birthday || ""
+		if (data.email_id) customerData.value.email_id = data.email_id
+		if (data.mobile_no) customerData.value.mobile_no = data.mobile_no
+	},
+	onError: (err) => log.error("Error loading customer details", err),
+})
+
 const posProfileResource = createResource({
 	url: "frappe.client.get_value",
 	makeParams: () => ({
@@ -425,6 +514,11 @@ const loadDialogData = async () => {
 	customerGroupsResource.reload()
 	checkPermissions()
 
+	// Chế độ sửa: nạp nốt các field mà object customer truyền vào không có
+	if (props.customer?.name) {
+		await customerDetailsResource.reload()
+	}
+
 	// Set country from POS Profile
 	if (props.posProfile) {
 		await posProfileResource.reload()
@@ -449,6 +543,12 @@ const handleCreate = async () => {
 	if (!customerData.value.customer_name) {
 		return showError(__("Customer Name is required"))
 	}
+	// Chỉ bắt buộc khi TẠO MỚI. Rất nhiều khách hàng cũ chưa có khu vực, bắt buộc
+	// cả khi sửa thì thu ngân không lưu nổi những khách đó mà phải chọn bừa một
+	// khu vực — khách hàng chỉ yêu cầu bắt buộc ở màn tạo mới.
+	if (!isEditMode.value && !customerData.value.territory) {
+		return showError(__("Territory is required"))
+	}
 	if (isEditMode.value) {
 		await updateCustomerResource.submit()
 	} else {
@@ -462,7 +562,9 @@ const resetForm = () => {
 		mobile_no: "",
 		email_id: "",
 		customer_group: "Individual",
-		territory: "All Territories",
+		territory: "",
+		gender: "",
+		custom_birthday: "",
 	})
 	selectedCountryCode.value = ""
 	phoneNumber.value = ""
@@ -485,7 +587,9 @@ watch(
 			customerData.value.customer_name = customer.customer_name || ""
 			customerData.value.email_id = customer.email_id || ""
 			customerData.value.customer_group = customer.customer_group || "Individual"
-			customerData.value.territory = customer.territory || "All Territories"
+			customerData.value.territory = customer.territory || ""
+			customerData.value.gender = customer.gender || ""
+			customerData.value.custom_birthday = customer.custom_birthday || ""
 			// Handle mobile_no with country code
 			if (customer.mobile_no) {
 				customerData.value.mobile_no = customer.mobile_no

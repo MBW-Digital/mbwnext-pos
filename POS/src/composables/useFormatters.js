@@ -3,14 +3,16 @@
  * Provides common formatting functions for use across all components
  */
 
+import { formatCurrencyNumber } from "@/utils/currency"
+
 /**
- * Format currency values to 2 decimal places
+ * Format currency values using System Settings number format
  * @param {number} amount - The amount to format
- * @returns {string} Formatted amount with 2 decimal places
+ * @returns {string} Formatted amount
  */
 function formatCurrency(amount) {
-	if (amount === null || amount === undefined) return "0.00"
-	return Number.parseFloat(amount).toFixed(2)
+	if (amount === null || amount === undefined) return formatCurrencyNumber(0)
+	return formatCurrencyNumber(Number.parseFloat(amount))
 }
 
 /**
@@ -22,9 +24,9 @@ function formatCurrency(amount) {
 function formatQuantity(quantity) {
 	if (quantity === null || quantity === undefined) return "0"
 	const num = Number.parseFloat(quantity)
-	if (isNaN(num)) return "0"
+	if (Number.isNaN(num)) return "0"
 	// Round to 4 decimal places and remove trailing zeros
-	return num.toFixed(4).replace(/\.?0+$/, '')
+	return num.toFixed(4).replace(/\.?0+$/, "")
 }
 
 /**

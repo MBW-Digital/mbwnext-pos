@@ -62,17 +62,16 @@ def _get_sepay_settings(pos_profile=None):
 	# Check enable: payment_gateway==SePay + checkbox, or just checkbox if no payment_gateway
 	payment_gateway = doc.get("payment_gateway")
 	enable_check = cint(
-		doc.get("enable_sepay_bank_transfer_check")
-		or doc.get("enable_sepay_bank_transfer_check_bank_transfer_check")
+		doc.get("enable_bank_transfer_check")
 	)
 	if payment_gateway is not None and payment_gateway != "SePay":
 		return None
 	if not enable_check:
 		return None
 
-	bank_account = doc.get("bank_account_number") or doc.get("sepay_bank_account")
-	bank_code = doc.get("bank_code") or doc.get("sepay_bank_code")
-	account_holder = doc.get("account_holder_name") or doc.get("sepay_account_holder") or ""
+	bank_account = doc.get("bank_account_number")
+	bank_code = doc.get("bank_code")
+	account_holder = doc.get("account_holder_name") or ""
 	if not bank_account or not bank_code:
 		return None
 
@@ -368,9 +367,9 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		)
 		return
 
-	# Prefer "Bank Draft" (chuyển khoản), fallback to Chuyển khoản, then any Bank type
+	# Prefer "Wire Transfer" (chuyển khoản), fallback to Chuyển khoản, then any Bank type
 	mode_of_payment = (
-		frappe.db.get_value("Mode of Payment", "Bank Draft", "name")
+		frappe.db.get_value("Mode of Payment", "Wire Transfer", "name")
 		or frappe.db.get_value("Mode of Payment", "Chuyển khoản", "name")
 		or frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name")
 		or "Bank"

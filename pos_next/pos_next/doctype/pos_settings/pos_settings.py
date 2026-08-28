@@ -33,6 +33,30 @@ class POSSettings(Document):
 					"Please disable Partial Payment first."
 				)
 
+		self.validate_wallet_account_company()
+
+	def validate_wallet_account_company(self):
+		"""Tài khoản ví phải thuộc đúng công ty của POS Profile.
+
+		Chọn nhầm tài khoản của công ty khác không báo lỗi ngay, mà âm thầm đẩy
+		mọi ví tạo sau đó sang tài khoản sai. Bút toán rơi vào sổ công ty kia, và
+		tới lúc kế toán HUỶ hoá đơn thì ERPNext mới chặn — lúc đó đã muộn, phải
+		đi sửa hàng loạt (PM-TASK-00059: 34/36 Cài đặt POS khai nhầm, kéo theo
+		887 ví và 975 bút toán sai sổ).
+		"""
+		if not self.wallet_account or not self.pos_profile:
+			return
+
+		cty_pos = frappe.db.get_value("POS Profile", self.pos_profile, "company")
+		cty_taikhoan = frappe.db.get_value("Account", self.wallet_account, "company")
+
+		if cty_pos and cty_taikhoan and cty_pos != cty_taikhoan:
+			frappe.throw(
+				f"Tài khoản ví {self.wallet_account} thuộc công ty {cty_taikhoan}, "
+				f"trong khi POS Profile {self.pos_profile} thuộc công ty {cty_pos}. "
+				f"Chọn lại tài khoản của đúng công ty."
+			)
+
 	def on_update(self):
 		"""Sync allow_negative_stock with Stock Settings"""
 		self.sync_negative_stock_setting()
@@ -122,9 +146,8 @@ def get_pos_settings(pos_profile):
 		frappe.db.get_single_value("Stock Settings", "allow_negative_stock") or 0
 	)
 
-	# SePay config is on POS Profile - inject enable_sepay_bank_transfer_check for frontend
 	from pos_next.api.sepay import _get_sepay_settings
-	settings["enable_sepay_bank_transfer_check"] = 1 if _get_sepay_settings(pos_profile) else 0
+	settings["enable_bank_transfer_check"] = 1 if _get_sepay_settings(pos_profile) else 0
 
 	return settings
 

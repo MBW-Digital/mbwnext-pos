@@ -120,6 +120,28 @@
 								</div>
 							</div>
 
+							<!-- Max Quantity -->
+							<div v-if="offer.max_qty" class="flex items-center gap-2">
+								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/>
+								</svg>
+								<div>
+									<p class="text-[10px] text-gray-500">{{ __('Max Quantity') }}</p>
+									<p class="text-xs font-semibold text-gray-900">{{ __('{0} items', [offer.max_qty]) }}</p>
+								</div>
+							</div>
+
+							<!-- Valid From -->
+							<div v-if="offer.valid_from" class="flex items-center gap-2">
+								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+								</svg>
+								<div>
+									<p class="text-[10px] text-gray-500">{{ __('Valid From') }}</p>
+									<p class="text-xs font-semibold text-gray-900">{{ formatDate(offer.valid_from) }}</p>
+								</div>
+							</div>
+
 							<!-- Valid Until -->
 							<div v-if="offer.valid_upto" class="flex items-center gap-2">
 								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -128,6 +150,26 @@
 								<div>
 									<p class="text-[10px] text-gray-500">{{ __('Valid Until') }}</p>
 									<p class="text-xs font-semibold text-gray-900">{{ formatDate(offer.valid_upto) }}</p>
+								</div>
+							</div>
+
+							<!-- Daily time window (Pricing Rule custom fields) -->
+							<div v-if="offer.apply_time_window" class="flex items-center gap-2">
+								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+								</svg>
+								<div>
+									<p class="text-[10px] text-gray-500">{{ __('Valid Time From') }}</p>
+									<p class="text-xs font-semibold text-gray-900">{{ formatTime(offer.valid_time_from) }}</p>
+								</div>
+							</div>
+							<div v-if="offer.apply_time_window" class="flex items-center gap-2">
+								<svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+								</svg>
+								<div>
+									<p class="text-[10px] text-gray-500">{{ __('Valid Time To') }}</p>
+									<p class="text-xs font-semibold text-gray-900">{{ formatTime(offer.valid_time_to) }}</p>
 								</div>
 							</div>
 
@@ -273,5 +315,13 @@ function formatDate(dateStr) {
 		day: "numeric",
 		year: "numeric",
 	})
+}
+
+/** Time from API (e.g. HH:MM:SS or timedelta serialized). */
+function formatTime(t) {
+	if (t == null || t === "") return "—"
+	const s = String(t).trim()
+	const m = s.match(/^(\d{1,2}:\d{2}(:\d{2})?)/)
+	return m ? m[1] : s
 }
 </script>

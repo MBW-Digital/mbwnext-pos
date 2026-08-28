@@ -219,7 +219,7 @@ export const usePOSEventsStore = defineStore('posEvents', () => {
 		}
 
 		// Stock policy changes
-		const stockPolicyFields = ['allow_negative_stock']
+		const stockPolicyFields = ['allow_negative_stock', 'hide_out_of_stock_items']
 		const stockPolicyChanges = stockPolicyFields.filter(field => field in changes)
 		if (stockPolicyChanges.length > 0) {
 			events.push({
@@ -285,7 +285,6 @@ export const usePOSEventsStore = defineStore('posEvents', () => {
 			'default_card_view',
 			'display_item_code',
 			'show_customer_balance',
-			'hide_expected_amount',
 			'display_discount_percentage',
 			'display_discount_amount'
 		]

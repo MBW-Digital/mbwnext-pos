@@ -214,6 +214,21 @@ export function isCSRFApiError(error) {
 	return false
 }
 
+async function isCSRFResponseError(error) {
+	if (!error?.response || typeof error.response.status !== "number") {
+		return false
+	}
+	if (error.response.status !== 400 && error.response.status !== 403) {
+		return false
+	}
+	try {
+		const body = await error.response.clone().json()
+		return body?.exc_type === "CSRFTokenError"
+	} catch {
+		return false
+	}
+}
+
 export function createCSRFAwareRequest(
 	originalRequest,
 	{ silent = false } = {},
@@ -222,7 +237,7 @@ export function createCSRFAwareRequest(
 		try {
 			return await originalRequest.apply(this, args)
 		} catch (error) {
-			if (isCSRFApiError(error)) {
+			if (isCSRFApiError(error) || (await isCSRFResponseError(error))) {
 				if (!silent) {
 					console.warn(
 						"CSRF token error detected, refreshing token and retrying...",

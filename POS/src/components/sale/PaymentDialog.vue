@@ -275,18 +275,27 @@
 						<div v-if="items.length > 0" class="flex-1 overflow-y-auto divide-y divide-gray-100 min-h-0">
 							<div
 								v-for="(item, index) in items"
-								:key="index"
+								:key="item._rowKey || index"
 								class="px-3 py-2 hover:bg-gray-50"
+								:class="item.is_free_display ? 'bg-green-50/40' : ''"
 							>
 								<div class="flex items-start justify-between gap-2">
 									<div class="flex-1 min-w-0 text-start">
-										<div class="font-medium text-sm text-gray-900 truncate">{{ item.item_name || item.item_code }}</div>
+										<div class="font-medium text-sm truncate" :class="item.is_free_display ? 'text-green-800' : 'text-gray-900'">
+											{{ item.item_name || item.item_code }}
+											<span v-if="item.is_free_display" class="ms-1 text-[10px] font-bold text-green-700">({{ __("Free gift") }})</span>
+										</div>
 										<div class="text-xs text-gray-500 mt-0.5">
-											{{ formatCurrency(item.rate || item.price_list_rate) }} × {{ item.qty || item.quantity }}
+											<template v-if="item.is_free_display">
+												{{ __("Free") }} × {{ item.qty || item.quantity }}
+											</template>
+											<template v-else>
+												{{ formatCurrency(item.rate || item.price_list_rate) }} × {{ item.qty || item.quantity }}
+											</template>
 										</div>
 									</div>
-									<div class="text-sm font-semibold text-gray-900 text-end">
-										{{ formatCurrency(item.amount || ((item.qty || item.quantity) * (item.rate || item.price_list_rate))) }}
+									<div class="text-sm font-semibold text-end" :class="item.is_free_display ? 'text-green-700' : 'text-gray-900'">
+										{{ item.is_free_display ? __("Free") : formatCurrency(item.amount || ((item.qty || item.quantity) * (item.rate || item.price_list_rate))) }}
 									</div>
 								</div>
 							</div>
@@ -314,11 +323,17 @@
 								<!-- Grid: 1/2 Counter Input, 1/4 Percentage, 1/4 Amount -->
 								<div class="grid grid-cols-4 gap-1.5">
 									<!-- Counter Input (2/4 = 1/2) -->
-									<div class="col-span-2 flex items-center border border-orange-300 rounded-lg bg-white overflow-hidden">
+									<!-- While a coupon is applied, this shows the formatted amount as
+									     read-only text instead of a raw editable number — a bare
+									     "195650.1" with no currency formatting looked unexplained. -->
+									<div
+										class="col-span-2 flex items-center border rounded-lg overflow-hidden"
+										:class="hasCoupon ? 'border-gray-200 bg-gray-50' : 'border-orange-300 bg-white'"
+									>
 										<!-- Decrement Button -->
 										<button
 											@click="decrementDiscount"
-											:disabled="localAdditionalDiscount <= 0"
+											:disabled="hasCoupon || localAdditionalDiscount <= 0"
 											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 disabled:text-gray-300 disabled:hover:bg-transparent transition-colors flex-shrink-0"
 										>
 											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -326,7 +341,11 @@
 											</svg>
 										</button>
 										<!-- Input -->
+										<div v-if="hasCoupon" class="flex-1 h-9 px-1 text-sm font-semibold text-center flex items-center justify-center text-gray-600">
+											{{ formatCurrency(calculatedAdditionalDiscount) }}
+										</div>
 										<input
+											v-else
 											type="number"
 											v-model.number="localAdditionalDiscount"
 											@input="handleAdditionalDiscountChange"
@@ -339,7 +358,8 @@
 										<!-- Increment Button -->
 										<button
 											@click="incrementDiscount"
-											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 transition-colors flex-shrink-0"
+											:disabled="hasCoupon"
+											class="h-9 w-9 flex items-center justify-center text-orange-600 hover:bg-orange-50 disabled:text-gray-300 disabled:hover:bg-transparent transition-colors flex-shrink-0"
 										>
 											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
@@ -347,13 +367,20 @@
 										</button>
 									</div>
 									<!-- Percentage Button (1/4) -->
+									<!-- Disabled while a coupon is applied: the value is a currency
+									     amount computed from the coupon, not a percentage — switching
+									     to "%" would reinterpret e.g. 195650 as 195650% of subtotal. -->
 									<button
-										@click="additionalDiscountType = 'percentage'; handleAdditionalDiscountTypeChange()"
+										@click="!hasCoupon && (additionalDiscountType = 'percentage', handleAdditionalDiscountTypeChange())"
+										:disabled="hasCoupon"
+										:title="hasCoupon ? __('Not available while a coupon is applied') : ''"
 										:class="[
 											'h-9 rounded-lg text-sm font-bold transition-colors',
 											additionalDiscountType === 'percentage'
 												? 'bg-orange-500 text-white'
-												: 'bg-white text-orange-600 border border-orange-300 hover:bg-orange-50'
+												: hasCoupon
+													? 'bg-gray-100 text-gray-300 border border-gray-200 cursor-not-allowed'
+													: 'bg-white text-orange-600 border border-orange-300 hover:bg-orange-50'
 										]"
 									>
 										%
@@ -377,21 +404,55 @@
 								<span class="text-gray-600 text-start">{{ __('Subtotal') }}</span>
 								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(subtotal) }}</span>
 							</div>
-							<!-- Tax -->
+							<!-- Tax: informational breakdown when tax-inclusive (already counted in Subtotal/Grand Total), additive otherwise -->
 							<div v-if="taxAmount > 0" class="flex items-center justify-between text-sm">
-								<span class="text-gray-600 text-start">{{ __('Tax') }}</span>
-								<span class="font-medium text-gray-900 text-end">{{ formatCurrency(taxAmount) }}</span>
+								<span class="text-gray-500 text-start">{{ taxInclusive ? __('Tax (included)') : __('Tax') }}</span>
+								<span :class="['text-end', taxInclusive ? 'font-normal text-gray-500 italic' : 'font-medium text-gray-900']">{{ formatCurrency(taxAmount) }}</span>
 							</div>
-							<!-- Discount (shows the calculated additional discount amount) -->
-							<div v-if="discountAmount > 0" class="flex items-center justify-between text-sm">
-								<span class="text-gray-600 text-start">{{ __('Discount') }}</span>
-								<span class="font-medium text-red-600 text-end">-{{ formatCurrency(discountAmount) }}</span>
-							</div>
-							<!-- Grand Total -->
+						<!-- Pricing Rule / Promotional Scheme discount (per-item) -->
+						<div v-if="itemLevelDiscountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Pricing Rule Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(itemLevelDiscountAmount) }}</span>
+						</div>
+						<!-- Coupon discount (additional discount on top of item-level pricing) -->
+						<div v-if="additionalDiscount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">
+								{{ __('Coupon Discount') }}
+								<span v-if="couponDiscountPercentage > 0" class="text-gray-500">({{ couponDiscountPercentage }}%)</span>
+							</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(additionalDiscount) }}</span>
+						</div>
+						<!-- Residual/unreconciled invoice-level discount, normally 0 -->
+						<div v-if="otherInvoiceDiscountAmount > 0" class="flex items-center justify-between text-sm">
+							<span class="text-gray-600 text-start">{{ __('Other Discount') }}</span>
+							<span class="font-medium text-red-600 text-end">-{{ formatCurrency(otherInvoiceDiscountAmount) }}</span>
+						</div>
+						<!-- Grand Total -->
 							<div class="flex items-center justify-between pt-2 mt-1 border-t border-gray-300">
 								<span :class="['font-bold text-gray-900 text-start', isCompactMode ? 'text-sm' : 'text-base']">{{ __('Grand Total') }}</span>
 								<span :class="['font-bold text-gray-900 text-end', dynamicTextSize.grandTotal]">{{ formatCurrency(grandTotal) }}</span>
 							</div>
+						</div>
+
+						<!-- Remarks -->
+						<div class="border-t border-gray-200 px-3 py-2 bg-white">
+							<label
+								for="pos-payment-remarks"
+								class="flex items-center gap-1.5 text-xs font-medium text-gray-600 mb-1.5"
+							>
+								<svg class="w-3.5 h-3.5 text-gray-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-6 4h10M5 6a2 2 0 012-2h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6z"/>
+								</svg>
+								<span>{{ __('Remarks') }}</span>
+							</label>
+							<textarea
+								id="pos-payment-remarks"
+								v-model="localRemarks"
+								rows="2"
+								:placeholder="__('Note for this invoice...')"
+								class="w-full rounded-lg border border-gray-300 bg-gray-50 px-2.5 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-400 resize-none"
+								@input="handleRemarksChange"
+							/>
 						</div>
 
 						<!-- Payment Status - Two Equal Halves -->
@@ -580,37 +641,31 @@
 						</div>
 					</div>
 
-					<!-- Desktop: SePay + Quick Amounts (show when Chuyển khoản selected) -->
-					<div v-if="lastSelectedMethod && (remainingAmount > 0 || showSePayButton)" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
-						<!-- SePay Bank Transfer - require full allocation first (add remaining Cash before QR) -->
-						<div v-if="showSePayButton" class="mb-3">
-							<div v-if="remainingAmount > 0" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
-								<p class="text-xs text-amber-700">
-									{{ __('Add remaining {0} (Cash or other method) first, then Pay via Bank Transfer', [formatCurrency(remainingAmount)]) }}
-								</p>
-							</div>
-							<button
-								@click="initiateSePayPayment"
-								:disabled="isSubmitting || remainingAmount > 0"
-								:class="[
-									'w-full font-bold rounded-lg py-3 flex items-center justify-center gap-2',
-									(isSubmitting || remainingAmount > 0) ? 'bg-green-300 text-white cursor-not-allowed' : 'bg-green-500 text-white hover:bg-green-600'
-								]"
-							>
-								<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
-								</svg>
-								<span>{{ __('Pay') }} {{ formatCurrency(sepayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
-							</button>
-						</div>
-						<!-- Hint when Chuyển khoản selected but SePay not enabled -->
-						<div v-else-if="isBankTransferMethod(lastSelectedMethod) && !settingsStore.enableSepay" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
+					<!-- Desktop: electronic bank transfer (SePay/VietQR) — only when gateway enabled -->
+					<div v-if="showSePayButton" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
+						<div v-if="remainingAmount > 0" class="mb-2 p-2 bg-amber-50 border border-amber-200 rounded-lg">
 							<p class="text-xs text-amber-700">
-								{{ __('Enable SePay in POS Profile to pay via Bank Transfer (VietQR)') }}
+								{{ __('Add remaining {0} (Cash or other method) first, then Pay via Bank Transfer', [formatCurrency(remainingAmount)]) }}
 							</p>
 						</div>
-						<!-- Quick Amounts - only when remaining to pay -->
-						<div v-if="remainingAmount > 0" class="text-start text-xs font-medium text-gray-600 mb-1.5">
+						<button
+							@click="initiateSePayPayment"
+							:disabled="isSubmitting || remainingAmount > 0"
+							:class="[
+								'w-full font-bold rounded-lg py-3 flex items-center justify-center gap-2',
+								(isSubmitting || remainingAmount > 0) ? 'bg-green-300 text-white cursor-not-allowed' : 'bg-green-500 text-white hover:bg-green-600'
+							]"
+						>
+							<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+							</svg>
+							<span>{{ __('Pay') }} {{ formatCurrency(sepayButtonAmount) }} {{ __('via Bank Transfer') }}</span>
+						</button>
+					</div>
+
+					<!-- Desktop: Quick Amounts (all methods — manual bank transfer same as Cash when gateway off) -->
+					<div v-if="lastSelectedMethod && remainingAmount > 0" class="hidden lg:block" :class="isCompactMode ? 'mb-2' : 'mb-3'">
+						<div class="text-start text-xs font-medium text-gray-600 mb-1.5">
 							{{ (isExactAmountModeActive && !isCashPaymentMethod(lastSelectedMethod))
 								? __('Exact amount only')
 								: __('Quick amounts for {0}', [__(lastSelectedMethod.mode_of_payment)])
@@ -821,7 +876,7 @@
 						<div :class="['bg-gray-100 rounded-lg', isCompactMode ? 'p-2 mb-2' : 'p-3 mb-3']">
 							<div dir="ltr" :class="['font-bold text-gray-900 text-center flex items-center justify-center gap-2', isCompactMode ? 'text-xl' : 'text-2xl']">
 								<span>{{ currencySymbol }}</span>
-								<span class="font-mono tracking-wider">{{ numpadDisplay || '0.00' }}</span>
+								<span class="font-mono tracking-wider">{{ numpadFormattedDisplay }}</span>
 							</div>
 						</div>
 
@@ -897,6 +952,7 @@
 								0
 							</button>
 							<button
+								v-if="decimalSeparator"
 								@click="numpadInput('.')"
 								:disabled="numpadDisplay.includes('.')"
 								:class="[
@@ -906,7 +962,7 @@
 										: 'bg-gray-50 border-2 border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-gray-800'
 								]"
 							>
-								.
+								{{ decimalSeparator }}
 							</button>
 							</div>
 						</div>
@@ -1037,6 +1093,18 @@ const props = defineProps({
 		type: Number,
 		default: 0,
 	},
+	taxInclusive: {
+		type: Boolean,
+		default: false,
+	},
+	hasCoupon: {
+		type: Boolean,
+		default: false,
+	},
+	appliedCoupon: {
+		type: Object,
+		default: null,
+	},
 	company: {
 		type: String,
 		default: "",
@@ -1044,6 +1112,10 @@ const props = defineProps({
 	additionalDiscount: {
 		type: Number,
 		default: 0,
+	},
+	remarks: {
+		type: String,
+		default: "",
 	},
 	targetDoctype: {
 		type: String,
@@ -1067,6 +1139,7 @@ const emit = defineEmits([
 	"update:modelValue",
 	"payment-completed",
 	"update-additional-discount",
+	"update:remarks",
 ])
 
 const show = computed({
@@ -1162,7 +1235,9 @@ function handleNumpadEnter(value) {
 // Use numpad composable for keypad input handling with keyboard support
 const {
 	numpadDisplay,
+	numpadFormattedDisplay,
 	numpadValue,
+	decimalSeparator,
 	numpadInput,
 	numpadBackspace,
 	numpadClear,
@@ -1192,6 +1267,7 @@ function numpadAddPayment() {
 
 // Additional discount state
 const localAdditionalDiscount = ref(0)
+const localRemarks = ref("")
 // Initialize discount type from settings (default to percentage if enabled, otherwise amount)
 const additionalDiscountType = ref(
 	settingsStore.usePercentageDiscount ? "percentage" : "amount",
@@ -1364,13 +1440,6 @@ function isBankTransferMethod(method) {
 		name.includes("chuyển") ||
 		name.includes("transfer")
 	)
-}
-
-// Check if payment method is SePay bank transfer (async payment via VietQR)
-function isSePayPaymentMethod(method) {
-	if (!method || !settingsStore.enableSepay) return false
-	if (method.is_sepay === true) return true
-	return isBankTransferMethod(method)
 }
 
 // Check if a payment method is a cash payment (allows overpayment/change)
@@ -1634,6 +1703,37 @@ const remainingAvailableCredit = computed(() => {
 	return remaining > 0 ? roundCurrency(remaining) : 0
 })
 
+// props.discountAmount (cartStore.totalDiscount) bundles two different things
+// together: the per-item Pricing Rule / Promotional Scheme discount, plus the
+// additional/coupon discount on top. Split them back out so the breakdown
+// shows both instead of one opaque "Discount" number the coupon amount is
+// buried inside of.
+const itemLevelDiscountAmount = computed(() =>
+	roundCurrency(props.discountAmount - (props.additionalDiscount || 0)),
+)
+
+// Percentage-type coupons show their % beside the Coupon Discount label so the
+// cashier can see both the rate and the resulting amount.
+const couponDiscountPercentage = computed(() => {
+	const coupon = props.appliedCoupon
+	if (!coupon || coupon.type !== "Percentage") return 0
+	return Number(coupon.percentage) || 0
+})
+
+// Residual/unreconciled invoice-level discount (e.g. a backend-side "Additional
+// Discount %" on the Sales Invoice that isn't the coupon flow above). Normally 0.
+// = (subtotal [+ tax, unless tax-inclusive pricing] - item_discount) - grandTotal
+// Must mirror the same tax-inclusive branching as cartStore's own grandTotal
+// computation (useInvoice.js), otherwise this shows a phantom value equal to
+// the tax amount whenever prices already include tax.
+const otherInvoiceDiscountAmount = computed(() => {
+	const beforeAdditional = props.taxInclusive
+		? props.subtotal - props.discountAmount
+		: props.subtotal + props.taxAmount - props.discountAmount
+	const diff = roundCurrency(beforeAdditional - props.grandTotal)
+	return diff > 0.01 ? diff : 0
+})
+
 // Calculate the actual discount amount based on type (percentage or fixed amount)
 const calculatedAdditionalDiscount = computed(() => {
 	if (additionalDiscountType.value === "percentage") {
@@ -1660,9 +1760,9 @@ const sepayButtonAmount = computed(() => {
 	return bankTotal > 0 ? bankTotal : remainingAmount.value
 })
 
-// Show Pay via Bank Transfer when payment entries contain Chuyển khoản (regardless of selected method)
+// Electronic gateway (SePay/VietQR): only when enable_bank_transfer_check is on and Chuyển khoản is in payment entries
 const showSePayButton = computed(() => {
-	if (!settingsStore.enableSepay || bankTransferTotalInPayments.value <= 0) {
+	if (!settingsStore.enableBankTransfer || bankTransferTotalInPayments.value <= 0) {
 		return false
 	}
 	return remainingAmount.value > 0 || bankTransferTotalInPayments.value > 0
@@ -1870,7 +1970,13 @@ const canComplete = computed(() => {
 		return paymentEntries.value.length > 0
 	}
 
-	// Otherwise require full payment
+	// Otherwise require full payment. A 0-total invoice (e.g. 100% discount/coupon)
+	// has nothing to pay, so don't require a payment entry - the numpad's Add
+	// button is itself disabled at amount 0, so the cashier could never satisfy
+	// paymentEntries.length > 0 for this case anyway.
+	if (roundCurrency(props.grandTotal) === 0) {
+		return true
+	}
 	return remainingAmount.value === 0 && paymentEntries.value.length > 0
 })
 
@@ -2118,6 +2224,8 @@ function quickAddPayment(method) {
 		amt = maxAllowed
 	}
 
+	if (laDongThanhToanTrungLap(method.mode_of_payment, amt)) return
+
 	paymentEntries.value.push({
 		mode_of_payment: method.mode_of_payment,
 		amount: roundCurrency(amt),
@@ -2156,6 +2264,50 @@ function onPaymentMethodUp(method) {
 
 function onPaymentMethodCancel() {
 	handlePointerCancel()
+}
+
+/**
+ * Chặn thêm một dòng thanh toán TRÙNG HỆT dòng vừa nhập.
+ *
+ * Trùng cả hình thức lẫn số tiền gần như luôn là bấm nhầm hai lần, không phải
+ * ý định thật: khách trả hai lần đúng bằng nhau cùng một hình thức là chuyện
+ * hiếm, mà hậu quả thì nặng — hoá đơn 7.038.009 bị ghi thu 14.076.018 qua 2
+ * lần quẹt Payoo giống hệt nhau, phần dư bị ghi thành tiền thối dù thẻ không
+ * thối được, và sau đó không trả hàng được nữa (PM-TASK-00072).
+ *
+ * Chỉ cảnh báo và chặn lần bấm thứ hai; thu ngân thật sự muốn thu hai lần bằng
+ * nhau thì bấm lại lần nữa là vào, nên không khoá cứng nghiệp vụ.
+ *
+ * @returns {boolean} true nếu nên CHẶN lần thêm này
+ */
+let vuaCanhBaoTrung = null
+function laDongThanhToanTrungLap(modeOfPayment, amount) {
+	const amt = roundCurrency(amount)
+	const daCo = paymentEntries.value.some(
+		(entry) =>
+			entry.mode_of_payment === modeOfPayment &&
+			roundCurrency(entry.amount) === amt,
+	)
+	if (!daCo) {
+		vuaCanhBaoTrung = null
+		return false
+	}
+
+	// Đã cảnh báo đúng dòng này rồi mà thu ngân vẫn bấm lại → cho qua
+	const khoa = `${modeOfPayment}::${amt}`
+	if (vuaCanhBaoTrung === khoa) {
+		vuaCanhBaoTrung = null
+		return false
+	}
+
+	vuaCanhBaoTrung = khoa
+	showWarning(
+		__("Đã có dòng {0} với số tiền {1}. Bấm lần nữa nếu thật sự muốn thu thêm.", [
+			__(modeOfPayment),
+			formatCurrency(amt),
+		]),
+	)
+	return true
 }
 
 // Add custom amount for a method
@@ -2228,6 +2380,8 @@ function addCustomPayment(method, amount) {
 			return
 		}
 	}
+
+	if (laDongThanhToanTrungLap(method.mode_of_payment, amt)) return
 
 	paymentEntries.value.push({
 		mode_of_payment: method.mode_of_payment,
@@ -2493,13 +2647,28 @@ function decrementDiscount() {
 	handleAdditionalDiscountChange()
 }
 
+function handleRemarksChange() {
+	emit("update:remarks", localRemarks.value || "")
+}
+
 // Watch for dialog open to sync additional discount from parent
 watch(
 	() => props.modelValue,
 	(isOpen) => {
 		if (isOpen) {
 			// Only sync when dialog opens, not continuously
+			// props.additionalDiscount is always a currency amount (set via
+			// cartStore.additionalDiscount = discountAmount in POSSale.vue),
+			// never a percentage, so the widget must switch to "amount" mode
+			// when syncing one in, or the raw value gets misread as a
+			// percentage (e.g. 279900 -> 279900%). Leave the type alone when
+			// there's nothing to sync so the configured manual-entry default
+			// (settingsStore.usePercentageDiscount) still applies.
+			if (props.additionalDiscount) {
+				additionalDiscountType.value = "amount"
+			}
 			localAdditionalDiscount.value = props.additionalDiscount || 0
+			localRemarks.value = props.remarks || ""
 		}
 	},
 )

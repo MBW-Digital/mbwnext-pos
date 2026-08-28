@@ -146,6 +146,8 @@
 
 <script setup>
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
+import { isOffline } from "@/utils/offline"
+import { offlineWorker } from "@/utils/offline/workerClient"
 import { Button, Dialog, Input, createResource } from "frappe-ui"
 import { ref, watch } from "vue"
 import { useInvoice } from "@/composables/useInvoice"
@@ -161,6 +163,11 @@ const props = defineProps({
 		type: Number,
 		required: true,
 		note: __("Cart subtotal BEFORE tax - used for discount calculations"),
+	},
+	netTotal: {
+		type: Number,
+		default: null,
+		note: __("Subtotal after item-level (Pricing Rule) discounts, before tax - used when coupon.apply_on is Net Total"),
 	},
 	items: Array,
 	posProfile: String,
@@ -267,12 +274,33 @@ async function applyCoupon() {
 	errorMessage.value = ""
 
 	try {
-		await couponResource.reload()
-		// Frappe wraps response in { message: {...} }
-		const result = couponResource.data?.message || couponResource.data
+		let validationData
 
-		// Handle if result is the actual response object
-		const validationData = typeof result === 'object' && result.valid !== undefined ? result : couponResource.data
+		if (isOffline()) {
+			// Mất mạng: tra danh sách mã đã lưu trên máy. Mã có giới hạn lượt
+			// dùng / dùng-một-lần / gán riêng khách vẫn nằm trong danh sách nhưng
+			// bị đánh dấu phải hỏi máy chủ, nên câu báo là "chờ có mạng" chứ
+			// không phải "mã không hợp lệ" (PM-TASK-00071).
+			validationData = await offlineWorker.getCachedCoupon(
+				couponCode.value,
+				props.company,
+			)
+			if (!validationData?.valid) {
+				// Worker trả câu tiếng Anh giống hệt máy chủ để chỉ phải dịch một chỗ
+				errorMessage.value = validationData?.message
+					? __(validationData.message)
+					: __("This coupon can only be applied when the POS is online")
+				showError(errorMessage.value)
+				return
+			}
+		} else {
+			await couponResource.reload()
+			// Frappe wraps response in { message: {...} }
+			const result = couponResource.data?.message || couponResource.data
+
+			// Handle if result is the actual response object
+			validationData = typeof result === 'object' && result.valid !== undefined ? result : couponResource.data
+		}
 
 		if (!validationData || !validationData.valid) {
 			errorMessage.value =
@@ -290,22 +318,31 @@ async function applyCoupon() {
 			return
 		}
 
-		// Calculate discount on subtotal (before tax) using centralized helper
+		// Base amount to calculate the discount on: "Grand Total" coupons apply on the
+		// gross subtotal, everything else ("Net Total") applies after item-level
+		// (Pricing Rule) discounts are already subtracted — matches apply_coupon_discount()
+		// in pos_coupon.py.
+		const baseAmount =
+			coupon.apply_on === "Grand Total"
+				? props.subtotal
+				: (props.netTotal ?? props.subtotal)
+
+		// Calculate discount using centralized helper
 		// Transform server coupon format to discount object format
 		const discountObj = {
 			percentage: coupon.discount_type === "Percentage" ? coupon.discount_percentage : 0,
 			amount: coupon.discount_type === "Amount" ? coupon.discount_amount : 0,
 		}
 
-		let discountAmount = calculateDiscountAmount(discountObj, props.subtotal)
+		let discountAmount = calculateDiscountAmount(discountObj, baseAmount)
 
 		// Apply maximum discount limit if specified
 		if (coupon.max_amount && discountAmount > coupon.max_amount) {
 			discountAmount = coupon.max_amount
 		}
 
-		// Clamp discount to subtotal to prevent negative totals
-		discountAmount = Math.min(discountAmount, props.subtotal)
+		// Clamp discount to its base amount to prevent negative totals
+		discountAmount = Math.min(discountAmount, baseAmount)
 
 		appliedDiscount.value = {
 			name: coupon.coupon_name || coupon.coupon_code,

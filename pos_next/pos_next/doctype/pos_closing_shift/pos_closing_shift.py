@@ -571,9 +571,25 @@ def make_closing_shift_from_opening(opening_shift):
         "sales_total": summary["sales_total"],
         "sales_count": summary["sales_count"],
         "pos_transactions": pos_transactions,  # Include return info for display
+        "hide_shift_closing_information": _get_hide_shift_closing_information(
+            opening_shift.get("pos_profile")
+        ),
     })
 
     return result
+
+
+def _get_hide_shift_closing_information(pos_profile):
+    if not pos_profile:
+        return 0
+    meta = frappe.get_meta("POS Profile")
+    if not meta.has_field("custom_hide_shift_closing_information"):
+        return 0
+    return frappe.db.get_value(
+        "POS Profile",
+        pos_profile,
+        "custom_hide_shift_closing_information",
+    ) or 0
 
 
 @frappe.whitelist()

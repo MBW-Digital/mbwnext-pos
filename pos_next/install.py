@@ -46,6 +46,10 @@ def after_migrate():
 		# Setup default print format
 		setup_default_print_format(quiet=True)
 
+		from pos_next.print_formats.sync import sync_pos_retail_receipt
+
+		sync_pos_retail_receipt()
+
 		# Clear cache
 		frappe.clear_cache()
 		frappe.db.commit()

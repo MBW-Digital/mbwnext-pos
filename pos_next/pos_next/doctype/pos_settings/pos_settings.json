@@ -32,18 +32,20 @@
   "display_item_code",
   "show_customer_balance",
   "column_break_display",
-  "hide_expected_amount",
   "display_discount_percentage",
   "display_discount_amount",
   "section_break_operations",
   "allow_sales_order",
   "allow_select_sales_order",
   "create_only_sales_order",
+  "opening_closing_cash_configuration",
   "column_break_operations",
   "allow_return_without_invoice",
   "return_validity_days",
   "allow_free_batch_return",
+  "allow_skip_manual_batch_selection",
   "allow_print_draft_invoices",
+  "allow_manual_cash_drawer",
   "section_break_pricing",
   "decimal_precision",
   "tax_inclusive",
@@ -67,6 +69,8 @@
   "section_break_misc",
   "input_qty",
   "allow_negative_stock",
+  "hide_out_of_stock_items",
+  "opening_closing_cash_configuration",
   "barcode_tab",
   "barcode_rules"
  ],
@@ -219,10 +223,10 @@
   },
   {
    "default": "0",
+   "description": "When enabled, non-cash payments (card, bank transfer) require exact amount. Cash payments can still have change. Cannot be used with Credit Sale or Partial Payment.",
    "fieldname": "use_exact_amount",
    "fieldtype": "Check",
-   "label": "Use Exact Amount for Non-Cash",
-   "description": "When enabled, non-cash payments (card, bank transfer) require exact amount. Cash payments can still have change. Cannot be used with Credit Sale or Partial Payment."
+   "label": "Use Exact Amount for Non-Cash"
   },
   {
    "default": "Disabled",
@@ -262,13 +266,6 @@
   {
    "fieldname": "column_break_display",
    "fieldtype": "Column Break"
-  },
-  {
-   "default": "0",
-   "description": "Hide expected cash amount in closing",
-   "fieldname": "hide_expected_amount",
-   "fieldtype": "Check",
-   "label": "Hide Expected Amount"
   },
   {
    "default": "0",
@@ -324,11 +321,11 @@
   },
   {
    "default": "0",
+   "depends_on": "allow_return",
+   "description": "Number of days allowed for invoice returns. Set to 0 for unlimited returns.",
    "fieldname": "return_validity_days",
    "fieldtype": "Int",
-   "label": "Return Validity Days",
-   "description": "Number of days allowed for invoice returns. Set to 0 for unlimited returns.",
-   "depends_on": "allow_return"
+   "label": "Return Validity Days"
   },
   {
    "default": "0",
@@ -337,11 +334,27 @@
    "label": "Allow Free Batch Return"
   },
   {
+   "default": "1",
+   "depends_on": "enabled",
+   "description": "If enabled, cashiers skip the batch picker for batch-tracked items; the POS assigns FIFO batches automatically when submitting the invoice. Serial-controlled items always require picking serial numbers.",
+   "fieldname": "allow_skip_manual_batch_selection",
+   "fieldtype": "Check",
+   "label": "Allow Selling Batch Items Without Picking Batch (Auto FIFO)"
+  },
+  {
    "default": "0",
    "description": "Print invoices before submission",
    "fieldname": "allow_print_draft_invoices",
    "fieldtype": "Check",
    "label": "Allow Print Draft Invoices"
+  },
+  {
+   "default": "0",
+   "depends_on": "enabled",
+   "description": "Allow cashiers to use the manual Open Cash Drawer control in POS. Each open is logged with server time in Till Exception Report.",
+   "fieldname": "allow_manual_cash_drawer",
+   "fieldtype": "Check",
+   "label": "Allow Manual Cash Drawer Open"
   },
   {
    "collapsible": 1,
@@ -497,6 +510,20 @@
    "label": "Allow Negative Stock"
   },
   {
+   "default": "0",
+   "description": "Hide items with zero or negative stock from the POS item list. Only items with available stock in the POS warehouse will be displayed.",
+   "fieldname": "hide_out_of_stock_items",
+   "fieldtype": "Check",
+   "label": "Hide Out of Stock Items"
+  },
+  {
+   "default": "0",
+   "description": "When enabled, cashiers must enter cash counts by denomination when opening/closing a shift. When disabled, only the total cash amount is required.",
+   "fieldname": "opening_closing_cash_configuration",
+   "fieldtype": "Check",
+   "label": "Count Cash By Denomination"
+  },
+  {
    "fieldname": "barcode_tab",
    "fieldtype": "Tab Break",
    "label": "Barcode"
@@ -510,8 +537,8 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-11 16:52:08.009217",
- "modified_by": "Administrator",
+ "modified": "2026-06-15 11:33:51.421373",
+ "modified_by": "dovietthang.btm@gmail.com",
  "module": "POS Next",
  "name": "POS Settings",
  "naming_rule": "By fieldname",

@@ -57,6 +57,8 @@ def get_initial_data():
 	if frappe.session.user == "Guest":
 		frappe.throw(_("Authentication required"), frappe.AuthenticationError)
 
+	from pos_next.api.customers import default_customer_group, default_territory
+
 	result = {
 		"success": True,
 		"locale": _get_user_language(),
@@ -66,6 +68,14 @@ def get_initial_data():
 		"pos_settings": None,
 		"payment_methods": [],
 		"pos_external_app_url": frappe.conf.get("pos_external_app_url") or frappe.utils.get_url("/app"),
+		# What apply_offers() falls back to when the cart has no customer. The POS
+		# needs the same values or it judges customer-scoped promotions differently
+		# from the server and shows one as applied that the server refuses
+		# (PM-TASK-00033 / PM-TASK-00034).
+		"selling_defaults": {
+			"customer_group": default_customer_group(),
+			"territory": default_territory(),
+		},
 	}
 
 	# Get open shift - if no shift, return early with defaults
@@ -96,14 +106,15 @@ def get_initial_data():
 		"print_format": pos_profile.get("print_format"),
 		"auto_print": pos_profile.get("print_receipt_on_order_complete", 0),
 		"country": pos_profile.get("country"),
+		"custom_use_shift_in_pos": pos_profile.get("custom_use_shift_in_pos") or 0,
+		"custom_print_in_duplicate": pos_profile.get("custom_print_in_duplicate") or 0,
 	}
 
 	result["pos_settings"] = _get_pos_settings(pos_profile)
 	result["payment_methods"] = _get_payment_methods(pos_profile_name)
-	# SePay config is on POS Profile - add to pos_settings for frontend
 	from pos_next.api.sepay import _get_sepay_settings
 	sepay_ok = _get_sepay_settings(pos_profile_name) is not None
-	result["pos_settings"]["enable_sepay_bank_transfer_check"] = 1 if sepay_ok else 0
+	result["pos_settings"]["enable_bank_transfer_check"] = 1 if sepay_ok else 0
 
 	return result
 

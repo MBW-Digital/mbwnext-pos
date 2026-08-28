@@ -4,7 +4,7 @@
 import frappe
 from frappe import _
 from frappe.utils import flt, today
-from erpnext.accounts.general_ledger import make_reverse_gl_entries
+from erpnext.accounts.general_ledger import make_gl_entries, make_reverse_gl_entries
 from erpnext.controllers.accounts_controller import AccountsController
 
 
@@ -46,24 +46,35 @@ class WalletTransaction(AccountsController):
 			self.customer = frappe.db.get_value("Wallet", self.wallet, "customer")
 
 	def on_submit(self):
-		"""Ghi nhận điểm — KHÔNG sinh bút toán.
-
-		Trước đây mỗi lần khách mua hàng được tích điểm là ghi ngay
-		Nợ (tài khoản chi phí của chương trình) / Có (tài khoản ví).
-
-		Kế toán bác cách đó (PM-TASK-00106): điểm đã tích có thể không bao giờ
-		được dùng, ghi chi phí ngay lúc tích là ghi cho một khoản chưa chắc phát
-		sinh. Theo nguyên tắc thận trọng, chi phí chỉ ghi khi khách THỰC SỰ tiêu
-		điểm — lúc đó hoá đơn tự ghi Nợ 6418 - Chi phí bán hàng / Có 131 qua hình
-		thức thanh toán "đổi điểm". Chương trình khách hàng thân thiết vẫn giữ ô
-		tài khoản chi phí nhưng luồng ví không còn đọc tới.
-
-		Bỏ bút toán ở đây cũng gỡ luôn hai lỗi cùng gốc: tài khoản ví trùng tài
-		khoản công nợ 131 nên hai vế triệt tiêu nhau, đơn trả bằng điểm treo lại
-		đúng số điểm đã dùng, và số dư ví bị tiền hàng khách còn nợ lấn át nên
-		hàng loạt ví hiển thị 0.
-		"""
+		if not self.bo_but_toan_tich_diem():
+			self.make_gl_entries()
 		self.update_wallet_balance()
+
+	def bo_but_toan_tich_diem(self) -> bool:
+		"""Công ty có chọn KHÔNG ghi sổ lúc tích điểm không? (PM-TASK-00106)
+
+		Cách cũ: mỗi lần khách mua hàng được tích điểm là ghi ngay
+		Nợ (tài khoản nguồn) / Có (tài khoản ví). Vẫn là mặc định.
+
+		Có kế toán bác cách đó: điểm đã tích có thể không bao giờ được dùng, ghi
+		chi phí ngay lúc tích là ghi cho một khoản chưa chắc phát sinh. Theo
+		nguyên tắc thận trọng, chi phí chỉ ghi khi khách THỰC SỰ tiêu điểm — lúc
+		đó hoá đơn tự ghi Nợ 6418 - Chi phí bán hàng / Có 131 qua hình thức thanh
+		toán "đổi điểm".
+
+		Bỏ bút toán ở đây cũng gỡ hai lỗi cùng gốc: tài khoản ví trùng tài khoản
+		công nợ 131 nên hai vế triệt tiêu nhau, đơn trả bằng điểm treo lại đúng số
+		điểm đã dùng; và số dư ví bị tiền hàng khách còn nợ lấn át nên hàng loạt
+		ví hiển thị 0.
+
+		Ai cần cách đó thì bật cờ "Không ghi sổ khi tích điểm ví" trong hồ sơ
+		Công ty. Số dư ví đếm từ bảng Wallet Transaction nên đúng ở cả hai chế độ.
+		"""
+		if not self.company:
+			return False
+		return bool(
+			frappe.get_cached_value("Company", self.company, "pos_next_khong_ghi_so_khi_tich_diem")
+		)
 
 	def on_cancel(self):
 		# Must be set before post-cancel link validation (same pattern as Sales Invoice)
@@ -79,12 +90,13 @@ class WalletTransaction(AccountsController):
 		self.update_wallet_balance()
 
 	def dao_but_toan_cu(self):
-		"""Đảo bút toán của những phiếu tích điểm ghi sổ theo cách CŨ.
+		"""Đảo đúng những bút toán phiếu này ĐÃ ghi, nếu có.
 
-		Phiếu tạo từ nay không có bút toán nào, huỷ là xong. Nhưng phiếu tích
-		điểm cũ đã ghi sổ rồi — huỷ mà không đảo là bỏ lại bút toán mồ côi, sổ
-		lệch. Đảo theo đúng những gì đã ghi chứ không dựng lại từ cấu hình hiện
-		tại: cấu hình đã đổi, dựng lại sẽ ra tài khoản khác.
+		Phiếu tạo khi công ty bật "Không ghi sổ khi tích điểm ví" không có bút
+		toán nào, huỷ là xong. Phiếu ghi theo cách cũ thì huỷ mà không đảo là bỏ
+		lại bút toán mồ côi, sổ lệch. Đảo theo đúng những gì đã ghi chứ không
+		dựng lại từ cấu hình hiện tại — cấu hình có thể đã đổi, dựng lại sẽ ra
+		tài khoản khác.
 		"""
 		co_but_toan_cu = frappe.db.exists(
 			"GL Entry",
@@ -97,6 +109,90 @@ class WalletTransaction(AccountsController):
 		"""Update the wallet's current balance"""
 		wallet_doc = frappe.get_doc("Wallet", self.wallet)
 		wallet_doc.update_balance()
+
+	def make_gl_entries(self, cancel=False):
+		"""Create GL entries for wallet transaction"""
+		gl_entries = self.build_gl_entries()
+
+		if gl_entries:
+			make_gl_entries(
+				gl_entries,
+				cancel=cancel,
+				update_outstanding="Yes",
+				merge_entries=frappe.db.get_single_value(
+					"Accounts Settings", "merge_similar_account_heads"
+				)
+			)
+
+	def build_gl_entries(self):
+		"""Build GL entry list based on transaction type"""
+		gl_entries = []
+
+		wallet_account = frappe.db.get_value("Wallet", self.wallet, "account")
+		if not wallet_account:
+			frappe.throw(_("Wallet {0} does not have an account configured").format(self.wallet))
+
+		# Get source account based on source type
+		source_account = self.get_source_account()
+
+		if not source_account:
+			frappe.throw(_("Source account is required for wallet transaction"))
+
+		cost_center = self.cost_center or frappe.get_cached_value(
+			"Company", self.company, "cost_center"
+		)
+
+		amount = flt(self.amount, self.precision("amount"))
+
+		if self.transaction_type in ["Credit", "Loyalty Credit"]:
+			# Credit to wallet (increase balance)
+			# Debit source account, Credit wallet account (with party)
+			gl_entries.append(
+				self.get_gl_dict({
+					"account": source_account,
+					"debit": amount,
+					"debit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"remarks": self.remarks or _("Wallet Credit: {0}").format(self.name)
+				})
+			)
+			gl_entries.append(
+				self.get_gl_dict({
+					"account": wallet_account,
+					"party_type": "Customer",
+					"party": self.customer,
+					"credit": amount,
+					"credit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"remarks": self.remarks or _("Wallet Credit: {0}").format(self.name)
+				})
+			)
+
+		elif self.transaction_type == "Debit":
+			# Debit from wallet (decrease balance)
+			# Debit wallet account (with party), Credit source account
+			gl_entries.append(
+				self.get_gl_dict({
+					"account": wallet_account,
+					"party_type": "Customer",
+					"party": self.customer,
+					"debit": amount,
+					"debit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"remarks": self.remarks or _("Wallet Debit: {0}").format(self.name)
+				})
+			)
+			gl_entries.append(
+				self.get_gl_dict({
+					"account": source_account,
+					"credit": amount,
+					"credit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"remarks": self.remarks or _("Wallet Debit: {0}").format(self.name)
+				})
+			)
+
+		return gl_entries
 
 	def get_source_account(self):
 		"""Get source account based on source type"""

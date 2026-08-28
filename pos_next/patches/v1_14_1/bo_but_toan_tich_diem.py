@@ -12,12 +12,16 @@ Mã đã sửa để từ nay không ghi nữa. Còn những bút toán trót gh
 nếu không sổ vẫn gánh một khoản chi phí không có thật, và tài khoản ví vẫn treo
 một khoản có lợi cho khách mà khách chưa từng được hưởng.
 
-Ở Hạ Vàng lúc phân tích: 1.221 bút toán, 29.428 đ, chưa khách nào tiêu đồng
+Quy mô lúc phân tích: 1.221 bút toán, 29.428 đ, chưa khách nào tiêu đồng
 điểm nào — nên đảo lúc này là sạch nhất, không ai mất gì.
 
-Patch dò theo dấu vết thật (bút toán còn sống của chứng từ ví) chứ không gắn
-cứng danh sách, nên site không dính thì chạy qua không làm gì, site dính nhiều
-hơn dự kiến vẫn xử lý đủ. Chạy lại lần nữa vô hại.
+Patch CHỈ đảo cho công ty đã bật cờ "Không ghi sổ khi tích điểm ví" trong hồ sơ
+Công ty — công ty chưa bật giữ nguyên cách cũ và không bị đụng tới. Trong phạm vi
+đó, patch dò theo dấu vết thật (bút toán còn sống của chứng từ ví) chứ không gắn
+cứng danh sách. Chạy lại lần nữa vô hại.
+
+Bật cờ SAU khi đã migrate thì chạy tay:
+  bench --site <site> execute pos_next.patches.v1_14_1.bo_but_toan_tich_diem.execute
 
 Patch KHÔNG làm những việc sau — phải làm tay:
   1. Đổi tài khoản của hình thức thanh toán "đổi điểm" sang 6418 (hoặc tài khoản
@@ -71,7 +75,14 @@ def _cac_cong_ty_con_but_toan_vi() -> list[str]:
 		CHUNG_TU_VI,
 		as_dict=True,
 	)
-	return [r.company for r in rows]
+	# Chỉ đảo cho công ty đã CHỌN cách hạch toán mới. Đảo bút toán là việc không
+	# quay lại được, không được phép tự làm cho công ty vẫn đang ghi sổ lúc tích
+	# điểm — với họ những bút toán này là đúng, không phải rác.
+	return [
+		r.company
+		for r in rows
+		if frappe.db.get_value("Company", r.company, "pos_next_khong_ghi_so_khi_tich_diem")
+	]
 
 
 def _so_dang_khoa() -> bool:

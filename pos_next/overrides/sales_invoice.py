@@ -252,7 +252,8 @@ class CustomSalesInvoice(SalesInvoice):
 
 	def get_gl_entries(self, warehouse_account=None):
 		gl_entries = super().get_gl_entries(warehouse_account)
-		self.tach_thue_khoi_khuyen_mai(gl_entries)
+		if frappe.get_cached_value("Company", self.company, "pos_next_tach_thue_khuyen_mai"):
+			self.tach_thue_khoi_khuyen_mai(gl_entries)
 		return gl_entries
 
 	def thue_cua_khuyen_mai(self):
@@ -289,11 +290,15 @@ class CustomSalesInvoice(SalesInvoice):
 		trừ khuyến mại. Kết quả: 521 bị thổi lên đúng phần thuế, và sổ chi tiết
 		công nợ không thấy khoản khuyến mại đã giảm cho khách.
 
-		Kế toán Hạ Vàng yêu cầu (PM-TASK-00023, chị Hằng chốt 17/08 — "Cách 2"):
+		Đây là cách hạch toán TUỲ CHỌN, chỉ chạy khi công ty bật cờ
+		"Tách thuế GTGT khỏi khuyến mại (VAS)" trong hồ sơ Công ty. Công ty không
+		bật giữ nguyên hành vi gốc của ERPNext.
+
+		Kế toán yêu cầu (PM-TASK-00023, chốt 17/08 — "Cách 2"):
 		  521 ghi phần chưa thuế, phần thuế ghi giảm 33311,
 		  và khuyến mại hiện thành một dòng ghi Có 131.
 
-		Ví dụ hoá đơn AM2607290001 — khuyến mại 590.697 gồm 43.755 tiền thuế:
+		Ví dụ một hoá đơn — khuyến mại 590.697 gồm 43.755 tiền thuế:
 		  131      Nợ 3.937.980   (giá trước khuyến mại, thay cho 3.347.283)
 		  131      Có   590.697   (khuyến mại, dòng thêm mới)
 		  521      Nợ   546.942   (thay cho 590.697)

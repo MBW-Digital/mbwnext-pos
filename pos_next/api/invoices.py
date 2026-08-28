@@ -1031,10 +1031,30 @@ def update_invoice(data):
         # below can corrupt them; restored by the "validate" doc-event hook
         # (see sales_invoice_hooks.py for why).
         from pos_next.api.sales_invoice_hooks import capture_pos_authoritative_discounts
+        from pos_next.controllers.python.sales_invoice import apply_selling_item_tax_templates
         capture_pos_authoritative_discounts(invoice_doc)
 
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
+
+        # Dựng bảng `taxes` TRƯỚC khi tính tổng. ERPNext bỏ qua bước này khi
+        # is_pos=1, nên chỗ duy nhất dựng nó là apply_selling_item_tax_templates()
+        # — mà hàm đó chạy ở doc_event `before_validate`, tức MÃI SAU lời gọi
+        # calculate_taxes_and_totals() ngay dưới đây.
+        #
+        # Thiếu nó thì lần tính này thấy một hoá đơn KHÔNG THUẾ: grand_total
+        # bằng đúng net_total. Với PHIẾU TRẢ, ERPNext so tổng thanh toán
+        # (-528.000, đã gồm thuế) với grand_total tạm (-480.000) ra
+        # pending = +48.000 > 0, và set_total_amount_to_default_mop() XOÁ SẠCH
+        # bảng payments rồi thay bằng đúng một dòng 48.000. Khối "ensure
+        # payments are negative" bên dưới lật thành -48.000.
+        # Hậu quả: tiền hoàn 480.000 biến mất, treo công nợ 480.000 trên CẢ
+        # phiếu trả lẫn đơn gốc, trong khi thu ngân đã đưa khách đủ tiền.
+        # Dính mọi phiếu trả của hoá đơn có thuế.
+        #
+        # Hàm này idempotent (`if doc.get("taxes"): return`), nên lần chạy lại
+        # ở before_validate không dựng chồng.
+        apply_selling_item_tax_templates(invoice_doc)
 
         # Calculate totals and apply discounts (with rounding disabled)
         invoice_doc.calculate_taxes_and_totals()

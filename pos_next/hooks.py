@@ -98,27 +98,22 @@ jinja = {
 # --------
 fixtures = [
 	{
+		# Loc theo MODULE chu khong theo danh sach ten.
+		#
+		# Danh sach ten cu chi liet ke 12 field, trong khi fixtures/custom_field.json
+		# da co 75 - tuc `bench export-fixtures --app pos_next` se ghi de file bang
+		# dung 12 field va XOA 63 field con lai khoi repo, gom ca eInvoice, Sepay,
+		# coupon POS va toan bo field cua mau in. Khong ai nhan ra cho toi khi cai
+		# site moi thi thieu field.
+		#
+		# Day rat co the la cach 3 field Sepay bien mat o nhanh ha_vang: file mat
+		# field nhung api/sepay.py van doc chung.
+		#
+		# Moi Custom Field cua app deu khai module "POS Next" (75/75), va tren site
+		# cung dung 75 ban ghi mang module do - nen bo loc nay khop chinh xac va tu
+		# theo kip khi them field moi.
 		"dt": "Custom Field",
-		"filters": [
-			[
-				"name",
-				"in",
-				[
-					"Sales Invoice-posa_pos_opening_shift",
-					"Sales Invoice-posa_is_printed",
-					"Item-custom_company",
-					"POS Profile-posa_cash_mode_of_payment",
-					"POS Profile-posa_allow_delete",
-					"POS Profile-posa_block_sale_beyond_available_qty",
-					"POS Profile-custom_print_in_duplicate",
-					"POS Profile-custom_pos_logo",
-					"Mode of Payment-is_wallet_payment",
-					"Pricing Rule-apply_time_window",
-					"Pricing Rule-valid_time_from",
-					"Pricing Rule-valid_time_to",
-				]
-			]
-		]
+		"filters": [["module", "=", "POS Next"]],
 	},
 	{
 		"dt": "Print Format",

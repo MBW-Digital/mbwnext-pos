@@ -275,13 +275,19 @@ function receiptHeaderFields(inv) {
 		addr: txt(inv.store_address) || txt(inv.receipt_company_address),
 		phone: txt(inv.store_phone) || txt(inv.receipt_company_phone),
 		shop: txt(inv.shop_code),
-		shift: txt(inv.shift_label) || 'Ca 1',
+		shift: txt(inv.shift_label),
 		salesperson: txt(inv.salesperson) || txt(inv.receipt_salesperson),
 		postingDate: txt(inv.posting_date_display) || txt(inv.posting_date) || fmtDate(inv.posting_date),
 		postingTime: txt(inv.posting_time),
 		printDate: txt(inv.print_date),
 		printTime: txt(inv.print_time),
 		storeHours: txt(inv.store_hours),
+		// Chính sách cuối phiếu khai ở POS Profile > Terms and Conditions.
+		// Trước đây câu "Hàng mua rồi miễn đổi trả..." gắn cứng ngay trong file
+		// này (cả bản in text lẫn bản in ảnh) — chính sách của một chuỗi cửa
+		// hàng in lên phiếu của mọi khách, mà lại trái với tính năng trả hàng
+		// của chính app. Không khai thì không in dòng nào.
+		policy: txt(inv.receipt_policy),
 		vip: txt(inv.vip_label),
 		isReprint: Boolean(inv.is_reprint),
 		customerPhone:
@@ -413,11 +419,10 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 	b.alignCenter()
 	if (R.storeHours) b.line(`Giờ mở cửa: ${R.storeHours}`)
 	b.boldOn().line('Cảm ơn! Hẹn gặp lại quý khách').boldOff()
-	b.divider('-')
-	b.line('Hàng mua rồi miễn đổi trả, xem chi tiết')
-	b.line('bảo hành tại cửa hàng.')
-	b.line('The purchased items are non-returnable,')
-	b.line('please refer to the in-store warranty policy.')
+	if (R.policy) {
+		b.divider('-')
+		b.line(R.policy)
+	}
 
 	b.feedAndCut()
 	if (openCashDrawer) {
@@ -757,14 +762,10 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 	bf.twoCol(`Ngày in: ${R.printDate}`, `Giờ in: ${R.printTime}`)
 	if (R.storeHours) bf.text(`Giờ mở cửa: ${R.storeHours}`, { align: 'center' })
 	bf.text('Cảm ơn! Hẹn gặp lại quý khách', { bold: true, align: 'center' })
-	bf.divider()
-	bf.text('Hàng mua rồi miễn đổi trả, xem chi tiết bảo hành tại cửa hàng.', {
-		align: 'center',
-	})
-	bf.text(
-		'The purchased items are non-returnable, please refer to the in-store warranty policy.',
-		{ align: 'center' },
-	)
+	if (R.policy) {
+		bf.divider()
+		bf.text(R.policy, { align: 'center' })
+	}
 
 	const init     = new Uint8Array([ESC, 0x40, FS, 0x2e])
 	const mainBm   = b.buildBitmapBytes()

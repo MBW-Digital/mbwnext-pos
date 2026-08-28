@@ -140,7 +140,7 @@
 	<div class="right">
 		<div>Shop: {{ R.shop_code or '—' }}</div>
 		<div>Giờ: {{ R.posting_time }}</div>
-		<div>Ca: {{ R.shift_label }}</div>
+		{% if R.shift_label %}<div>Ca: {{ R.shift_label }}</div>{% endif %}
 	</div>
 </div>
 
@@ -190,16 +190,13 @@
 		<span>Ngày in: {{ R.print_date }}</span>
 		<span>Giờ in: {{ R.print_time }}</span>
 	</div>
-	<div class="center" style="margin-top:4px;">Giờ mở cửa: {{ R.store_hours }}</div>
+	{% if R.store_hours %}<div class="center" style="margin-top:4px;">Giờ mở cửa: {{ R.store_hours }}</div>{% endif %}
 	<div class="center bold" style="margin-top:4px;">Cảm ơn! Hẹn gặp lại quý khách</div>
 </div>
 
 <div class="divider"></div>
 
-<div class="policy">
-	Hàng mua rồi miễn đổi trả, xem chi tiết bảo hành tại cửa hàng.<br>
-	The purchased items are non-returnable, please refer to the in-store warranty policy for more details.
-</div>
+{% if R.receipt_policy %}<div class="policy">{{ R.receipt_policy }}</div>{% endif %}
 <div class="stars">****************************************************</div>
 </div>
 {%- endmacro -%}

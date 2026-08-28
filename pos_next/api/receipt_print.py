@@ -293,12 +293,67 @@ def _pos_profile_store_fields(pos_profile: str | None) -> dict[str, Any]:
 			"custom_address",
 			"custom_phone",
 			"custom_pos_logo",
+			"custom_store_hours",
+			"tc_name",
 		)
 		if meta.has_field(fname)
 	]
 	if not fields:
 		return {}
 	return frappe.db.get_value("POS Profile", pos_profile, fields, as_dict=True) or {}
+
+
+def _receipt_policy_text(tc_name: str | None) -> str:
+	"""Dòng chính sách in cuối phiếu, lấy từ POS Profile > Terms and Conditions.
+
+	Trước đây câu "Hàng mua rồi miễn đổi trả..." được gắn cứng trong mẫu in và
+	trong cả hai nhánh in nhiệt — đó là chính sách của MỘT chuỗi cửa hàng, in
+	lên phiếu của mọi khách, và mâu thuẫn với chính tính năng trả hàng của app.
+	Cửa hàng nào cần thì khai vào ô Terms and Conditions của POS Profile; không
+	khai thì phiếu không in dòng nào.
+
+	Terms and Conditions là Text Editor (HTML) nên phải bóc thẻ: máy in nhiệt in
+	thẳng chuỗi, để nguyên HTML là ra đầy thẻ trên giấy.
+	"""
+	if not tc_name:
+		return ""
+	terms = frappe.db.get_value("Terms and Conditions", tc_name, "terms")
+	if not terms:
+		return ""
+	return " ".join(frappe.utils.strip_html(terms).split())
+
+
+def _nhan_ca(inv: dict[str, Any]) -> str:
+	"""Nhãn ca của phiếu: "Ca N" theo THỨ TỰ ca trong ngày của cửa hàng đó.
+
+	Trước đây gắn cứng "Ca 1" cho mọi phiếu — cửa hàng mở ca thứ hai trong ngày
+	vẫn in ra "Ca 1", tức phiếu ghi sai ca.
+	"""
+	ca = inv.get("posa_pos_opening_shift")
+	if not ca:
+		return ""
+
+	thong_tin = frappe.db.get_value(
+		"POS Opening Shift", ca, ["pos_profile", "period_start_date"], as_dict=True
+	)
+	if not thong_tin or not thong_tin.period_start_date:
+		return ""
+
+	truoc_do = frappe.db.count(
+		"POS Opening Shift",
+		{
+			"pos_profile": thong_tin.pos_profile,
+			"docstatus": 1,
+			"period_start_date": [
+				"between",
+				[
+					frappe.utils.get_datetime(thong_tin.period_start_date).date(),
+					thong_tin.period_start_date,
+				],
+			],
+		},
+	)
+	return f"Ca {max(truoc_do, 1)}"
 
 
 def attach_image_url_for_print(file_path: str | None) -> str:
@@ -488,7 +543,7 @@ def retail_receipt_meta_for_jinja(doc):
 		posting_time=posting_time,
 		print_date=format_datetime(now, "dd/MM/yyyy"),
 		print_time=format_datetime(now, "HH:mm:ss"),
-		shift_label="Ca 1",
+		shift_label=_nhan_ca(inv),
 		gross_total=gross_total,
 		item_discount_total=item_discount_total,
 		invoice_discount_total=abs(
@@ -498,7 +553,8 @@ def retail_receipt_meta_for_jinja(doc):
 		bank_paid=pay["bank_paid"],
 		wallet_paid=pay["wallet_paid"],
 		vip_label=inv.get("customer_category") or "",
-		store_hours="9h00 - 22h00",
+		store_hours=profile.get("custom_store_hours") or "",
+		receipt_policy=_receipt_policy_text(profile.get("tc_name")),
 		salesperson=salesperson,
 	)
 

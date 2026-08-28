@@ -33,7 +33,7 @@ ITEM_RESULT_COLUMNS = ",\n\t".join(ITEM_RESULT_FIELDS)
 def _filter_item_price_by_date(query, ItemPrice, on_date=None, with_order=True):
 	"""Chỉ lấy Item Price đang có hiệu lực tại ngày bán.
 
-	Bảng giá của Hạ Vàng để sẵn giá của đợt sau với `valid_from` là ngày tương
+	Bảng giá thường để sẵn giá của đợt sau với `valid_from` là ngày tương
 	lai. Trước đây các truy vấn giá của POS không lọc theo ngày, nên bản ghi
 	chưa tới hạn vẫn được nạp và GHI ĐÈ giá hiện hành trong bảng tra
 	(cùng item + cùng đơn vị tính) — POS bán ra bằng giá của đợt chưa bắt đầu

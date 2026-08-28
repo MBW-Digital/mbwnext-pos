@@ -167,9 +167,9 @@ async function printInvoiceOnce(doc, printFormat = null, letterhead = null, opti
 	}
 
 	const doctype = doc.doctype || "Sales Invoice"
-	// Mẫu mặc định là mẫu của Hạ Vàng. Trước đây mặc định trỏ vào "POS Next
-	// Receipt" — mẫu dựng cho dự án Bách Hóa Bưu Điện (PM-TASK-00116).
-	const format = printFormat || "POS Ha Vang Receipt"
+	// Mẫu mặc định của app. Cửa hàng nào cần mẫu riêng thì khai Print Format
+	// trong POS Profile, giá trị đó được truyền vào qua `printFormat`.
+	const format = printFormat || "POS Next Receipt"
 
 	const params = new URLSearchParams({
 		doctype: doctype,

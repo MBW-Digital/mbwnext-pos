@@ -3274,7 +3274,7 @@ async function handlePrintInvoice(invoiceData) {
 			throw new Error("Invoice name is required");
 		}
 		// Luôn in qua printInvoiceByName: lấy đủ dữ liệu phiếu, Print Format
-		// từ POS Profile (vd. POS Ha Vang Receipt), 2 liên, IN LẠI khi in lại.
+		// từ POS Profile (vd. POS Retail Receipt), 2 liên, IN LẠI khi in lại.
 		// Không dùng printInvoice(invoiceData) khi object có items từ get_invoices —
 		// đó chỉ là summary list, không phải full doc, và sẽ rơi vào mẫu mặc định POS Next Receipt.
 		await printInvoiceByName(invoiceData.name);

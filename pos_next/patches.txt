@@ -5,8 +5,10 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 pos_next.patches.v1_7_0.reinstall_workspace
-pos_next.patches.v1_7_8.sync_pos_ha_vang_receipt_pos_logo
+pos_next.patches.v1_7_8.sync_pos_retail_receipt_pos_logo
 pos_next.patches.v1_14_1.add_pricing_rule_offer_indexes
+pos_next.patches.v1_14_1.doi_ten_mau_in_ban_le
+pos_next.patches.v1_14_1.bat_lai_mau_in_pos_next_receipt
+pos_next.patches.v1_14_1.sua_doctype_mau_in_ban_le
 pos_next.patches.v1_14_1.sua_but_toan_vi_sai_cong_ty
 pos_next.patches.v1_14_1.bo_but_toan_tich_diem
-pos_next.patches.v1_14_1.go_mau_in_du_an_khac

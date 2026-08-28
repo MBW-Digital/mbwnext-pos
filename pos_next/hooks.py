@@ -52,6 +52,7 @@ doctype_js = {
 	"Material Request": "controllers/js/material_request.js",
 	"Loyalty Program": "public/js/loyalty_program.js",
 	"Mode of Payment": "public/js/mode_of_payment.js",
+	"POS Profile": "public/js/pos_profile.js",
 }
 doctype_list_js = {
 	"Sales Invoice": "public/js/sales_invoice_list.js",
@@ -126,9 +127,8 @@ fixtures = [
 				"name",
 				"in",
 				[
-					# Nhánh ha_vang chỉ phục vụ Hạ Vàng. Mẫu "POS Next Receipt"
-					# là mẫu của dự án Bách Hóa Bưu Điện, đã gỡ (PM-TASK-00116).
-					"POS Ha Vang Receipt",
+					"POS Next Receipt",
+					"POS Retail Receipt",
 				]
 			]
 		]

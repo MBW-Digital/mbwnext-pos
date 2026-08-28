@@ -103,7 +103,7 @@ def tinh_so_du_vi(customer, company=None, exclude_invoice=None):
 	"""Số dư ví, tính từ bảng Wallet Transaction chứ KHÔNG từ sổ cái.
 
 	Trước đây số dư đọc bằng `get_balance_on()` trên tài khoản ví. Cách đó chỉ
-	đúng khi ví có tài khoản riêng — mà ở Hạ Vàng ví dùng chung 131 với công nợ
+	đúng khi ví có tài khoản riêng — mà thực tế ví hay dùng chung 131 với công nợ
 	bán hàng, nên điểm bị tiền hàng khách còn nợ lấn át và 749 ví hiển thị số dư
 	0 (PM-TASK-00106). Từ khi bỏ bút toán lúc tích điểm thì sổ cái không còn dấu
 	vết nào của ví nữa, đọc sổ chắc chắn ra 0.

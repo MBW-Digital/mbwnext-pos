@@ -263,7 +263,7 @@ function fmtDate(dateStr) {
  * Các trường đầu/cuối phiếu, gom một chỗ cho cả bản in text lẫn bản in ảnh.
  *
  * Lấy đúng những trường mà mẫu in "HÓA ĐƠN BÁN LẺ" của hệ thống dùng
- * (pos_next/templates/print_formats/pos_ha_vang_receipt.html), để in thẳng
+ * (pos_next/templates/print_formats/pos_retail_receipt.html), để in thẳng
  * xuống máy in nhiệt ra cùng một tờ với in qua trình duyệt.
  */
 function receiptHeaderFields(inv) {
@@ -449,8 +449,8 @@ const BITMAP_THRESHOLD = 80   // 31 % luminance → black
 const BITMAP_FONT_80   = 26   // px, for 80 mm paper
 const BITMAP_FONT_58   = 22   // px, for 58 mm paper
 // Logo lấy theo TỪNG CỬA HÀNG (POS Profile > Logo POS), giống mẫu in của hệ
-// thống. Trước đây đường dẫn logo bị gắn cứng vào ảnh của dự án Bách Hóa Bưu
-// Điện, nên cửa hàng Hạ Vàng nào ghép máy in USB là in ra logo của khách khác
+// thống. Trước đây đường dẫn logo bị gắn cứng vào ảnh của một dự án cụ thể,
+// nên cửa hàng nào ghép máy in USB là in ra logo của khách khác
 // (PM-TASK-00116).
 let _receiptLogoImage = null
 let _receiptLogoUrl = null

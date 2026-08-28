@@ -1,7 +1,7 @@
 # POS Next (MBW Next POS)
 
 App Frappe/ERPNext POS mã nguồn mở: giao diện bán hàng Vue 3 SPA (Vite + Tailwind), real-time stock via Socket.IO, offline mode (Service Worker + IndexedDB), quản lý ca/shift, ví khách hàng (wallet), coupon/offer/promotion, hóa đơn điện tử (eInvoice) self-service, thanh toán Sepay QR, Pricing Rule mở rộng (time window + warehouse), loyalty program (với loại trừ item), branding bảo vệ, và in hóa đơn (receipt print).
-Nhánh: `ha_vang`. Repo: `MBW-Digital/mbwnext-pos`.
+Nhánh chính: `develop`. Repo: `MBW-Digital/mbwnext-pos`.
 
 ## Quy ước bắt buộc (.clauderc)
 
@@ -83,7 +83,7 @@ pos_next/
 │   ├── translations/                  # Bản dịch
 │   ├── fixtures/
 │   │   ├── custom_field.json          # Custom Field
-│   │   ├── print_format.json          # POS Next Receipt, POS HA Vang Receipt
+│   │   ├── print_format.json          # POS Next Receipt, POS Retail Receipt
 │   │   ├── role.json                  # POSNext Cashier
 │   │   └── custom_docperm.json        # Quyền cho POSNext Cashier
 │   ├── realtime_events.py             # Socket.IO events: stock update, invoice created, profile updated
@@ -159,7 +159,7 @@ pos_next/
 - **website_route_rules**: `/pos/<path:app_path>` → `pos` (SPA routing)
 - **page_renderer**: `POSStaticRenderer` — serve Service Worker cho PWA
 - **jinja methods**: `pos_next.api.receipt_print`
-- **after_install / after_migrate**: setup default print format, sync POS HA Vang Receipt
+- **after_install / after_migrate**: setup default print format, sync POS Retail Receipt
 
 ## Tính năng chính
 
@@ -208,7 +208,7 @@ pos_next/
 
 ### Build
 ```bash
-cd /home/mbw12345/ha_vang/apps/pos_next/POS
+cd /home/mbw12345/test_core/apps/pos_next/POS
 yarn install
 yarn build          # Build production → pos_next/public/
 yarn dev            # Dev server (HMR)
@@ -232,7 +232,7 @@ Cũng có fixtures module-level: `Custom Field` theo module `POS Next`.
 ## Cách chạy
 
 ```bash
-cd /home/mbw12345/ha_vang
+cd /home/mbw12345/test_core
 bench start                          # Backend dev server
 bench migrate                        # Migrate + fixtures + print format sync
 bench build --app pos_next           # Build backend assets
@@ -279,7 +279,7 @@ bill, toàn bộ CK bill dồn cho phần giữ lại, nên dòng trả phải h
 Khi phần giữ lại **không còn đủ** `min_amt`, `needsKmReclaim` bật và số KM bị thu hồi đi
 qua `write_off_amount` — đó mới là chỗ duy nhất trừ CK bill khỏi tiền hoàn.
 
-### Hạch toán chiết khấu theo VAS (nhánh `ha_vang`, PM-TASK-00023)
+### Hạch toán chiết khấu theo VAS (PM-TASK-00023)
 
 `CustomSalesInvoice` ghi đè 2 chỗ trong luồng sinh bút toán:
 
@@ -288,15 +288,17 @@ qua `write_off_amount` — đó mới là chỗ duy nhất trừ CK bill khỏi 
    `enable_discount_accounting`, ERPNext đặt trường này là **bắt buộc** mỗi khi hoá đơn có
    `discount_amount`, thu ngân phải gõ tay từng hoá đơn.
 2. `tach_thue_khoi_khuyen_mai()` — gọi từ `get_gl_entries()`, tách phần thuế GTGT ra khỏi
-   khoản khuyến mại tổng đơn.
+   khoản khuyến mại tổng đơn. **Tuỳ chọn**: chỉ chạy khi công ty bật cờ
+   `Company.pos_next_tach_thue_khuyen_mai` ("Tách thuế GTGT khỏi khuyến mại (VAS)").
+   Công ty không bật giữ nguyên hành vi gốc của ERPNext.
 
 **Vì sao cần (2).** ERPNext gốc đưa NGUYÊN khoản khuyến mại (đã gồm thuế) vào TK 521 rồi
 ghi phải thu theo số đã trừ khuyến mại. Kết quả: 511 và 521 mỗi bên bị thổi lên đúng phần
-thuế nằm trong chiết khấu — riêng tháng 08/2026 của Hạ Vàng là **232 triệu mỗi bên**. Doanh
+thuế nằm trong chiết khấu — riêng tháng 08/2026 ở site phát hiện lỗi là **232 triệu mỗi bên**. Doanh
 thu thuần vẫn đúng vì hai khoản triệt tiêu, nhưng doanh thu gộp và các khoản giảm trừ trên
 báo cáo đều sai, và sổ chi tiết công nợ không thấy khoản khuyến mại đã giảm cho khách.
 
-**Cách hạch toán (chị Hằng chốt 18/08 — "Cách 2").** Ví dụ hoá đơn AM2607290001, khuyến mại
+**Cách hạch toán (kế toán khách hàng chốt 18/08 — "Cách 2").** Ví dụ một hoá đơn, khuyến mại
 590.697 gồm 43.755 tiền thuế:
 
 ```
@@ -322,7 +324,7 @@ sau chiết khấu rồi dồn chênh vào 511) **đã bị gỡ** ở commit `a
 
 ⚠ Đặt ở `pos_next` vì Frappe 15 chưa có `extend_doctype_class`, mà `override_doctype_class`
 của Sales Invoice đã do app này giữ. Đây là **logic kế toán VAS nằm nhờ trong app POS** —
-nếu sau này muốn áp dụng cho mọi khách thì chuyển sang `mbwnext_advanced_accounting`.
+nơi đúng của nó là `mbwnext_advanced_accounting`; trước mắt tắt mặc định và bật theo công ty.
 
 ### Phiếu trả POS: đừng để ERPNext xoá bảng thanh toán (PM-TASK-00100)
 
@@ -347,7 +349,7 @@ chưa consolidated — nên bản vá không đụng gì tới đơn bán thư�
 ### Tài khoản ví phải thuộc đúng công ty (PM-TASK-00059)
 
 `POS Settings.wallet_account` từng nhận cả tài khoản của công ty khác. Ví sinh ra theo đó
-mang tài khoản sai, nên **ERPNext chặn HUỶ mọi hoá đơn có phát sinh ví**. Ở Hạ Vàng: 34/36
+mang tài khoản sai, nên **ERPNext chặn HUỶ mọi hoá đơn có phát sinh ví**. Ở site phát hiện lỗi: 34/36
 Cài đặt POS khai nhầm, kéo theo 887 ví và 1.139 bút toán.
 
 Hai chốt chặn: `POSSettings.validate_wallet_account_company()` không cho lưu tài khoản khác
@@ -361,8 +363,12 @@ Phần còn lại (ví dùng chung TK 131) đã xử lý ở PM-TASK-00106 — x
 
 ### Ví là sổ theo dõi, không phải sổ kế toán (PM-TASK-00106)
 
-Kế toán chốt (Thắng + chị Hằng, 19/08): **điểm tích chưa tiêu thì không ghi sổ**. Điểm có
-thể không bao giờ được dùng, ghi chi phí lúc tích là ghi cho khoản chưa chắc phát sinh.
+Có kế toán chốt: **điểm tích chưa tiêu thì không ghi sổ**. Điểm có thể không bao giờ được
+dùng, ghi chi phí lúc tích là ghi cho khoản chưa chắc phát sinh.
+
+⚠ Đây là **tuỳ chọn theo công ty**, không phải hành vi mặc định. Bật cờ
+`Company.pos_next_khong_ghi_so_khi_tich_diem` ("Không ghi sổ khi tích điểm ví") mới áp dụng;
+công ty không bật vẫn ghi Nợ tài khoản nguồn / Có tài khoản ví ngay lúc tích như trước.
 
 Vòng đời đúng, chi phí chỉ xuất hiện MỘT lần:
 
@@ -373,7 +379,7 @@ Khách tiêu điểm để trả tiền hàng → hoá đơn ghi Nợ 6418 - Chi
 
 Ba chỗ trong mã phải khớp nhau, sửa một chỗ mà quên chỗ khác là hỏng ngay:
 
-1. `WalletTransaction.on_submit()` không sinh bút toán nữa. `on_cancel()` vẫn đảo bút toán
+1. `WalletTransaction.on_submit()` không sinh bút toán khi cờ bật. `on_cancel()` vẫn đảo bút toán
    **cũ** nếu chứng từ đó còn dấu vết trên sổ — đảo theo những gì đã ghi
    (`make_reverse_gl_entries`) chứ không dựng lại từ cấu hình hiện tại, vì cấu hình đã đổi.
 2. `tinh_so_du_vi()` (doctype `Wallet`) tính số dư = tổng `Wallet Transaction` đã ghi sổ
@@ -397,8 +403,8 @@ Hai ô cấu hình phải sửa tay, mã không tự làm:
 khách hàng thân thiết đổi khỏi 6238 (tài khoản đó nằm dưới 623 - Chi phí sử dụng máy thi
 công, và đang kiêm luôn tài khoản chênh lệch làm tròn của công ty).
 
-Bút toán tích điểm đã trót ghi do patch `v1_14_1/bo_but_toan_tich_diem.py` đảo — dò theo
-chứng từ ví còn dấu trên sổ, chỉ đụng loại `Loyalty Credit`, sao lưu ra file tạm ngoài repo
+Bút toán tích điểm đã trót ghi do patch `v1_14_1/bo_but_toan_tich_diem.py` đảo — **chỉ cho
+công ty đã bật cờ**, dò theo chứng từ ví còn dấu trên sổ, chỉ đụng loại `Loyalty Credit`, sao lưu ra file tạm ngoài repo
 trước khi ghi, tự hoàn tác nếu sổ lệch sau khi đảo, và tính lại số dư đã lưu trên từng ví.
 
 - Frontend Vue 3 nằm trong `POS/` — build riêng bằng `yarn build`, output vào `pos_next/public/`
@@ -408,4 +414,4 @@ trước khi ghi, tự hoàn tác nếu sổ lệch sau khi đảo, và tính l�
 - Real-time events broadcast cho tất cả users (`user=None`) — POS terminals tự filter theo warehouse
 - `mbwnext_advanced_selling` override 4 API của app này (`get_items`, `search_by_barcode`, `get_item_details`, `validate_cart_items`) — thay đổi signature sẽ break app selling
 - Branding monitor chạy hourly/daily/monthly — giám sát tampering
-- Print format `POS HA Vang Receipt` sync tự động khi migrate
+- Print format `POS Retail Receipt` sync tự động khi migrate

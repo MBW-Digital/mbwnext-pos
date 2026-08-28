@@ -1,4 +1,4 @@
-{%- set R = ha_vang_receipt_meta_for_jinja(doc) -%}
+{%- set R = retail_receipt_meta_for_jinja(doc) -%}
 {%- set fmt = format_receipt_amount -%}
 <style>
 	@page { size: 80mm auto; margin: 0mm; }
@@ -106,7 +106,7 @@
 	}
 </style>
 
-{%- macro ha_vang_receipt_copy(copy_label) -%}
+{%- macro retail_receipt_copy(copy_label) -%}
 <div class="receipt-copy">
 {% if R.pos_logo_url %}
 <div class="receipt-header">
@@ -205,8 +205,8 @@
 {%- endmacro -%}
 
 {% if R.print_in_duplicate %}
-{{ ha_vang_receipt_copy("Liên 1: Khách hàng") }}
-{{ ha_vang_receipt_copy("Liên 2: Lưu hồ sơ") }}
+{{ retail_receipt_copy("Liên 1: Khách hàng") }}
+{{ retail_receipt_copy("Liên 2: Lưu hồ sơ") }}
 {% else %}
-{{ ha_vang_receipt_copy("") }}
+{{ retail_receipt_copy("") }}
 {% endif %}

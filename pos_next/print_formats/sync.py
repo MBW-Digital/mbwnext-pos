@@ -21,10 +21,16 @@ def sync_print_format_from_template(
 	name: str,
 	template_filename: str,
 	*,
-	doc_type: str = "POS Invoice",
+	doc_type: str = "Sales Invoice",
 	module: str = "POS Next",
 ):
-	"""Create or update a Jinja Print Format from a template file."""
+	"""Create or update a Jinja Print Format from a template file.
+
+	`doc_type` mặc định là Sales Invoice: POS của app này tạo Sales Invoice chứ
+	không phải POS Invoice. Khai nhầm doctype thì mẫu vẫn in được qua /printview
+	(Frappe không chặn), nhưng KHÔNG hiện trong danh sách mẫu in của Sales
+	Invoice trên desk, nên kế toán không chọn được.
+	"""
 	path = _template_path(template_filename)
 	if not os.path.exists(path):
 		return
@@ -54,5 +60,5 @@ def sync_print_format_from_template(
 	doc.insert(ignore_permissions=True)
 
 
-def sync_pos_ha_vang_receipt():
-	sync_print_format_from_template("POS Ha Vang Receipt", "pos_ha_vang_receipt.html")
+def sync_pos_retail_receipt():
+	sync_print_format_from_template("POS Retail Receipt", "pos_retail_receipt.html")

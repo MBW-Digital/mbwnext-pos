@@ -290,7 +290,7 @@ def get_or_create_wallet(customer, company, pos_settings=None):
 	# tài khoản đó. Hậu quả: bút toán của công ty này rơi vào tài khoản của công
 	# ty kia, và tới lúc HUỶ hoá đơn thì ERPNext chặn với thông báo "Account ...
 	# does not belong to Company ..." — kế toán không huỷ được đơn sai
-	# (PM-TASK-00059: 34/36 Cài đặt POS của Hạ Vàng khai tài khoản của Thái Tuấn,
+	# (PM-TASK-00059: 34/36 Cài đặt POS khai tài khoản của công ty khác,
 	# kéo theo 887 ví và 975 bút toán sai sổ).
 	if wallet_account:
 		cty_taikhoan = frappe.db.get_value("Account", wallet_account, "company")

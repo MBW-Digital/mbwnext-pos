@@ -67,3 +67,6 @@ dev-dist/
 .playwright-mcp/*
 TODO.md
 .claude/settings.json
+
+# Vite writes these while resolving the config; never commit them
+POS/vite.config.js.timestamp-*.mjs

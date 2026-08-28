@@ -378,7 +378,7 @@ def attach_image_src_for_print(file_path: str | None, max_bytes: int = 2 * 1024 
 
 
 def item_barcode_for_receipt(item) -> str:
-	"""Barcode / mã vạch dòng hàng cho phiếu HA VANG."""
+	"""Barcode / mã vạch dòng hàng cho phiếu bán lẻ."""
 	barcode = getattr(item, "barcode", None)
 	if barcode is None and isinstance(item, dict):
 		barcode = item.get("barcode")
@@ -449,8 +449,8 @@ def item_discount_percent_for_receipt(item) -> float:
 	return 0.0
 
 
-def ha_vang_receipt_meta_for_jinja(doc):
-	"""Metadata cho Print Format POS HA Vang Receipt."""
+def retail_receipt_meta_for_jinja(doc):
+	"""Metadata cho Print Format POS Retail Receipt."""
 	inv = doc.as_dict()
 	base = enrich_invoice_dict_for_print(inv)
 	profile = _pos_profile_store_fields(inv.get("pos_profile"))
@@ -501,6 +501,26 @@ def ha_vang_receipt_meta_for_jinja(doc):
 		store_hours="9h00 - 22h00",
 		salesperson=salesperson,
 	)
+
+
+def receipt_logo_url_for_print(doc=None) -> str:
+	"""Logo phiếu in, lấy theo TỪNG CỬA HÀNG (POS Profile > Logo POS).
+
+	Bản cũ trả về một đường dẫn GẮN CỨNG logo của một dự án cụ thể, nên mọi khách
+	khác in ra logo của khách đó (PM-TASK-00116). Giờ đọc ô `custom_pos_logo` của
+	POS Profile trên hoá đơn. Cửa hàng chưa tải logo lên thì phiếu không có logo
+	— đúng hơn là in nhầm logo người khác.
+	"""
+	pos_profile = None
+	if doc is not None:
+		pos_profile = getattr(doc, "pos_profile", None)
+		if not pos_profile and isinstance(doc, dict):
+			pos_profile = doc.get("pos_profile")
+	if not pos_profile:
+		return ""
+
+	logo = frappe.db.get_value("POS Profile", pos_profile, "custom_pos_logo")
+	return attach_image_src_for_print(logo) if logo else ""
 
 
 def invoice_meta_for_jinja(doc):

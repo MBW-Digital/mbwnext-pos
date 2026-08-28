@@ -6,7 +6,7 @@ tài khoản của công ty kia. Hậu quả nặng nhất không phải sổ s�
 là điểm tích luỹ vài đồng mỗi giao dịch — mà là ERPNext chặn HUỶ mọi hoá đơn
 có phát sinh ví, vì tài khoản không thuộc công ty của chứng từ.
 
-Ở Hạ Vàng: 1.139 bút toán, 1.139 hoá đơn không huỷ được, 750 khách.
+Quy mô đã gặp: 1.139 bút toán, 1.139 hoá đơn không huỷ được, 750 khách.
 Không thể sửa bằng phiếu kế toán điều chỉnh — ERPNext chặn đúng tài khoản đó
 trong phiếu của công ty kia, tức chính cái chặn đang gây lỗi. Nên phải đưa bút
 toán về đúng tài khoản, giữ nguyên số tiền, khách hàng và ngày hạch toán.

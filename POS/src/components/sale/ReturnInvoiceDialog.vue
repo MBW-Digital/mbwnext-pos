@@ -497,8 +497,9 @@
 						</p>
 					</div>
 
-					<!-- Add to Customer Credit Option (only for non-credit sales) -->
-					<div v-if="!isOriginalCreditSale" class="bg-emerald-50 rounded-xl p-4 border border-emerald-200 mb-4">
+					<!-- Add to Customer Credit Option (only for non-credit sales, and only
+					     when that credit can actually be spent at payment time) -->
+					<div v-if="!isOriginalCreditSale && canUseCustomerCredit" class="bg-emerald-50 rounded-xl p-4 border border-emerald-200 mb-4">
 						<label class="flex items-start gap-3 cursor-pointer">
 							<input
 								type="checkbox"
@@ -515,7 +516,7 @@
 					</div>
 
 					<!-- Customer Credit Confirmation Notice -->
-					<div v-if="addToCustomerCredit && !isOriginalCreditSale" class="bg-emerald-100 rounded-xl p-4 border border-emerald-300 mb-4 text-start">
+					<div v-if="addToCustomerCredit && !isOriginalCreditSale && canUseCustomerCredit" class="bg-emerald-100 rounded-xl p-4 border border-emerald-300 mb-4 text-start">
 						<div class="flex items-center gap-2 mb-2">
 							<FeatherIcon name="credit-card" class="w-5 h-5 text-emerald-600" />
 							<h4 class="text-sm font-bold text-emerald-900">{{ __('Credit Balance') }}</h4>
@@ -858,11 +859,13 @@ import {
 	roundCurrency,
 } from "@/utils/currency"
 import { getInvoiceStatusColor } from "@/utils/invoice"
+import { usePOSSettingsStore } from "@/stores/posSettings"
 import { Button, Dialog, FeatherIcon, createResource } from "frappe-ui"
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue"
 
 const { showSuccess, showError, showWarning } = useToast()
 const { isOffline } = useOffline()
+const posSettingsStore = usePOSSettingsStore()
 
 // ============================================
 // Constants (hoisted for performance)
@@ -905,6 +908,24 @@ const submitError = ref("")
 const isSubmitting = ref(false)
 // When true, return amount is added to customer credit balance instead of cash refund
 const addToCustomerCredit = ref(false)
+
+// Chỉ được đẩy tiền trả vào số dư khách khi số dư đó TIÊU ĐƯỢC ở màn hình thanh toán.
+// PaymentDialog chỉ hiện nút "Credit Balance" khi allowCreditSale hoặc
+// allowCustomerCreditPayment bật (xem customerCreditEnabled trong PaymentDialog.vue).
+// Tắt cả hai mà vẫn cho tick thì phiếu trả lưu với bảng thanh toán rỗng, số dư âm nằm
+// lại trên công nợ khách và thu ngân KHÔNG có cách nào tiêu — đúng vết đã xảy ra ở
+// Hạ Vàng: đổi hàng xong vẫn thu đủ tiền đơn mới, treo công nợ và sai tài khoản
+// trung gian (PM-TASK-00135, PM-TASK-00186).
+const canUseCustomerCredit = computed(
+	() =>
+		posSettingsStore.allowCreditSale ||
+		posSettingsStore.allowCustomerCreditPayment,
+)
+
+// Tắt tính năng giữa chừng thì bỏ tick đang chọn, tránh lưu phiếu trả rỗng thanh toán.
+watch(canUseCustomerCredit, (choPhep) => {
+	if (!choPhep) addToCustomerCredit.value = false
+})
 
 // KM reclaim state (Cách C: thu hồi KM khi đơn không đủ điều kiện sau khi trả)
 const transactionRuleData = ref(null)   // {rule_name, min_amount, header_discount_amount, original_subtotal, discount_account}

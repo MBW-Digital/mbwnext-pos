@@ -355,11 +355,11 @@
 
 									<FormControl
 										type="select"
-										:label="__('Apply Discount On')"
+										:label="__('Calculate Discount On')"
 										v-model="form.apply_on"
 										:options="[
-											{ label: __('Grand Total'), value: 'Grand Total' },
-											{ label: __('Net Total'), value: 'Net Total' }
+											{ label: applyOnLabel('Grand Total'), value: 'Grand Total' },
+											{ label: applyOnLabel('Net Total'), value: 'Net Total' }
 										]"
 										required
 									/>
@@ -405,10 +405,10 @@
 									<p class="text-sm text-gray-700">
 										<strong>{{ __('Current Discount:') }}</strong>
 										<span v-if="couponDetails.discount_type === 'Percentage'">
-											{{ __('{0}% off {1}', [Number(couponDetails.discount_percentage).toFixed(2), couponDetails.apply_on]) }}
+											{{ __('{0}% off {1}', [Number(couponDetails.discount_percentage).toFixed(2), applyOnLabel(couponDetails.apply_on)]) }}
 										</span>
 										<span v-else>
-											{{ __('{0} off {1}', [formatCurrency(couponDetails.discount_amount), couponDetails.apply_on]) }}
+											{{ __('{0} off {1}', [formatCurrency(couponDetails.discount_amount), applyOnLabel(couponDetails.apply_on)]) }}
 										</span>
 										<span v-if="couponDetails.min_amount" class="ms-2">
 											{{ __('(Min: {0})', [formatCurrency(couponDetails.min_amount)]) }}
@@ -572,6 +572,15 @@ const { showSuccess, showError, showWarning } = useToast()
 const customerStore = useCustomerSearchStore()
 const { filteredCustomers, loading: customerLoading } = storeToRefs(customerStore)
 const posSettingsStore = usePOSSettingsStore()
+
+// Giá trị lưu trên coupon vẫn là "Grand Total" / "Net Total" (không đổi dữ liệu), chỉ đổi nhãn hiển thị.
+// Tên cũ dễ nhầm: "Grand Total" thực ra tính % trên GIÁ NIÊM YẾT trước khuyến mại, còn "Net Total"
+// mới là giá cuối cùng sau khuyến mại dòng (đã gồm VAT) — xem PM-TASK-00259.
+function applyOnLabel(value) {
+	if (value === "Net Total") return __("Price after promotion (VAT included)")
+	if (value === "Grand Total") return __("List price (before promotion)")
+	return value || ""
+}
 
 const props = defineProps({
 	company: String,

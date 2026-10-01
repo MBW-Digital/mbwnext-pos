@@ -36,6 +36,17 @@ frappe.ui.form.on("POS Coupon", {
 		frm.refresh_field("coupon_code");
 	},
 	refresh: function (frm) {
+		// Giá trị lưu vẫn là Grand Total / Net Total; chỉ đổi nhãn cho đúng nghĩa (PM-TASK-00259).
+		frm.set_df_property("apply_on", "label", __("Calculate Discount On"));
+		frm.set_df_property("apply_on", "options", [
+			{ label: __("List price (before promotion)"), value: "Grand Total" },
+			{ label: __("Price after promotion (VAT included)"), value: "Net Total" },
+		]);
+		frm.set_df_property(
+			"apply_on",
+			"description",
+			__("The amount the discount percentage is calculated on. 'Price after promotion' is what the customer would pay before this coupon; 'List price' ignores item promotions already applied.")
+		);
 		if (frm.doc.pricing_rule) {
 			frm.add_custom_button(__("Add/Edit Coupon Conditions"), function () {
 				frappe.set_route("Form", "POS Offer", frm.doc.pos_offer);

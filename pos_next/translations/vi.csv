@@ -1722,3 +1722,7 @@
 "POS Coupon(s) applied to this invoice, with the discount amount each one contributed.","Các coupon POS đã áp dụng cho hóa đơn này, kèm số tiền giảm của từng coupon.",""
 "Territory is required","Vui lòng chọn khu vực",""
 "Only {0} left in stock for ""{1}"". Cannot set quantity to {2}.","Chỉ còn {0} trong kho cho ""{1}"". Không thể đặt số lượng {2}.",""
+"Price after promotion (VAT included)","Giá sau khuyến mại (đã gồm VAT)",""
+"List price (before promotion)","Giá niêm yết (trước khuyến mại)",""
+"Calculate Discount On","Tính chiết khấu trên",""
+"The amount the discount percentage is calculated on. 'Price after promotion' is what the customer would pay before this coupon; 'List price' ignores item promotions already applied.","Số tiền dùng làm gốc để nhân phần trăm giảm. 'Giá sau khuyến mại' là số khách phải trả trước khi dùng coupon này; 'Giá niêm yết' không tính các khuyến mại dòng đã áp.",""

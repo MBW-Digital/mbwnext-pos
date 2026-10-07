@@ -39,10 +39,13 @@ def ensure_self_service_einvoice_token(sales_invoice_name: str) -> None:
 	si = frappe.db.get_value(
 		"Sales Invoice",
 		sales_invoice_name,
-		["company", "is_pos", "creation", "pos_self_service_einvoice_token", "created_einvoice", "docstatus"],
+		["company", "is_pos", "is_return", "creation", "pos_self_service_einvoice_token", "created_einvoice", "docstatus"],
 		as_dict=True,
 	)
 	if not si or si.docstatus != 1:
+		return
+	# Phiếu trả không xuất HĐĐT theo kiểu khách tự nhập (PM-FEAT-00060)
+	if cint(si.is_return):
 		return
 	if not cint(si.is_pos):
 		return
@@ -65,7 +68,10 @@ def ensure_self_service_einvoice_token(sales_invoice_name: str) -> None:
 		},
 		update_modified=False,
 	)
-	frappe.db.commit()
+	# Đổi hàng tạo 2 chứng từ trong MỘT transaction (pos_next.api.exchange). Commit ở
+	# đây sẽ chốt phiếu trả trước khi HĐ mới kịp lưu: HĐ mới lỗi thì phiếu trả vẫn còn.
+	if not frappe.flags.get("pos_next_dang_doi_hang"):
+		frappe.db.commit()
 
 
 def _invoice_names_from_token(token: str) -> Optional[str]:

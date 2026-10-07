@@ -703,6 +703,13 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
 
     invoice_info = invoice_data[0]
 
+    # Cửa hàng tắt "Cho phép trả hàng" thì chặn ở server (PM-FEAT-00060, H3).
+    # Trước đây cờ chỉ nằm trong cấu hình, không chỗ nào đọc.
+    if invoice_info.pos_profile and not cint(
+        frappe.db.get_value("POS Settings", {"pos_profile": invoice_info.pos_profile}, "allow_return")
+    ):
+        return {"valid": False, "message": _("Returns are disabled for this store.")}
+
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
         return_validity_days = cint(
@@ -1034,8 +1041,27 @@ def update_invoice(data):
         from pos_next.controllers.python.sales_invoice import apply_selling_item_tax_templates
         capture_pos_authoritative_discounts(invoice_doc)
 
+        # Kho bên gọi chỉ định cho từng dòng PHIẾU TRẢ (kho đã xuất, hoặc kho hàng lỗi theo
+        # lý do trả — PM-FEAT-00060). set_missing_values() → set_pos_fields() ghi đè kho
+        # mọi dòng bằng kho của POS Profile, nên giữ lại để đặt về sau.
+        kho_tra = (
+            [row.get("warehouse") for row in invoice_doc.get("items") or []]
+            if invoice_doc.get("is_return")
+            else []
+        )
+
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
+
+        for row, kho in zip(invoice_doc.get("items") or [], kho_tra):
+            if kho:
+                row.warehouse = kho
+
+        # set_missing_values() chép ignore_pricing_rule từ POS Profile, đè giá trị bên gọi
+        # gửi lên. Đổi hàng (pos_next.api.exchange) cần tắt KM tự áp vì KM tổng đơn đã
+        # tính trên giỏ gộp — nên chỉ khi bên gọi CHỦ ĐỘNG gửi 1 mới giữ lại.
+        if cint(data.get("ignore_pricing_rule")):
+            invoice_doc.ignore_pricing_rule = 1
 
         # Dựng bảng `taxes` TRƯỚC khi tính tổng. ERPNext bỏ qua bước này khi
         # is_pos=1, nên chỗ duy nhất dựng nó là apply_selling_item_tax_templates()
@@ -1606,8 +1632,16 @@ def submit_invoice(invoice=None, data=None):
                     )
                     write_off_limit = flt(pos_profile_doc.write_off_limit or 0)
 
-                    # Validate write-off amount is within limit
-                    if write_off_limit > 0 and write_off_amount > write_off_limit:
+                    # Validate write-off amount is within limit.
+                    # Giới hạn này cho thu ngân xoá tiền lẻ. Thu hồi KM khi đổi / trả hàng
+                    # do pos_next.api.exchange tính và tự đối chiếu, không chịu giới hạn
+                    # đó — trước đây cửa hàng đặt limit 1đ là KM không bao giờ thu hồi được,
+                    # và lỗi bị nuốt ngay bên dưới (PM-FEAT-00060).
+                    if (
+                        write_off_limit > 0
+                        and write_off_amount > write_off_limit
+                        and not frappe.flags.get("pos_next_dang_doi_hang")
+                    ):
                         frappe.throw(
                             _("Write-off amount {0} exceeds limit {1}").format(
                                 write_off_amount, write_off_limit
@@ -2884,250 +2918,6 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=Non
         frappe.throw(_("All items from this invoice have already been returned"))
 
     return return_dict
-
-
-@frappe.whitelist()
-def search_invoices_for_return(
-    invoice_name=None,
-    company=None,
-    customer_name=None,
-    customer_id=None,
-    mobile_no=None,
-    from_date=None,
-    to_date=None,
-    min_amount=None,
-    max_amount=None,
-    page=1,
-    doctype="Sales Invoice",
-):
-    """Search for invoices that can be returned with pagination.
-
-    Supports filtering by:
-    - invoice_name: Partial match on invoice number
-    - company: Exact match
-    - customer_name, customer_id, mobile_no: Partial match (OR condition)
-    - from_date, to_date: Date range
-    - min_amount, max_amount: Amount range
-
-    Returns invoices with their items adjusted to show remaining returnable quantities.
-    """
-    from frappe.query_builder.functions import Sum, Abs, Count
-
-    page = cint(page) or 1
-    page_length = 100
-    start = (page - 1) * page_length
-
-    # Build main invoice query
-    si = frappe.qb.DocType(doctype)
-
-    # Start building the query
-    query = (
-        frappe.qb.from_(si)
-        .select(
-            si.name,
-            si.customer,
-            si.customer_name,
-            si.posting_date,
-            si.grand_total,
-            si.status
-        )
-        .where(
-            (si.docstatus == 1)
-            & (si.is_return == 0)
-        )
-        .orderby(si.posting_date, order=frappe.qb.desc)
-        .orderby(si.name, order=frappe.qb.desc)
-        .limit(page_length)
-        .offset(start)
-    )
-
-    # Add company filter
-    if company:
-        query = query.where(si.company == company)
-
-    # Add invoice name filter
-    if invoice_name:
-        query = query.where(si.name.like(f"%{invoice_name}%"))
-
-    # Add date range filters
-    if from_date and to_date:
-        query = query.where(si.posting_date.between(from_date, to_date))
-    elif from_date:
-        query = query.where(si.posting_date >= from_date)
-    elif to_date:
-        query = query.where(si.posting_date <= to_date)
-
-    # Add amount filters
-    if min_amount and max_amount:
-        query = query.where(si.grand_total.between(float(min_amount), float(max_amount)))
-    elif min_amount:
-        query = query.where(si.grand_total >= float(min_amount))
-    elif max_amount:
-        query = query.where(si.grand_total <= float(max_amount))
-
-    # Search customers matching any of the provided criteria (OR logic)
-    if customer_name or customer_id or mobile_no:
-        cust = frappe.qb.DocType("Customer")
-        cust_query = frappe.qb.from_(cust).select(cust.name).limit(100)
-
-        # Build OR conditions for customer search
-        cust_conditions = []
-        if customer_name:
-            cust_conditions.append(cust.customer_name.like(f"%{customer_name}%"))
-        if customer_id:
-            cust_conditions.append(cust.name.like(f"%{customer_id}%"))
-        if mobile_no:
-            cust_conditions.append(cust.mobile_no.like(f"%{mobile_no}%"))
-
-        # Combine with OR
-        if cust_conditions:
-            combined_condition = cust_conditions[0]
-            for cond in cust_conditions[1:]:
-                combined_condition = combined_condition | cond
-            cust_query = cust_query.where(combined_condition)
-
-        customers = cust_query.run(as_dict=True)
-        customer_ids = [c.name for c in customers]
-
-        if customer_ids:
-            query = query.where(si.customer.isin(customer_ids))
-        else:
-            return {"invoices": [], "has_more": False}
-
-    # Execute main query
-    invoices_list = query.run(as_dict=True)
-
-    if not invoices_list:
-        return {"invoices": [], "has_more": False}
-
-    invoice_names = [inv["name"] for inv in invoices_list]
-
-    # Count total matching invoices for pagination
-    count_query = (
-        frappe.qb.from_(si)
-        .select(Count(si.name).as_("total"))
-        .where(
-            (si.docstatus == 1)
-            & (si.is_return == 0)
-        )
-    )
-
-    # Re-apply the same filters for count
-    if company:
-        count_query = count_query.where(si.company == company)
-    if invoice_name:
-        count_query = count_query.where(si.name.like(f"%{invoice_name}%"))
-    if from_date and to_date:
-        count_query = count_query.where(si.posting_date.between(from_date, to_date))
-    elif from_date:
-        count_query = count_query.where(si.posting_date >= from_date)
-    elif to_date:
-        count_query = count_query.where(si.posting_date <= to_date)
-    if min_amount and max_amount:
-        count_query = count_query.where(si.grand_total.between(float(min_amount), float(max_amount)))
-    elif min_amount:
-        count_query = count_query.where(si.grand_total >= float(min_amount))
-    elif max_amount:
-        count_query = count_query.where(si.grand_total <= float(max_amount))
-    if customer_name or customer_id or mobile_no:
-        if customer_ids:
-            count_query = count_query.where(si.customer.isin(customer_ids))
-
-    count_result = count_query.run(as_dict=True)
-    total_count = count_result[0].total if count_result else 0
-
-    # Batch fetch returned quantities for all invoices in current page
-    ret_si = frappe.qb.DocType(doctype)
-    ret_item = frappe.qb.DocType(f"{doctype} Item")
-
-    returned_qty_results = (
-        frappe.qb.from_(ret_si)
-        .inner_join(ret_item).on(ret_item.parent == ret_si.name)
-        .select(
-            ret_si.return_against.as_("invoice_name"),
-            ret_item.item_code,
-            Sum(Abs(ret_item.qty)).as_("returned_qty")
-        )
-        .where(
-            (ret_si.return_against.isin(invoice_names))
-            & (ret_si.docstatus == 1)
-            & (ret_si.is_return == 1)
-        )
-        .groupby(ret_si.return_against, ret_item.item_code)
-    ).run(as_dict=True)
-
-    # Build a map of invoice_name -> {item_code: returned_qty}
-    returned_qty_map = {}
-    for row in returned_qty_results:
-        inv_name = row["invoice_name"]
-        if inv_name not in returned_qty_map:
-            returned_qty_map[inv_name] = {}
-        returned_qty_map[inv_name][row["item_code"]] = flt(row["returned_qty"])
-
-    # Batch fetch all items for invoices in current page
-    si_item = frappe.qb.DocType(f"{doctype} Item")
-    all_items = (
-        frappe.qb.from_(si_item)
-        .select(
-            si_item.parent,
-            si_item.name,
-            si_item.item_code,
-            si_item.item_name,
-            si_item.qty,
-            si_item.rate,
-            si_item.amount,
-            si_item.stock_qty,
-            si_item.uom,
-            si_item.warehouse
-        )
-        .where(si_item.parent.isin(invoice_names))
-        .orderby(si_item.idx)
-    ).run(as_dict=True)
-
-    # Group items by parent invoice
-    items_by_invoice = {}
-    for item in all_items:
-        parent = item["parent"]
-        if parent not in items_by_invoice:
-            items_by_invoice[parent] = []
-        items_by_invoice[parent].append(item)
-
-    # Process and return results
-    data = []
-    for invoice in invoices_list:
-        inv_name = invoice["name"]
-        returned_qty = returned_qty_map.get(inv_name, {})
-        items = items_by_invoice.get(inv_name, [])
-
-        # Calculate remaining quantities
-        filtered_items = []
-        for item in items:
-            already_returned = returned_qty.get(item["item_code"], 0)
-            remaining_qty = flt(item["qty"]) - already_returned
-
-            if remaining_qty > 0:
-                new_item = item.copy()
-                new_item["qty"] = remaining_qty
-                new_item["amount"] = remaining_qty * flt(item["rate"])
-                if item.get("stock_qty") and item.get("qty"):
-                    new_item["stock_qty"] = flt(item["stock_qty"]) / flt(item["qty"]) * remaining_qty
-                filtered_items.append(frappe._dict(new_item))
-
-        # Only include invoices with returnable items
-        if filtered_items or not returned_qty:
-            invoice_data = frappe._dict(invoice)
-            invoice_data["items"] = filtered_items if filtered_items else items
-            data.append(invoice_data)
-
-    # Check if there are more results
-    has_more = (start + page_length) < total_count
-
-    return {"invoices": data, "has_more": has_more}
-
-
-# ==========================================
-# Legacy/Helper Functions
-# ==========================================
 
 
 def _get_rule_discount_values(rule_doc):

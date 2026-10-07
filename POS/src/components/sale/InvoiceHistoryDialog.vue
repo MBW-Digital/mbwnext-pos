@@ -136,15 +136,6 @@
 		</template>
 	</Dialog>
 
-	<!-- Return Invoice Dialog -->
-	<ReturnInvoiceDialog
-		v-model="showReturnDialog"
-		:pos-profile="posProfile"
-		:pos-opening-shift="posOpeningShift"
-		:currency="currency"
-		:preselected-invoice="selectedInvoiceForReturn"
-		@return-created="handleReturnCreated"
-	/>
 </template>
 
 <script setup>
@@ -153,7 +144,6 @@ import { DEFAULT_CURRENCY, DEFAULT_LOCALE, formatCurrency as formatCurrencyUtil 
 import { getInvoiceStatusColor } from "@/utils/invoice"
 import { Button, Dialog, Input, createResource } from "frappe-ui"
 import { computed, onUnmounted, ref, watch } from "vue"
-import ReturnInvoiceDialog from "./ReturnInvoiceDialog.vue"
 
 const { showError } = useToast()
 
@@ -183,8 +173,6 @@ const SEARCH_DEBOUNCE_MS = 300
 let searchDebounceTimer = null
 
 // Return dialog state
-const showReturnDialog = ref(false)
-const selectedInvoiceForReturn = ref(null)
 
 // Track if we're loading more (appending) vs fresh load (replacing)
 const isLoadingMore = ref(false)
@@ -273,11 +261,6 @@ watch(show, (val) => {
 })
 
 // Clear selected invoice when return dialog closes
-watch(showReturnDialog, (val) => {
-	if (!val) {
-		selectedInvoiceForReturn.value = null
-	}
-})
 
 // Filtering happens server-side in invoicesResource — the list is already the result
 const filteredInvoices = computed(() => invoices.value)
@@ -319,16 +302,15 @@ function printInvoice(invoice) {
 }
 
 function canCreateReturn(invoice) {
-	// Can create return if:
-	// 1. Invoice is submitted (docstatus === 1)
-	// 2. Not already a return invoice
-	// 3. Status is not "Credit Note Issued" (already has a return)
+	// Đổi / trả được khi HĐ đã submit, không phải phiếu trả, và chưa từng có phiếu trả
+	// (mỗi HĐ chỉ đổi trả 1 lần — PM-FEAT-00060). Hạn đổi trả, khóa sổ… do server kiểm
+	// khi mở HĐ trong hộp thoại Đổi / Trả.
 	return invoice.docstatus === 1 && !invoice.is_return && invoice.status !== 'Credit Note Issued'
 }
 
 function openReturnModal(invoice) {
-	selectedInvoiceForReturn.value = invoice
-	showReturnDialog.value = true
+	// Hộp thoại Đổi / Trả nằm ở màn hình bán (cần giỏ hàng cho phần đổi hàng)
+	emit("create-return", invoice)
 }
 
 function handleReturnCreated(returnInvoice) {

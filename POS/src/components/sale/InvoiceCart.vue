@@ -1240,7 +1240,7 @@
 		<div class="p-1.5 sm:p-2 bg-white border-t border-gray-200">
 			<!-- Discount, excluding the coupon — the coupon has its own line below -->
 			<div
-				v-if="items.length > 0 && displayDiscountAmount > 0"
+				v-if="items.length > 0 && displayDiscountAmount > 0 && !exchangeSummary"
 				class="mb-1.5 flex items-center justify-between bg-red-50 rounded px-1.5 py-1"
 			>
 				<div class="flex items-center gap-1">
@@ -1264,7 +1264,7 @@
 
 			<!-- Coupon discount: shown separately, with its % when the coupon is percentage-based -->
 			<div
-				v-if="items.length > 0 && couponDiscountAmount > 0"
+				v-if="items.length > 0 && couponDiscountAmount > 0 && !exchangeSummary"
 				class="mb-1.5 flex items-center justify-between bg-purple-50 rounded px-1.5 py-1"
 			>
 				<div class="flex items-center gap-1 min-w-0">
@@ -1290,8 +1290,21 @@
 				}}</span>
 			</div>
 
+			<!-- Đang đổi hàng (PM-FEAT-00060): KM tổng đơn / coupon của giỏ KHÔNG áp cho lần đổi
+			     (server tính KM theo giỏ gộp), nên thay Grand Total bằng số server tính. -->
+			<div v-if="exchangeSummary" class="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-1.5">
+				<div class="flex items-center justify-between">
+					<span class="text-sm font-extrabold text-gray-900">{{ exchangeTotalLabel }}</span>
+					<span class="text-xl sm:text-2xl !font-black text-end min-w-[80px] tabular-nums leading-none"
+						:class="exchangeSummary.customer_pays > 0.5 ? 'text-red-600' : 'text-emerald-700'" style="font-weight: 900">
+						{{ formatCurrency(exchangeTotalValue) }}
+					</span>
+				</div>
+				<div class="text-[11px] text-amber-800 mt-1 text-start">{{ __("Exchange: amount after deducting the returned items. Store order promotions and coupons do not apply here.") }}</div>
+			</div>
+
 			<!-- Grand Total -->
-			<div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-2.5 mb-1.5">
+			<div v-else class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-2.5 mb-1.5">
 				<div class="flex items-center justify-between">
 					<span class="text-sm font-extrabold text-gray-900">{{
 						__("Grand Total")
@@ -1469,6 +1482,11 @@ const props = defineProps({
 		default: 0,
 	},
 	appliedCoupon: {
+		type: Object,
+		default: null,
+	},
+	// Kết quả calculate_exchange khi màn hình bán đang ở chế độ đổi hàng (null = bán thường)
+	exchangeSummary: {
 		type: Object,
 		default: null,
 	},
@@ -1855,6 +1873,17 @@ const displaySubtotal = computed(() => {
  * Không tính lại từ subtotal+tax-discount vì sẽ bỏ sót invoice-level discount (pricing rule).
  */
 const displayGrandTotal = computed(() => props.grandTotal);
+
+const exchangeTotalLabel = computed(() => {
+	const s = props.exchangeSummary || {}
+	if (s.customer_pays > 0.5) return __("Customer pays")
+	if (s.leftover > 0.5) return s.leftover_mode === "Customer Credit" ? __("Add to customer balance") : __("Refund to customer")
+	return __("Difference")
+})
+const exchangeTotalValue = computed(() => {
+	const s = props.exchangeSummary || {}
+	return s.customer_pays > 0.5 ? s.customer_pays : s.leftover || 0
+})
 
 /** Coupon discount shown on its own line, never inside the Discount line. */
 const couponDiscountAmount = computed(() =>

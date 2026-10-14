@@ -53,7 +53,7 @@
 | TC-HAPPY-02 | Đổi cùng giá (đổi size) | 1–2 như trên, lý do Không vừa size. 3. Chọn **Đổi sang hàng khác**. 4. Màn hình bán: quét 10113012. 5. Dải vàng / ô tổng của giỏ → Thanh toán → Hoàn tất | HĐ gốc, hàng mới 10113012 | Dải vàng: **Chênh lệch 0đ · Giữ KM đơn gốc**. Thanh toán: "Không phát sinh thanh toán". Tạo phiếu trả + HĐ mới, HĐ mới có CK 319.900, tổng 2.879.100, đã trả đủ | [UI] AC2610060005 + AC2610060006: chênh 0, HĐ mới CK 319.900, còn nợ 0 | Pass |
 | TC-HAPPY-03 | Đổi sang hàng đắt hơn | Như 02, hàng mới **test km 310** | 5.000.000 | Khách trả thêm **1.801.000** (= 5.000.000 − 3.199.000). Ô Tiền mặt điền sẵn 1.801.000 | [UI] (đổi nối tiếp, xem EDGE-05) AC2610060008: khách trả 1.801.000. [API] S2 giống | Pass |
 | TC-HAPPY-04 | Đổi sang hàng rẻ hơn — cửa hàng cấu hình **Hoàn tiền** | Như 02, hàng mới 10116849. Cài đặt POS: "Khi đổi sang hàng rẻ hơn" = Hoàn tiền | 1.999.000 | Trả lại khách **1.200.000**, nhập tiền hoàn theo hình thức | [API] hoàn 1.200.000 tiền mặt, phiếu trả đã chi 1.200.000, HĐ gốc còn nợ 0 | Pass |
-| TC-HAPPY-05 | Rẻ hơn — cấu hình **Ghi vào số dư khách** (cửa hàng bật bán chịu / số dư) | Như 04, đổi cấu hình | | Ghi 1.200.000 vào số dư khách, không chi tiền | [API] ghi 1.200.000 — **nhưng số dư hiện 2 lần** (xem lỗi PM-TASK-00267) | Fail (lỗi có sẵn, tách task) |
+| TC-HAPPY-05 | Rẻ hơn — cấu hình **Ghi vào số dư khách** (cửa hàng bật bán chịu / số dư) | Như 04, đổi cấu hình | | Ghi 1.200.000 vào số dư khách, không chi tiền. Ở màn thanh toán lần mua sau, khoản này hiện **1 lần** | [API] lần 1 **Fail**: số dư hiện 2 lần (HĐ gốc + phiếu trả), tách PM-TASK-00267. Đã sửa `credit_sales` đọc theo sổ công nợ. Lần 2 (14/10): 1 nguồn duy nhất là HĐ gốc 1.200.000 | Pass (sau sửa) |
 | TC-HAPPY-06 | HĐ còn nợ: giảm nợ trước | Tạo HĐ gốc chỉ trả 2.000.000 (nợ 3.758.200). Trả đôi 10119576 | | Không chi tiền. Nợ HĐ gốc còn **1.199.000** | [API] S4: không chi, nợ còn 1.199.000 | Pass |
 | TC-HAPPY-07 | Lý do **Lỗi sản phẩm** → kho hàng lỗi | Khai "Kho hàng lỗi" trên POS Profile. Trả hàng, chọn lý do Lỗi sản phẩm | | Hàng nhập vào **kho hàng lỗi**, không vào kho bán | [API] lần 1 **Fail**: nhập kho bán (ERPNext ghi đè kho). Đã sửa `update_invoice`. Lần 2: sổ kho +1 ở kho hàng lỗi | Pass (sau sửa) |
 | TC-HAPPY-08 | Thu hồi tiền ví từ điểm — ví đủ | Trả hàng của HĐ đã tích điểm vào ví | 57 điểm | Điểm HĐ gốc 57→28, trừ ví 29 (theo hệ số) | [UI]+[API] 57→28, trừ ví 29đ | Pass |
@@ -95,6 +95,9 @@ Câu thông báo tiếng Anh chép nguyên văn từ code, tiếng Việt theo `
 | TC-EDGE-07 | Hủy đổi hàng giữa chừng | Vào chế độ đổi hàng, thêm hàng, bấm **Hủy đổi hàng** | | Thoát chế độ đổi, giỏ trống, Grand Total 0 | [UI] thoát được nhưng **Grand Total −500.000** (lỗi có sẵn ở xóa giỏ). Đã sửa `useInvoice.clearCart/resetInvoice`. **Chưa thử lại trên giao diện** | Chưa chạy lại |
 | TC-EDGE-08 | Ô tổng của giỏ khi đang đổi hàng | Đổi sang hàng 5.000.000 | | Ô tổng hiện **Khách trả thêm 1.801.000**, ẩn dòng KM / coupon của giỏ | [UI] đúng | Pass |
 | TC-EDGE-09 | Quà tặng đi kèm | HĐ có quà tặng, tick hàng chính | | Quà tự tick theo, khóa | **Chưa chạy**: chưa có HĐ có quà tặng trên dữ liệu thử | Chưa chạy |
+| TC-EDGE-10 | Tiêu khoản ghi có một lần | Sau HAPPY-05, bán HĐ mới 1.999.000 cho cùng khách, thanh toán bằng số dư khách | khách 05000839 | Trừ 1.200.000, HĐ mới còn nợ 799.000; số dư khách về 0 | [API] HĐ mới còn 799.000, nguồn tiền còn lại: rỗng | Pass |
+| TC-EDGE-11 | Không tiêu lại được khoản đã tiêu | Tiếp EDGE-10, thử dùng số dư lần nữa | | Bị chặn: *Insufficient credit available from …* | [API] chặn | Pass |
+| TC-EDGE-12 | Không tiêu được theo tên phiếu trả | Gửi yêu cầu tiêu số dư với nguồn là phiếu trả (màn hình cũ / dữ liệu cũ) | | Bị chặn, số khả dụng 0 — tiền chỉ nằm ở HĐ gốc | [API] chặn: *Insufficient credit available from AC2610140002. Available: VND 0,00* | Pass |
 
 ### TC-PERM — Phân quyền
 
@@ -136,10 +139,10 @@ TC-PWA: không áp dụng. POS Next không có màn hình mobile riêng cho tín
 
 ## Kết luận
 
-- **Tổng:** 49 ca.
-  - **Pass:** 43, trong đó 4 ca Pass sau khi sửa lỗi tìm ra lúc test (HAPPY-07, EDGE-02, PERM-03,
+- **Tổng:** 52 ca.
+  - **Pass:** 47, trong đó 5 ca Pass sau khi sửa lỗi tìm ra lúc test (HAPPY-05, HAPPY-07, EDGE-02, PERM-03,
     VALID-09 cần sửa dữ liệu ĐVT). VALID-05 mới Pass ở API, nút trên giao diện chưa thử.
-  - **Fail:** 1 (HAPPY-05, lỗi có sẵn, đã tách PM-TASK-00267).
+  - **Fail:** 0. HAPPY-05 Fail ở lần 1 do lỗi có sẵn PM-TASK-00267, đã sửa ngày 14/10 và chạy lại Pass.
   - **Chưa chạy / chưa chạy lại:** 4 (VALID-10, EDGE-07, EDGE-09, REGR-06).
   - **Không áp dụng:** 1 (ISO-04).
 - **Lỗi tìm ra khi test và đã sửa:**
@@ -148,9 +151,8 @@ TC-PWA: không áp dụng. POS Next không có màn hình mobile riêng cho tín
   - Rò rỉ danh sách HĐ cửa hàng khác.
   - Giỏ trống hiện số âm.
   - Giỏ hiện sai tổng khi đang đổi hàng.
+  - Số dư khách tính 2 lần khi ghi có (PM-TASK-00267): đọc số dư theo sổ công nợ thay cho trường còn nợ của hóa đơn.
 - **Lỗi còn lại:**
-  - PM-TASK-00267 (số dư khách tính 2 lần khi ghi có).
   - Dữ liệu ĐVT "Cái / Đôi" chưa bật "phải là số nguyên".
 - **Đủ điều kiện nghiệm thu:** **chưa**. Còn chờ:
-  - Anh Thắng duyệt lại bước 4 của mockup.
   - Người test chạy lại tay, và chạy nốt các ca "Chưa chạy".

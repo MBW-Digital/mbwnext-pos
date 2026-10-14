@@ -371,6 +371,10 @@ Những điều phải giữ khi sửa:
   mới và số điểm tích lũy với số đã tính; lệch là dừng và hoàn tác cả hai.
 - `allow_return` trong POS Settings nay có tác dụng thật (patch `v1_15_0.bat_cho_phep_tra_hang` bật
   lại cho site cũ). Thu hồi KM không chịu `write_off_limit` của POS Profile.
+- **Số dư khách đọc theo sổ công nợ, KHÔNG theo `outstanding_amount`** (PM-TASK-00267). Phiếu trả
+  POS ghi công nợ vào HĐ gốc (`update_outstanding_for_self = 0`), nên `outstanding_amount` của chính
+  phiếu trả là số chết. `credit_sales._so_du_theo_so_cong_no` cộng Payment Ledger theo HĐ, bút toán
+  trỏ vào phiếu trả kiểu này được gộp về HĐ gốc. Khoản ghi có chỉ nằm (và chỉ tiêu được) ở HĐ gốc.
 
 ### Tài khoản ví phải thuộc đúng công ty (PM-TASK-00059)
 

@@ -819,18 +819,17 @@ def _submit_exchange(payload):
 
 
 def _dat_lai_con_no_phieu_tra(phieu_tra, plan):
-	"""Trường `outstanding_amount` của phiếu trả phải bằng phần THẬT SỰ còn ghi có cho khách.
+	"""Đặt `outstanding_amount` của phiếu trả về 0.
 
 	Phiếu trả ghi công nợ vào HĐ gốc (`update_outstanding_for_self = 0`), nên ERPNext đặt
-	trường này một lần lúc lưu (grand_total − đã trả) rồi không bao giờ cập nhật — kể cả
-	khi tiền trả lại đã trừ nợ HĐ gốc hay đã dùng trả HĐ mới. Mà `credit_sales`
-	(get_customer_balance, get_available_credit) lại đọc đúng trường này làm số dư khách.
-	Đo thật (06/10, AC2610060005): đổi hàng xong sổ công nợ đã về 0, phiếu trả vẫn ghi
-	−2.879.100 → khách hiện số dư 2.879.100 và tiêu lại được ở lần mua sau.
+	trường này một lần lúc lưu (grand_total − đã trả) rồi không bao giờ cập nhật. Phần tiền
+	còn lại của khách (nếu có, chế độ ghi vào số dư) nằm ở HĐ gốc trên sổ công nợ, và
+	`credit_sales` đọc số dư theo sổ (PM-TASK-00267). Để trường này âm thì danh sách hóa đơn
+	của ERPNext vẫn hiện phiếu trả như còn ghi có, dễ khiến kế toán đối chiếu nhầm.
+	Đo thật (06/10, AC2610060005): đổi hàng xong sổ công nợ đã về 0, phiếu trả vẫn ghi −2.879.100.
 	"""
-	con_lai = -plan.du if plan.du and plan.cach_xu_ly_du == "Customer Credit" else 0.0
-	if abs(flt(phieu_tra.outstanding_amount) - con_lai) > SAI_SO:
-		phieu_tra.db_set("outstanding_amount", con_lai, update_modified=False)
+	if abs(flt(phieu_tra.outstanding_amount)) > SAI_SO:
+		phieu_tra.db_set("outstanding_amount", 0, update_modified=False)
 
 
 # ---------------------------------------------------------------------------

@@ -473,11 +473,15 @@ Lỗi tìm ra khi bấm thử, đã sửa:
    `useInvoice.clearCart` / `resetInvoice`, dính cả bán thường. Đã thêm dòng xóa
    `transactionPreviewTotals`. Chưa kiểm lại được trên trình duyệt.
 4. Dòng "Hàng mới" trong bảng tính lại đơn nay hiện giá **trước** phần KM chuyển sang.
+5. **Số dư khách tính hai lần** khi ghi vào số dư (lỗi có sẵn ở `credit_sales`, PM-TASK-00267, sửa
+   14/10). Số dư và nguồn tiền nay đọc theo sổ công nợ: khoản ghi có chỉ hiện ở HĐ gốc, phiếu trả
+   luôn để "còn nợ" 0. Trên site dev, 15/36 khách có công nợ đổi số hiển thị: 9 khách giảm đúng
+   một nửa (hết đếm đôi); 1 khách (AG260819160240) hết khoản ghi có ảo 229.900 vì sổ đã về 0;
+   5 khách (NOIBO21, NOIBO51…, NOIBO53…, NOIBO60…, 1101818) trước hiện ghi có vài nghìn, nay hiện
+   đúng theo sổ là còn nợ 90–190 nghìn (HĐ gốc thu thiếu, có từ trước, chưa rõ nguyên nhân).
 
 Chưa sửa:
 
-- **Số dư khách tính hai lần** khi ghi vào số dư (lỗi có sẵn ở `credit_sales`). Đã tách thành
-  PM-TASK-00267.
 - **Lưu xong tự in HĐ mới**, mở hộp thoại in của trình duyệt (giống bán thường).
 - **Lần gõ đầu vào ô tìm hàng sau khi tải trang hoặc đóng hộp thoại bị mất.** Có cả khi bán
   thường, chỉ thấy khi gõ bằng công cụ tự động, chưa rõ có ảnh hưởng thu ngân thật không.

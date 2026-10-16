@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 import json
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, nowdate, nowtime, get_datetime, cstr
+from frappe.utils import flt, cint, nowdate, nowtime, get_datetime, getdate, cstr
 from erpnext.stock.doctype.batch.batch import get_batch_qty, get_batch_no
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
 
@@ -345,8 +345,13 @@ def _pos_allow_negative_stock(pos_profile):
     )
 
 
-def _fallback_batch_from_bin_stock(item_code, warehouse, stock_qty_needed, allow_negative=False):
-    """When batch ledger is empty but Bin has qty, pick oldest active batch for the item."""
+def _fallback_batch_from_bin_stock(
+    item_code, warehouse, stock_qty_needed, allow_negative=False, posting_date=None
+):
+    """When batch ledger is empty but Bin has qty, pick oldest active, non-expired batch for the item.
+
+    Expired batches are skipped: ERPNext rejects them on validate (``BatchExpiredError``).
+    """
     bin_qty = flt(
         frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty")
     )
@@ -358,14 +363,26 @@ def _fallback_batch_from_bin_stock(item_code, warehouse, stock_qty_needed, allow
         SELECT b.name
         FROM `tabBatch` b
         WHERE b.item = %s AND IFNULL(b.disabled, 0) = 0
+          AND (b.expiry_date IS NULL OR b.expiry_date >= %s)
         ORDER BY IFNULL(b.expiry_date, '9999-12-31') ASC, b.creation ASC
         LIMIT 1
         """,
-        item_code,
+        (item_code, getdate(posting_date or nowdate())),
     )
     if not batch_row:
         return None
     return [{"batch_no": batch_row[0][0], "stock_qty": flt(stock_qty_needed)}]
+
+
+def _all_item_batches_expired(item_code, posting_date=None):
+    """True when the item has active batches but every one of them expired before posting_date."""
+    batches = frappe.get_all(
+        "Batch",
+        filters={"item": item_code, "disabled": 0},
+        fields=["expiry_date"],
+    )
+    on = getdate(posting_date or nowdate())
+    return bool(batches) and all(b.expiry_date and getdate(b.expiry_date) < on for b in batches)
 
 
 def _fifo_allocate_batches_for_stock_qty(
@@ -437,7 +454,7 @@ def _fifo_allocate_batches_for_stock_qty(
             return out
 
     return _fallback_batch_from_bin_stock(
-        item_code, warehouse, stock_qty_needed, allow_negative=allow_negative
+        item_code, warehouse, stock_qty_needed, allow_negative=allow_negative, posting_date=posting_date
     )
 
 
@@ -582,6 +599,14 @@ def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
                 # Promo gift with no batch stock: keep on invoice, skip stock deduction
                 d.pos_skip_stock_deduction = 1
                 continue
+            if _all_item_batches_expired(d.item_code, posting_date):
+                frappe.throw(
+                    _(
+                        "All batches of {0} have expired. Receive a new batch or extend "
+                        "the batch expiry date before selling."
+                    ).format(frappe.bold(d.item_name or d.item_code)),
+                    title=_("Batch Expired"),
+                )
             bin_qty = frappe.db.get_value(
                 "Bin", {"item_code": d.item_code, "warehouse": d.warehouse}, "actual_qty"
             )
@@ -676,6 +701,25 @@ def validate_cart_items(items, pos_profile=None):
     return errors
 
 
+def _existing_return(invoice_name, doctype="Sales Invoice"):
+    """Phiếu trả đã chốt của một hoá đơn, hay None.
+
+    Luật của cửa hàng (chốt 06/10/2026): **mỗi hoá đơn chỉ trả hàng một lần** — lần đó trả bớt hay
+    trả hết tuỳ khách, nhưng đã có phiếu trả thì không trả thêm. Chặn ở mọi cửa vào máy chủ (dựng phiếu
+    trả, kiểm hạn, danh sách hoá đơn trả được, lưu / chốt phiếu trả) để PWA, app và hai quầy bấm cùng
+    lúc đều không vượt qua được.
+    """
+    return frappe.db.get_value(
+        doctype, {"return_against": invoice_name, "is_return": 1, "docstatus": 1}, "name"
+    )
+
+
+def _one_return_message(invoice_name, return_name):
+    return _("Invoice {0} has already been returned (return {1}) — each invoice can only be returned once.").format(
+        invoice_name, return_name
+    )
+
+
 @frappe.whitelist()
 def validate_return_items(original_invoice_name, return_items, doctype="Sales Invoice"):
     """Ensure that return items do not exceed the quantity from the original invoice.
@@ -700,6 +744,10 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
 
     if not invoice_data:
         return {"valid": False, "message": _("Invoice {0} not found").format(original_invoice_name)}
+
+    existing_return = _existing_return(original_invoice_name, doctype)
+    if existing_return:
+        return {"valid": False, "message": _one_return_message(original_invoice_name, existing_return)}
 
     invoice_info = invoice_data[0]
 
@@ -778,7 +826,7 @@ def validate_return_items(original_invoice_name, return_items, doctype="Sales In
     return {"valid": True}
 
 
-def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
+def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None, server_computed=False):
     """Record the POS Coupon used on the invoice in the custom_pos_coupons child table.
 
     The discount itself is already carried by the invoice's discount_amount; this table
@@ -790,12 +838,14 @@ def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
         coupon: The validated POS Coupon document (from check_coupon_code)
         coupon_discount_amount: Amount the POS UI actually discounted for this coupon.
             Falls back to recomputing from the coupon config when not supplied.
+        server_computed: The server computes and adds the coupon discount itself during
+            validate (`sales_invoice_hooks.add_pos_coupon_discount`) — start the row at 0.
     """
     if not coupon or not invoice_doc.meta.get_field("custom_pos_coupons"):
         return
 
-    amount = flt(coupon_discount_amount)
-    if amount <= 0:
+    amount = 0 if server_computed else flt(coupon_discount_amount)
+    if amount <= 0 and not server_computed:
         # No amount from the client — recompute from the coupon config so the row is
         # never silently zero. net_total is the base for "Net Total" coupons.
         from pos_next.pos_next.doctype.pos_coupon.pos_coupon import apply_coupon_discount
@@ -819,6 +869,26 @@ def _set_applied_pos_coupons(invoice_doc, coupon, coupon_discount_amount=None):
             "discount_amount": amount,
         },
     )
+
+
+def _coupon_after_offer(payload, doctype, invoice_doc):
+    """Gói yêu cầu máy chủ tự tính mã giảm giá và cộng trên khuyến mại cả hoá đơn
+    (`coupon_after_offer`) — bật cờ cho hai bước trong `sales_invoice_hooks`. Cờ nằm trên
+    `doc.flags` (không lưu DB), nên mỗi request lưu / chốt hoá đơn phải gọi lại.
+
+    Chỉ Sales Invoice: Sales Order không có bảng `custom_pos_coupons` để giữ phần của mã giữa các
+    lần lưu.
+    """
+    if not cint(payload.get("coupon_after_offer")) or not payload.get("coupon_code"):
+        return False
+    if doctype != "Sales Invoice":
+        return False
+    if not invoice_doc.meta.get_field("custom_pos_coupons"):
+        frappe.throw(_("Sales Invoice is missing the POS Coupons Applied table — run bench migrate for pos_next."))
+    invoice_doc.flags.pos_coupon_after_offer = True
+    client_amount = payload.get("coupon_discount_amount")
+    invoice_doc.flags.pos_coupon_client_amount = flt(client_amount) if client_amount is not None else None
+    return True
 
 
 # ==========================================
@@ -900,6 +970,9 @@ def update_invoice(data):
         if (data.get("is_return") or invoice_doc.get("is_return")) and invoice_doc.get(
             "return_against"
         ):
+            # Khoá dòng hoá đơn gốc tới hết giao dịch: hai quầy cùng trả một hoá đơn thì quầy sau chờ
+            # quầy trước chốt xong, rồi thấy đã có phiếu trả (`_existing_return`) — không lọt hai phiếu.
+            frappe.db.get_value(invoice_doc.doctype, invoice_doc.return_against, "name", for_update=True)
             validation = validate_return_items(
                 invoice_doc.return_against,
                 [d.as_dict() for d in invoice_doc.items],
@@ -1035,7 +1108,15 @@ def update_invoice(data):
         capture_pos_authoritative_discounts(invoice_doc)
 
         # Populate missing fields (company, currency, accounts, etc.)
+        # set_pos_fields() trong đó chép `apply_discount_on` của POS Profile đè lên hoá đơn VÔ ĐIỀU
+        # KIỆN (lời gọi không phải for_validate). Gốc máy bán gửi là gốc nó đã tính chiết khấu cả
+        # hoá đơn — của khuyến mại, hay "Grand Total" cho tiền mã đã gồm thuế; mất nó thì khoản giảm
+        # số tiền cố định bị hiểu theo gốc khác, lệch đúng phần thuế. ERPNext tự áp lại khuyến mại
+        # trong validate thì vẫn đặt gốc của khuyến mại như cũ.
+        requested_discount_on = data.get("apply_discount_on")
         invoice_doc.set_missing_values()
+        if requested_discount_on in ("Grand Total", "Net Total"):
+            invoice_doc.apply_discount_on = requested_discount_on
 
         # Dựng bảng `taxes` TRƯỚC khi tính tổng. ERPNext bỏ qua bước này khi
         # is_pos=1, nên chỗ duy nhất dựng nó là apply_selling_item_tax_templates()
@@ -1063,8 +1144,10 @@ def update_invoice(data):
         if invoice_doc.base_grand_total is None:
             invoice_doc.base_grand_total = 0.0
 
-        # Set accounts for payment methods before saving
-        for payment in invoice_doc.payments:
+        # Set accounts for payment methods before saving.
+        # `get` chứ không `.payments`: Đơn hàng (Sales Order) không có bảng thanh toán — đọc thẳng thì
+        # AttributeError, mọi Đơn hàng tạo từ POS hỏng từ commit c9f2a9a (02/06/2026).
+        for payment in invoice_doc.get("payments") or []:
             mode_of_payment = (
                 payment.get("mode_of_payment")
                 if isinstance(payment, dict)
@@ -1125,10 +1208,15 @@ def update_invoice(data):
                 # Store coupon code on invoice for tracking
                 invoice_doc.coupon_code = coupon_code
 
+                # Máy bán native: máy chủ tự tính mã và cộng trên khuyến mại cả hoá đơn
+                # (sales_invoice_hooks.add_pos_coupon_discount). Gói đó KHÔNG gộp mã vào
+                # discount_amount.
+                after_offer = _coupon_after_offer(data, doctype, invoice_doc)
                 _set_applied_pos_coupons(
                     invoice_doc,
                     coupon_result.get("coupon"),
                     data.get("coupon_discount_amount"),
+                    server_computed=after_offer,
                 )
 
         # Assign FIFO batches before save (includes free-gift lines without batch)
@@ -1140,12 +1228,56 @@ def update_invoice(data):
         invoice_doc.flags.ignore_permissions = True
         frappe.flags.ignore_account_permission = True
         invoice_doc.docstatus = 0
+
+        if frappe.flags.get("pos_preview_totals"):
+            # `preview_return_totals`: chạy đúng các bước của lần lưu (before_validate, validate,
+            # before_save — gồm hook của pos_next) nhưng không ghi gì: không đặt tên (khỏi tốn số
+            # hoá đơn), không insert, không bắn after_insert (tin "có hoá đơn mới" sang các máy).
+            invoice_doc._action = "save"
+            invoice_doc.run_before_save_methods()
+            return invoice_doc.as_dict()
+
         invoice_doc.save()
 
         return invoice_doc.as_dict()
     except Exception as e:
         frappe.log_error(frappe.get_traceback(), "Update Invoice Error")
         raise
+
+
+@frappe.whitelist()
+def preview_return_totals(invoice):
+    """Tổng phiếu trả máy chủ sẽ ghi — tính trước, không lưu gì.
+
+    Máy bán gửi đúng gói sẽ chốt (`submit_invoice`); ở đây chạy y các bước tính của `update_invoice`
+    và các bước kiểm của lần lưu, rồi trả tổng. Máy bán hoàn đúng `rounded_total` này: tự tính lại
+    tổng theo đơn giá có thể lệch máy chủ vài đồng, sát mốc làm tròn thì lệch một đơn vị làm tròn
+    (100 đồng với VND).
+
+    Chỉ cho phiếu trả: hoá đơn bán còn qua khuyến mại / mã giảm giá có ghi số lượt dùng.
+    """
+    invoice = json.loads(invoice) if isinstance(invoice, str) else dict(invoice or {})
+    if not cint(invoice.get("is_return")) or not invoice.get("return_against"):
+        frappe.throw(_("Preview is only available for return invoices."))
+    for key in ("name", "offline_id", "coupon_code"):
+        invoice.pop(key, None)
+
+    frappe.db.savepoint("pos_preview_return")
+    frappe.flags.pos_preview_totals = True
+    try:
+        doc = update_invoice(json.dumps(invoice))
+    finally:
+        frappe.flags.pos_preview_totals = False
+        # Phòng khi một bước nào đó lỡ ghi (tạo khách thiếu…): bỏ hết.
+        frappe.db.rollback(save_point="pos_preview_return")
+
+    return {
+        "grand_total": flt(doc.get("grand_total")),
+        "rounded_total": flt(doc.get("rounded_total")),
+        "rounding_adjustment": flt(doc.get("rounding_adjustment")),
+        "discount_amount": flt(doc.get("discount_amount")),
+        "total_taxes_and_charges": flt(doc.get("total_taxes_and_charges")),
+    }
 
 
 PENDING_TIMEOUT_MINUTES = 5  # Pending records older than this are considered stale
@@ -1167,6 +1299,16 @@ def _reuse_sync_record(sync_record_name):
     sync_doc.flags.ignore_permissions = True
     sync_doc.save()
     return {"already_synced": False, "sync_record_name": sync_record_name}
+
+
+def _sync_reference(sync_row):
+    """(loại, số) chứng từ của một bản ghi chống trùng. Bản ghi cũ (trước khi có `reference_*`) chỉ có
+    `sales_invoice`."""
+    if sync_row.get("reference_doctype") and sync_row.get("reference_name"):
+        return sync_row.reference_doctype, sync_row.reference_name
+    if sync_row.get("sales_invoice"):
+        return "Sales Invoice", sync_row.sales_invoice
+    return None, None
 
 
 def _ensure_offline_uniqueness(offline_id, pos_profile=None, customer=None):
@@ -1197,7 +1339,7 @@ def _ensure_offline_uniqueness(offline_id, pos_profile=None, customer=None):
     existing_sync = frappe.db.get_value(
         "Offline Invoice Sync",
         {"offline_id": offline_id},
-        ["name", "sales_invoice", "status", "modified"],
+        ["name", "sales_invoice", "reference_doctype", "reference_name", "status", "modified"],
         as_dict=True,
         for_update=True
     )
@@ -1224,14 +1366,18 @@ def _ensure_offline_uniqueness(offline_id, pos_profile=None, customer=None):
             return _reuse_sync_record(sync_record_name)
 
         # Handle Synced status - verify invoice still valid
-        if sync_status == "Synced" and existing_sync.sales_invoice:
-            if frappe.db.exists("Sales Invoice", existing_sync.sales_invoice):
-                existing_invoice = frappe.get_doc("Sales Invoice", existing_sync.sales_invoice)
+        # Hoá đơn hay Đơn hàng (Đơn hàng bán lúc mất mạng — `reference_*`; trước đây ô `sales_invoice`
+        # chỉ trỏ được tới Hoá đơn nên Đơn hàng gửi lại sau 5 phút ra đơn thứ hai).
+        ref_doctype, ref_name = _sync_reference(existing_sync)
+        if sync_status == "Synced" and ref_name:
+            if frappe.db.exists(ref_doctype, ref_name):
+                existing_invoice = frappe.get_doc(ref_doctype, ref_name)
                 if existing_invoice.docstatus == 1:
                     return {
                         "already_synced": True,
                         "invoice_data": {
                             "name": existing_invoice.name,
+                            "doctype": ref_doctype,
                             "status": existing_invoice.docstatus,
                             "grand_total": existing_invoice.grand_total,
                             "total": existing_invoice.total,
@@ -1273,20 +1419,25 @@ def _ensure_offline_uniqueness(offline_id, pos_profile=None, customer=None):
         return _ensure_offline_uniqueness(offline_id, pos_profile, customer)
 
 
-def _complete_offline_sync(sync_record_name, invoice_name):
+def _complete_offline_sync(sync_record_name, invoice_name, doctype="Sales Invoice"):
     """
     Mark an offline sync record as completed after successful invoice submission.
 
     Args:
         sync_record_name: Name of the Offline Invoice Sync record
-        invoice_name: Name of the submitted Sales Invoice
+        invoice_name: Name of the submitted Sales Invoice / Sales Order
+        doctype: "Sales Invoice" hoặc "Sales Order". Đơn hàng chỉ ghi vào `reference_*` — ô `sales_invoice`
+            là Link tới Sales Invoice, ghi số đơn hàng vào đó thì lưu hỏng, bản ghi kẹt "Pending" và
+            lần gửi lại sau 5 phút tạo đơn thứ hai.
     """
     if not sync_record_name:
         return
 
     try:
         sync_doc = frappe.get_doc("Offline Invoice Sync", sync_record_name)
-        sync_doc.sales_invoice = invoice_name
+        sync_doc.reference_doctype = doctype
+        sync_doc.reference_name = invoice_name
+        sync_doc.sales_invoice = invoice_name if doctype == "Sales Invoice" else None
         sync_doc.status = "Synced"
         sync_doc.synced_at = frappe.utils.now_datetime()
         sync_doc.flags.ignore_permissions = True
@@ -1326,6 +1477,45 @@ def _cleanup_failed_sync(sync_record_name):
         )
 
 
+def _closed_shift_of(invoice_doc):
+    """Ca của hoá đơn nếu ca đó đã đóng (hay đã huỷ): {"opening_shift", "closing_shift"}, không thì None.
+
+    Hoá đơn rơi vào ca đã đóng khi máy bán lúc mất mạng gửi bù sau khi ca bị đóng ở máy khác / trên
+    PWA, hay máy mở app lúc mất mạng với ca cũ trong bản lưu. Phiếu đóng ca gom hoá đơn theo
+    `posa_pos_opening_shift` ngay lúc đóng, nên hoá đơn này không có trong đó.
+    """
+    shift = invoice_doc.get("posa_pos_opening_shift")
+    if not shift or invoice_doc.doctype != "Sales Invoice":
+        return None
+    row = frappe.db.get_value("POS Opening Shift", shift, ["status", "pos_closing_shift"], as_dict=True)
+    if not row or row.status not in ("Closed", "Cancelled"):
+        return None
+    return {"opening_shift": shift, "closing_shift": row.pos_closing_shift or None}
+
+
+def _note_sale_after_shift_closed(invoice_doc, closed):
+    """Vẫn chốt hoá đơn (tiền đã thu, hàng đã giao — từ chối thì hoá đơn kẹt mãi vì không đổi được ca),
+    nhưng ghi chú lên phiếu đóng ca và lên hoá đơn để kế toán đối chiếu tiền thừa của ca đó."""
+    message = _(
+        "Hoá đơn {0} ({1}, khách {2}, ghi sổ {3} {4}) lên máy chủ sau khi ca {5} đã đóng — "
+        "không có trong phiếu đóng ca. Đối chiếu tiền của ca."
+    ).format(
+        invoice_doc.name,
+        frappe.utils.fmt_money(invoice_doc.grand_total, currency=invoice_doc.currency),
+        invoice_doc.customer_name or invoice_doc.customer,
+        frappe.utils.formatdate(invoice_doc.posting_date),
+        str(invoice_doc.posting_time or "")[:8],
+        closed["opening_shift"],
+    )
+    try:
+        invoice_doc.add_comment("Comment", message)
+        closing = closed.get("closing_shift")
+        if closing and frappe.db.exists("POS Closing Shift", closing):
+            frappe.get_doc("POS Closing Shift", closing).add_comment("Comment", message)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "POS sale after shift closed")
+
+
 @frappe.whitelist()
 def check_offline_invoice_synced(offline_id):
     """
@@ -1350,11 +1540,12 @@ def check_offline_invoice_synced(offline_id):
     if not result or not isinstance(result, dict):
         return {"synced": False, "sales_invoice": None}
 
-    # Additionally verify the sales invoice still exists and is submitted
+    # Additionally verify the sales invoice (or sales order) still exists and is submitted
     if result.get("synced") and result.get("sales_invoice"):
-        if frappe.db.exists("Sales Invoice", result["sales_invoice"]):
+        doctype = result.get("doctype") or "Sales Invoice"
+        if frappe.db.exists(doctype, result["sales_invoice"]):
             docstatus = frappe.db.get_value(
-                "Sales Invoice", result["sales_invoice"], "docstatus"
+                doctype, result["sales_invoice"], "docstatus"
             )
             if docstatus == 1:  # Submitted
                 return result
@@ -1490,7 +1681,14 @@ def submit_invoice(invoice=None, data=None):
 
         if dedup_result and dedup_result.get("already_synced"):
             # Invoice was already synced - return the existing invoice details
-            return dedup_result.get("invoice_data", {})
+            existing = dedup_result.get("invoice_data", {})
+            # Câu trả lời của lần chốt trước có thể đã không về tới máy bán: báo lại ca đã đóng (ghi
+            # chú thì lần trước đã ghi).
+            if existing.get("name"):
+                closed = _closed_shift_of(frappe.get_doc(existing.get("doctype") or doctype, existing["name"]))
+                if closed:
+                    existing["shift_closed"] = closed
+            return existing
 
         # Store the sync record name for later update
         sync_record_name = dedup_result.get("sync_record_name") if dedup_result else None
@@ -1510,9 +1708,15 @@ def submit_invoice(invoice=None, data=None):
             if not invoice_name:
                 frappe.throw(_("Failed to get invoice name from draft"))
             invoice_doc = frappe.get_doc(doctype, invoice_name)
+            # Nháp vừa lưu đã cộng phần của mã — validate lúc chốt bỏ ra rồi tính lại.
+            _coupon_after_offer(invoice, doctype, invoice_doc)
         else:
             invoice_doc = frappe.get_doc(doctype, invoice_name)
             invoice_doc.update(invoice)
+            if _coupon_after_offer(invoice, doctype, invoice_doc):
+                # discount_amount vừa lấy lại từ gói (chưa gồm mã): phần đã ghi không còn trong ô.
+                for row in invoice_doc.get("custom_pos_coupons") or []:
+                    row.invoice_discount_amount = 0
 
         # Ensure update_stock is set for Sales Invoice
         if doctype == "Sales Invoice":
@@ -1592,39 +1796,43 @@ def submit_invoice(invoice=None, data=None):
         if write_off_amount > 0 and doctype == "Sales Invoice":
             # Get write-off account and cost center from POS Profile
             if pos_profile:
-                try:
-                    pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-                    write_off_account = (
-                        data.get("write_off_account")
-                        or invoice.get("write_off_account")
-                        or pos_profile_doc.write_off_account
-                    )
-                    write_off_cost_center = (
-                        data.get("write_off_cost_center")
-                        or invoice.get("write_off_cost_center")
-                        or pos_profile_doc.write_off_cost_center
-                    )
-                    write_off_limit = flt(pos_profile_doc.write_off_limit or 0)
+                pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+                write_off_account = (
+                    data.get("write_off_account")
+                    or invoice.get("write_off_account")
+                    or pos_profile_doc.write_off_account
+                )
+                write_off_cost_center = (
+                    data.get("write_off_cost_center")
+                    or invoice.get("write_off_cost_center")
+                    or pos_profile_doc.write_off_cost_center
+                )
+                write_off_limit = flt(pos_profile_doc.write_off_limit or 0)
 
-                    # Validate write-off amount is within limit
-                    if write_off_limit > 0 and write_off_amount > write_off_limit:
-                        frappe.throw(
-                            _("Write-off amount {0} exceeds limit {1}").format(
-                                write_off_amount, write_off_limit
-                            )
+                # Vượt hạn mức hay thiếu tài khoản thì TỪ CHỐI. Bản cũ bọc trong try/except chỉ ghi
+                # log: hoá đơn vẫn chốt mà không có khoản xoá nợ — khách treo nợ đúng số máy bán
+                # tưởng đã xoá.
+                if write_off_limit > 0 and write_off_amount > write_off_limit:
+                    frappe.throw(
+                        _("Write-off amount {0} exceeds the POS Profile limit of {1}.").format(
+                            frappe.utils.fmt_money(write_off_amount, currency=invoice_doc.currency),
+                            frappe.utils.fmt_money(write_off_limit, currency=invoice_doc.currency),
                         )
-
-                    # Set write-off fields on invoice
-                    if write_off_account:
-                        invoice_doc.write_off_account = write_off_account
-                        invoice_doc.write_off_cost_center = write_off_cost_center
-                        invoice_doc.write_off_amount = write_off_amount
-                        invoice_doc.base_write_off_amount = write_off_amount  # Assuming same currency
-                except Exception as e:
-                    frappe.log_error(
-                        f"Failed to apply write-off from POS Profile {pos_profile}: {e}",
-                        "POS Write-Off Error"
                     )
+                if not write_off_account:
+                    frappe.throw(_("POS Profile {0} has no Write Off Account set.").format(pos_profile))
+
+                # Phiếu trả mang số âm, khoản thu hồi cũng vậy (thu hồi khuyến mại khi trả bớt hàng). Máy
+                # bán gửi số dương; để dương thì ERPNext cộng nó vào phần phải trả khách thay vì trừ
+                # (`total_amount_to_pay = rounded_total - write_off`) — khách được thêm tín dụng gấp đôi
+                # khoản thu hồi, hoặc `validate_pos` báo "Paid amount + Write Off Amount…".
+                if invoice_doc.get("is_return"):
+                    write_off_amount = -abs(write_off_amount)
+
+                invoice_doc.write_off_account = write_off_account
+                invoice_doc.write_off_cost_center = write_off_cost_center
+                invoice_doc.write_off_amount = write_off_amount
+                invoice_doc.base_write_off_amount = write_off_amount  # Assuming same currency
 
         # Check if POS Settings allows negative stock
         pos_settings_allow_negative = False
@@ -1652,17 +1860,25 @@ def submit_invoice(invoice=None, data=None):
 
         # Complete the offline sync record
         if sync_record_name:
-            _complete_offline_sync(sync_record_name, invoice_doc.name)
+            _complete_offline_sync(sync_record_name, invoice_doc.name, doctype)
+
+        shift_closed = _closed_shift_of(invoice_doc)
+        if shift_closed:
+            _note_sale_after_shift_closed(invoice_doc, shift_closed)
 
         # Handle credit redemption after successful submission
         customer_credit_dict = data.get("customer_credit_dict") or invoice.get("customer_credit_dict")
         redeemed_customer_credit = data.get("redeemed_customer_credit") or invoice.get("redeemed_customer_credit")
 
+        credit_redemption = None
         if redeemed_customer_credit and customer_credit_dict:
+            credit_redemption = {"requested": flt(redeemed_customer_credit), "error": None}
             try:
                 from pos_next.api.credit_sales import redeem_customer_credit
                 redeem_customer_credit(invoice_doc.name, customer_credit_dict)
             except Exception as credit_error:
+                # Máy bán đọc lại outstanding (dưới) và báo thu ngân — hoá đơn đã chốt, không huỷ được.
+                credit_redemption["error"] = str(credit_error)
                 frappe.log_error(
                     title="Credit Redemption Error",
                     message=f"Invoice: {invoice_doc.name}, Error: {str(credit_error)}\n{frappe.get_traceback()}"
@@ -1695,6 +1911,15 @@ def submit_invoice(invoice=None, data=None):
             "paid_amount": getattr(invoice_doc, "paid_amount", 0),
             "change_amount": getattr(invoice_doc, "change_amount", 0),
         }
+        if shift_closed:
+            result["shift_closed"] = shift_closed
+        if credit_redemption is not None:
+            # Bút toán trừ tín dụng đổi outstanding trong CSDL sau khi chốt — đọc lại, đừng trả số
+            # của invoice_doc (lúc chốt, chưa trừ). Máy bán so số này để biết đã trừ được chưa.
+            result["outstanding_amount"] = flt(
+                frappe.db.get_value(doctype, invoice_doc.name, "outstanding_amount")
+            )
+            result["credit_redemption"] = credit_redemption
 
         # Include offline_id in response for client-side tracking
         if offline_id:
@@ -2096,10 +2321,10 @@ def get_returnable_invoices(limit=50, pos_profile=None):
     # Execute and filter results with HAVING equivalent (post-filter)
     results = query.run(as_dict=True)
 
-    # Filter: only include invoices where original qty > returned qty
+    # Chỉ hoá đơn CHƯA trả lần nào — mỗi hoá đơn chỉ trả một lần (`_existing_return`).
     returnable_invoices = [
         inv for inv in results
-        if flt(inv.get("total_original_qty", 0)) > flt(inv.get("total_returned_qty", 0))
+        if flt(inv.get("total_original_qty", 0)) > 0 and flt(inv.get("total_returned_qty", 0)) <= 0
     ]
 
     return returnable_invoices
@@ -2176,10 +2401,10 @@ def search_invoice_by_number(search_term, pos_profile=None):
 
     results = query.run(as_dict=True)
 
-    # Filter: only include invoices where original qty > returned qty
+    # Chỉ hoá đơn CHƯA trả lần nào — mỗi hoá đơn chỉ trả một lần (`_existing_return`).
     matching_invoices = [
         inv for inv in results
-        if flt(inv.get("total_original_qty", 0)) > flt(inv.get("total_returned_qty", 0))
+        if flt(inv.get("total_original_qty", 0)) > 0 and flt(inv.get("total_returned_qty", 0)) <= 0
     ]
 
     return matching_invoices
@@ -2212,6 +2437,15 @@ def check_invoice_return_validity(invoice_name, pos_profile=None):
         }
 
     invoice_info = invoice_data[0]
+
+    existing_return = _existing_return(invoice_name)
+    if existing_return:
+        return {
+            "valid": False,
+            "error_type": "already_returned",
+            "return_invoice": existing_return,
+            "message": _one_return_message(invoice_name, existing_return),
+        }
 
     if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:
         return {
@@ -2271,6 +2505,10 @@ def get_invoice_for_return(invoice_name):
         frappe.throw(_("Invoice {0} does not exist").format(invoice_name))
 
     invoice_info = invoice_check[0]
+
+    existing_return = _existing_return(invoice_name)
+    if existing_return:
+        frappe.throw(_one_return_message(invoice_name, existing_return))
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
@@ -2720,6 +2958,10 @@ def prepare_return_invoice(invoice_name, pos_opening_shift=None, pos_profile=Non
     # Check if it's already a return
     if invoice_info.is_return:
         frappe.throw(_("Cannot create return against a return invoice"))
+
+    existing_return = _existing_return(invoice_name)
+    if existing_return:
+        frappe.throw(_one_return_message(invoice_name, existing_return))
 
     # Only allow returns for invoices from the current POS Profile
     if pos_profile and invoice_info.pos_profile and invoice_info.pos_profile != pos_profile:

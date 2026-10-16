@@ -7,6 +7,8 @@
  "field_order": [
   "offline_id",
   "sales_invoice",
+  "reference_doctype",
+  "reference_name",
   "status",
   "column_break_1",
   "pos_profile",
@@ -31,6 +33,23 @@
    "in_standard_filter": 1,
    "label": "Sales Invoice",
    "options": "Sales Invoice"
+  },
+  {
+   "description": "Document created from this offline sale: Sales Invoice or Sales Order.",
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Reference DocType",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "label": "Reference Name",
+   "options": "reference_doctype",
+   "read_only": 1
   },
   {
    "default": "Synced",
@@ -75,7 +94,7 @@
  ],
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2025-12-30 12:00:00.000000",
+ "modified": "2026-10-12 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "POS Next",
  "name": "Offline Invoice Sync",

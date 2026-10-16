@@ -10,8 +10,9 @@ class OfflineInvoiceSync(Document):
     """
     Tracks offline invoice synchronization to prevent duplicate submissions.
 
-    Each record maps an offline_id (generated client-side) to a Sales Invoice,
-    allowing the system to detect and prevent duplicate sync attempts.
+    Each record maps an offline_id (generated client-side) to a Sales Invoice — or a Sales Order
+    (`reference_doctype` / `reference_name`, offline orders) — allowing the system to detect and
+    prevent duplicate sync attempts.
     """
 
     def before_insert(self):
@@ -85,17 +86,21 @@ class OfflineInvoiceSync(Document):
         existing = frappe.db.get_value(
             "Offline Invoice Sync",
             {"offline_id": offline_id},
-            ["name", "sales_invoice", "status"],
+            ["name", "sales_invoice", "reference_doctype", "reference_name", "status"],
             as_dict=True
         )
 
         if existing:
-            # Only consider it synced if status is "Synced" and has a sales_invoice
-            is_synced = existing.status == "Synced" and existing.sales_invoice
+            # Hoá đơn hay Đơn hàng: `reference_*`; bản ghi cũ chỉ có `sales_invoice`. Khoá `sales_invoice`
+            # của kết quả giữ tên cũ (PWA đọc khoá này) nhưng có thể là số Đơn hàng — xem `doctype`.
+            doctype = existing.reference_doctype or ("Sales Invoice" if existing.sales_invoice else None)
+            name = existing.reference_name or existing.sales_invoice
+            is_synced = bool(existing.status == "Synced" and name)
             return {
                 "synced": is_synced,
-                "sales_invoice": existing.sales_invoice if is_synced else None,
+                "sales_invoice": name if is_synced else None,
+                "doctype": doctype if is_synced else None,
                 "status": existing.status
             }
 
-        return {"synced": False, "sales_invoice": None, "status": None}
+        return {"synced": False, "sales_invoice": None, "doctype": None, "status": None}

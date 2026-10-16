@@ -510,6 +510,10 @@ def _set_total_amount_to_default_mop(self, total_amount_to_pay):
 	đủ tiền. Đã tái hiện trên hoá đơn 3 dòng có coupon 15%.
 
 	Lệch lớn thì vẫn để bản gốc xử lý — đó là sai số liệu thật, không được che.
+
+	Điểm bán làm tròn tổng (VND làm tròn tới 100) thì ngưỡng là một đơn vị làm
+	tròn: ERPNext so với `rounded_total`, còn máy bán cộng số lẻ — phiếu trả
+	39.228 bị ghi "hoàn 28 đồng" (thử trên ha-vang, POS Chiềng Sại).
 	"""
 	tong_da_tra = sum(
 		flt(p.amount) if self.doc.party_account_currency == self.doc.currency else flt(p.base_amount)
@@ -517,7 +521,7 @@ def _set_total_amount_to_default_mop(self, total_amount_to_pay):
 	)
 	con_thieu = flt(total_amount_to_pay) - flt(tong_da_tra)
 
-	if self.doc.get("payments") and 0 < abs(con_thieu) <= NGUONG_LECH_LAM_TRON:
+	if self.doc.get("payments") and 0 < abs(con_thieu) <= _nguong_lam_tron(self.doc):
 		dong_cuoi = self.doc.payments[-1]
 		dong_cuoi.amount = flt(dong_cuoi.amount + con_thieu)
 		dong_cuoi.base_amount = flt(dong_cuoi.amount * flt(self.doc.conversion_rate or 1))
@@ -532,6 +536,17 @@ def _set_total_amount_to_default_mop(self, total_amount_to_pay):
 		return
 
 	return _set_total_amount_to_default_mop_goc(self, total_amount_to_pay)
+
+
+def _nguong_lam_tron(doc):
+	"""Ngưỡng lệch coi là làm tròn: 10 đồng, hay một đơn vị làm tròn tổng nếu hoá đơn làm tròn."""
+	nguong = NGUONG_LECH_LAM_TRON
+	if not doc.is_rounded_total_disabled() and doc.get("currency"):
+		nguong = max(
+			nguong,
+			flt(frappe.db.get_value("Currency", doc.currency, "smallest_currency_fraction_value", cache=True)),
+		)
+	return nguong
 
 
 _taxes_and_totals.calculate_taxes_and_totals.set_total_amount_to_default_mop = (

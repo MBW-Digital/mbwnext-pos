@@ -8,6 +8,24 @@ from frappe.utils import flt
 
 
 class Wallet(Document):
+	def autoname(self):
+		"""Tên ví gồm cả công ty: `{khách}-{viết tắt công ty}-WALLET`.
+
+		Ví tách theo khách + công ty (`validate_duplicate_wallet`, số dư lọc theo công ty), nhưng mẫu
+		cũ `{khách}-WALLET` không có công ty — khách đã có ví ở một công ty thì KHÔNG tạo được ví ở công
+		ty thứ hai (trùng tên). `get_or_create_wallet` nuốt lỗi đó: màn thanh toán hiện số dư 0, và
+		`process_loyalty_to_wallet` lặng lẽ bỏ qua — khách mua ở công ty thứ hai không được tích điểm.
+
+		Ví đã có giữ tên cũ; không chỗ nào dựa vào tên ví (đều tìm theo khách + công ty).
+		"""
+		from frappe.model.naming import append_number_if_name_exists
+
+		abbr = frappe.get_cached_value("Company", self.company, "abbr") or self.company
+		suffix = f"-{abbr}-WALLET"
+		# Tên tài liệu tối đa 140 ký tự — cắt phần mã khách nếu dài.
+		name = f"{(self.customer or '')[: 140 - len(suffix) - 4]}{suffix}"
+		self.name = append_number_if_name_exists("Wallet", name)
+
 	def validate(self):
 		self.validate_account_type()
 		self.validate_duplicate_wallet()
@@ -51,6 +69,16 @@ class Wallet(Document):
 		self.available_balance = self.get_available_balance()
 		self.db_set("current_balance", self.current_balance, update_modified=False)
 		self.db_set("available_balance", self.available_balance, update_modified=False)
+
+
+def on_doctype_update():
+	"""Mỗi khách một ví TRONG MỖI CÔNG TY.
+
+	Trường `customer` từng khai `unique` — mỗi khách một ví trên cả hệ thống, trái với thiết kế ví
+	tách theo công ty (số dư lọc theo công ty, `validate_duplicate_wallet` kiểm khách + công ty). Bỏ
+	`unique` đó, giữ ràng buộc đúng ở mức CSDL bằng chỉ mục duy nhất trên cặp (customer, company).
+	"""
+	frappe.db.add_unique("Wallet", ["customer", "company"], constraint_name="unique_customer_company")
 
 
 @frappe.whitelist()

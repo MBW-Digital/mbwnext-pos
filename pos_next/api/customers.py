@@ -121,6 +121,51 @@ def _mobile_search_variants(search_term):
 	return patterns
 
 
+# customer_group and territory are needed to decide whether an offer limited
+# via applicable_for covers this customer (PM-TASK-00034).
+POS_CUSTOMER_FIELDS = [
+	"name",
+	"customer_name",
+	"mobile_no",
+	"email_id",
+	"customer_group",
+	"territory",
+]
+
+
+def _pos_customer_filters(pos_profile, include_disabled=False):
+	"""Khách mà một POS Profile được bán cho: đang hoạt động, và thuộc nhóm khách
+	của profile nếu profile có khai.
+
+	Dùng chung cho get_customers() và get_customers_for_offline() — hai nơi phải
+	ra CÙNG một danh sách, nếu không màn chọn khách lúc offline sẽ khác lúc online.
+	"""
+	filters = {} if include_disabled else {"disabled": 0}
+	if pos_profile:
+		profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+		if hasattr(profile_doc, "customer_group") and profile_doc.customer_group:
+			filters["customer_group"] = profile_doc.customer_group
+	return filters
+
+
+def _fill_customer_scope_defaults(rows):
+	"""Mirror the fallback apply_offers() uses, so the POS judges offers
+	limited by customer group / territory the same way the server will.
+	Plenty of imported customers have both fields blank."""
+	fallback_group = None
+	fallback_territory = None
+	for row in rows:
+		if not row.get("customer_group"):
+			if fallback_group is None:
+				fallback_group = default_customer_group()
+			row["customer_group"] = fallback_group
+		if not row.get("territory"):
+			if fallback_territory is None:
+				fallback_territory = default_territory()
+			row["territory"] = fallback_territory
+	return rows
+
+
 @frappe.whitelist()
 def get_customers(search_term="", pos_profile=None, limit=20):
 	"""
@@ -140,49 +185,16 @@ def get_customers(search_term="", pos_profile=None, limit=20):
 		search_term = (search_term or "").strip()
 		limit = cint(limit)
 
-		filters = {"disabled": 0}
-
-		if pos_profile:
-			profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
-			if hasattr(profile_doc, "customer_group") and profile_doc.customer_group:
-				filters["customer_group"] = profile_doc.customer_group
-
-		# customer_group and territory are needed to decide whether an offer limited
-		# via applicable_for covers this customer (PM-TASK-00034).
-		fields = [
-			"name",
-			"customer_name",
-			"mobile_no",
-			"email_id",
-			"customer_group",
-			"territory",
-		]
-
-		def _fill_scope_defaults(rows):
-			"""Mirror the fallback apply_offers() uses, so the POS judges offers
-			limited by customer group / territory the same way the server will.
-			Plenty of imported customers have both fields blank."""
-			fallback_group = None
-			fallback_territory = None
-			for row in rows:
-				if not row.get("customer_group"):
-					if fallback_group is None:
-						fallback_group = default_customer_group()
-					row["customer_group"] = fallback_group
-				if not row.get("territory"):
-					if fallback_territory is None:
-						fallback_territory = default_territory()
-					row["territory"] = fallback_territory
-			return rows
+		filters = _pos_customer_filters(pos_profile)
 
 		# Empty search: used for offline full dump when limit=0
 		if not search_term:
 			customer_limit = limit if limit > 0 else frappe.db.count("Customer", filters)
-			return _fill_scope_defaults(
+			return _fill_customer_scope_defaults(
 				frappe.get_all(
 					"Customer",
 					filters=filters,
-					fields=fields,
+					fields=POS_CUSTOMER_FIELDS,
 					limit=customer_limit,
 					order_by="customer_name asc",
 				)
@@ -202,15 +214,73 @@ def get_customers(search_term="", pos_profile=None, limit=20):
 			"Customer",
 			filters=filters,
 			or_filters=or_filters,
-			fields=fields,
+			fields=POS_CUSTOMER_FIELDS,
 			limit=max_results,
 			order_by="customer_name asc",
 		)
-		return _fill_scope_defaults(result)
+		return _fill_customer_scope_defaults(result)
 	except Exception as e:
 		frappe.logger().error(f"Error in get_customers: {str(e)}")
 		frappe.logger().error(frappe.get_traceback())
 		frappe.throw(_("Error fetching customers: {0}").format(str(e)))
+
+
+OFFLINE_CUSTOMER_BATCH_DEFAULT = 1000
+OFFLINE_CUSTOMER_BATCH_MAX = 2000
+
+
+@frappe.whitelist()
+def get_customers_for_offline(pos_profile, after=None, modified_since=None, limit=OFFLINE_CUSTOMER_BATCH_DEFAULT):
+	"""Danh sách khách để máy POS lưu dùng khi mất mạng — nạp THEO LÔ và TĂNG DẦN.
+
+	get_customers(limit=0) trả cả danh sách trong một lần: 11 nghìn khách là
+	~1,7 MB JSON mỗi lượt nạp, và máy POS phải dựng trọn danh sách trong RAM.
+	Endpoint này chia hai việc đó ra:
+
+	- Theo lô: `after` = mã khách cuối của lô trước. Xếp và cắt theo `name`
+	  (duy nhất) chứ không theo vị trí — có người thêm / tắt khách giữa lúc máy
+	  đang nạp thì cũng không sót ai, không lặp ai.
+	- Tăng dần: `modified_since` = `server_time` của lượt nạp trước. Chỉ trả khách
+	  sửa từ mốc đó, KỂ CẢ khách vừa bị tắt (kèm `disabled` = 1) để máy xoá đi.
+	  Khách bị xoá hẳn hoặc chuyển sang nhóm khách khác thì cách này không thấy —
+	  máy tự nạp đủ lại định kỳ để dọn.
+
+	Cùng bộ lọc và cùng phần điền nhóm khách / khu vực mặc định với
+	get_customers(), để danh sách offline khớp danh sách online.
+
+	Returns:
+		dict: {
+			"customers": [...],  # POS_CUSTOMER_FIELDS + disabled, xếp theo name
+			"server_time": "...",  # mốc cho `modified_since` lần sau
+		}
+	"""
+	from frappe.utils import cint, get_datetime
+
+	limit = min(max(cint(limit) or OFFLINE_CUSTOMER_BATCH_DEFAULT, 1), OFFLINE_CUSTOMER_BATCH_MAX)
+
+	# Lấy giờ TRƯỚC khi truy vấn: khách sửa trong lúc truy vấn đang chạy sẽ rơi
+	# vào lần nạp sau (so bằng >=), thay vì lọt giữa hai mốc. Giờ máy chủ chứ
+	# không phải giờ máy POS — giờ trên máy bán hàng có thể lệch.
+	server_time = now_datetime()
+
+	filters = _pos_customer_filters(pos_profile, include_disabled=bool(modified_since))
+	if after:
+		filters["name"] = [">", after]
+	if modified_since:
+		filters["modified"] = [">=", get_datetime(modified_since)]
+
+	customers = frappe.get_all(
+		"Customer",
+		filters=filters,
+		fields=POS_CUSTOMER_FIELDS + ["disabled"],
+		order_by="name asc",
+		limit=limit,
+	)
+
+	return {
+		"customers": _fill_customer_scope_defaults(customers),
+		"server_time": str(server_time),
+	}
 
 
 @frappe.whitelist()

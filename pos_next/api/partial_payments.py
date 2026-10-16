@@ -1029,6 +1029,117 @@ def get_unpaid_summary(pos_profile: str) -> Dict:
 
 
 # ==========================================
+# Phân trang cho app RN (pos-next-mobile)
+# ==========================================
+#
+# `get_unpaid_invoices` / `get_unpaid_summary` ở trên giữ nguyên cho PWA. Hàm dưới đây cho tab "Chưa
+# thanh toán" của hộp Quản lý hoá đơn trên app: tìm, lọc, đếm và cắt trang ngay trong SQL — không
+# `get_doc` từng hoá đơn để dựng lịch sử thanh toán (app hỏi lịch sử của đúng hoá đơn đang thu, qua
+# `get_partial_payment_details`).
+#
+# Số đã thu tính theo số khách phải trả THẬT: `rounded_total` khi hoá đơn làm tròn, không thì
+# `grand_total` — đúng con số ERPNext lấy làm gốc của `outstanding_amount`. `get_payment_history` lấy
+# `grand_total − outstanding`, lệch đúng phần làm tròn (ha-vang `ACC-SINV-2026-00099`: phải trả
+# 243.700, đã trả 243.680,01, còn nợ 19,99 — hàm cũ nói đã trả 243.660,01).
+
+UNPAID_FILTERS = ("all", "partial", "unpaid", "overdue")
+
+_DUE_SQL = """(case when si.disable_rounded_total = 1 or ifnull(si.rounded_total, 0) = 0
+    then si.grand_total else si.rounded_total end)"""
+_COLLECTED_SQL = f"({_DUE_SQL} - si.outstanding_amount)"
+# Nửa đơn vị nhỏ nhất của tiền (0,01) — dưới mức này coi như chưa thu đồng nào.
+_PAID_EPSILON = 0.005
+_FILTER_SQL = {
+    "all": "1 = 1",
+    # Theo số tiền, không theo `status`: hoá đơn quá hạn thì ERPNext đặt "Overdue" dù đã trả một phần, nên
+    # lọc theo "Partly Paid" như PWA thì mọi hoá đơn quá hạn rơi khỏi cả "Thanh toán một phần" lẫn "Chưa
+    # thanh toán".
+    "partial": f"{_COLLECTED_SQL} > {_PAID_EPSILON}",
+    "unpaid": f"{_COLLECTED_SQL} <= {_PAID_EPSILON}",
+    "overdue": "si.status like 'Overdue%%'",
+}
+
+
+@frappe.whitelist()
+def get_unpaid_invoices_page(pos_profile: str, start=0, limit=20, search=None, filter_by=None) -> Dict:
+    """Một trang hoá đơn bán còn nợ của điểm bán, mới bán trước.
+
+    - `search`: số hoá đơn, mã / tên khách, số điện thoại của khách (không phân biệt hoa thường, dấu).
+    - `filter_by`: "all" / "partial" (đã thu một phần) / "unpaid" (chưa thu đồng nào) / "overdue" (quá hạn).
+      Hai lọc đầu xét theo số tiền, lọc quá hạn xét theo trạng thái — một hoá đơn có thể ở cả hai.
+
+    Trả `{"rows", "total", "counts": {all, partial, unpaid, overdue}, "total_outstanding",
+    "total_collected"}`. `counts` theo ô tìm (chưa xét lọc) — số trên từng nút lọc; hai tổng tiền theo
+    cả ô tìm lẫn lọc đang chọn. Mỗi dòng có `collected` = số khách phải trả − còn nợ.
+    """
+    from pos_next.api.promotions import _page_window, _search_condition
+
+    if not pos_profile:
+        frappe.throw(_("POS Profile is required"))
+    if not frappe.db.exists("POS Profile", pos_profile):
+        frappe.throw(_("POS Profile {0} does not exist").format(pos_profile))
+    if not _has_pos_profile_access(pos_profile):
+        frappe.throw(_("You don't have access to this POS Profile"))
+
+    filter_by = filter_by if filter_by in UNPAID_FILTERS else "all"
+    start, limit = _page_window(start, limit)
+    values = {"pos_profile": pos_profile, "start": start, "limit": limit}
+
+    conditions = [
+        "si.pos_profile = %(pos_profile)s",
+        "si.docstatus = 1",
+        "si.is_pos = 1",
+        "si.is_return = 0",
+        "si.outstanding_amount > 0",
+    ]
+    search_sql = _search_condition(["si.name", "si.customer", "si.customer_name", "c.mobile_no"], search, values)
+    if search_sql:
+        conditions.append(search_sql)
+    base = f"""from `tabSales Invoice` si
+        left join `tabCustomer` c on c.name = si.customer
+        where {" and ".join(conditions)}"""
+
+    counts = frappe.db.sql(
+        f"""select count(*) as `all`,
+            coalesce(sum({_FILTER_SQL["partial"]}), 0) as partial,
+            coalesce(sum({_FILTER_SQL["unpaid"]}), 0) as unpaid,
+            coalesce(sum({_FILTER_SQL["overdue"]}), 0) as overdue
+        {base}""",
+        values,
+        as_dict=True,
+    )[0]
+
+    where_filter = f"and {_FILTER_SQL[filter_by]}"
+    totals = frappe.db.sql(
+        f"""select count(*) as total,
+            coalesce(sum(si.outstanding_amount), 0) as total_outstanding,
+            coalesce(sum({_COLLECTED_SQL}), 0) as total_collected
+        {base} {where_filter}""",
+        values,
+        as_dict=True,
+    )[0]
+
+    rows = frappe.db.sql(
+        f"""select si.name, si.customer, si.customer_name, c.mobile_no, si.posting_date, si.posting_time,
+            si.due_date, si.grand_total, si.rounded_total, si.outstanding_amount, si.status, si.currency,
+            si.docstatus, si.is_return, {_COLLECTED_SQL} as collected
+        {base} {where_filter}
+        order by si.posting_date desc, si.posting_time desc, si.creation desc
+        limit %(limit)s offset %(start)s""",
+        values,
+        as_dict=True,
+    )
+
+    return {
+        "rows": rows,
+        "total": cint(totals.total),
+        "counts": {key: cint(counts.get(key)) for key in UNPAID_FILTERS},
+        "total_outstanding": flt(totals.total_outstanding),
+        "total_collected": flt(totals.total_collected),
+    }
+
+
+# ==========================================
 # Helper Functions
 # ==========================================
 

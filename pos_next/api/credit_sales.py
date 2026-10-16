@@ -179,23 +179,17 @@ def get_available_credit(customer, company, pos_profile=None):
 
 	total_credit = []
 
-	# Get invoices with negative outstanding (customer has overpaid or returns)
-	# Include modified timestamp for optimistic locking
+	# Tín dụng theo SỔ CÔNG NỢ, không theo trường outstanding_amount (_open_invoice_credits).
+	open_credits = _open_invoice_credits(customer, company)
 	outstanding_invoices = frappe.get_all(
 		"Sales Invoice",
-		filters={
-			"outstanding_amount": ["<", 0],
-			"docstatus": 1,
-			"customer": customer,
-			"company": company,
-		},
-		fields=["name", "outstanding_amount", "is_return", "posting_date", "grand_total", "modified"],
+		filters={"name": ["in", list(open_credits) or [""]]},
+		fields=["name", "is_return", "posting_date", "grand_total", "modified"],
 		order_by="posting_date desc"
 	)
 
 	for row in outstanding_invoices:
-		# Outstanding is negative, so make it positive for display
-		available_credit = -flt(row.outstanding_amount)
+		available_credit = open_credits.get(row.name, 0)
 
 		if available_credit > 0:
 			total_credit.append({
@@ -313,6 +307,41 @@ def redeem_customer_credit(invoice_name, customer_credit_dict):
 	return created_journal_entries
 
 
+def _open_invoice_credits(customer, company, invoice=None):
+	"""Tín dụng còn dùng được của khách, theo từng hoá đơn — đọc SỔ CÔNG NỢ (Payment Ledger Entry).
+
+	Không đọc trường `Sales Invoice.outstanding_amount`: phiếu trả hàng trừ vào hoá đơn gốc
+	(`update_outstanding_for_self = 0`) thì phần tín dụng nằm trên HOÁ ĐƠN GỐC trong sổ, còn trường
+	outstanding của chính phiếu trả vẫn giữ số âm cũ. Đọc trường đó là đếm đôi (ha-vang: khách "1" có
+	79.400đ tín dụng mà hiện 158.800đ) và cho trừ tín dụng hai lần.
+
+	Trả {tên hoá đơn: số tín dụng dương}.
+	"""
+	from frappe.query_builder.functions import Sum
+
+	ple = frappe.qb.DocType("Payment Ledger Entry")
+	query = (
+		frappe.qb.from_(ple)
+		.select(ple.against_voucher_no, Sum(ple.amount).as_("balance"))
+		.where(
+			(ple.party_type == "Customer")
+			& (ple.party == customer)
+			& (ple.company == company)
+			& (ple.delinked == 0)
+			& (ple.against_voucher_type == "Sales Invoice")
+		)
+		.groupby(ple.against_voucher_no)
+	)
+	if invoice:
+		query = query.where(ple.against_voucher_no == invoice)
+	credits = {}
+	for row in query.run(as_dict=True):
+		credit = flt(-flt(row.balance), 2)
+		if credit >= 0.01:
+			credits[row.against_voucher_no] = credit
+	return credits
+
+
 def _validate_and_lock_invoice_credit(invoice_name, amount_to_redeem):
 	"""
 	Validate and lock invoice credit using SELECT FOR UPDATE.
@@ -333,7 +362,7 @@ def _validate_and_lock_invoice_credit(invoice_name, amount_to_redeem):
 	# This blocks other transactions from reading/modifying until we commit
 	query = (
 		frappe.qb.from_(SalesInvoice)
-		.select(SalesInvoice.name, SalesInvoice.outstanding_amount)
+		.select(SalesInvoice.name, SalesInvoice.customer, SalesInvoice.company)
 		.where(
 			(SalesInvoice.name == invoice_name) &
 			(SalesInvoice.docstatus == 1)
@@ -346,8 +375,10 @@ def _validate_and_lock_invoice_credit(invoice_name, amount_to_redeem):
 	if not result:
 		frappe.throw(_("Credit source invoice {0} not found or not submitted").format(invoice_name))
 
-	current_outstanding = flt(result[0].outstanding_amount)
-	available_credit = -current_outstanding  # Credit is negative outstanding
+	# Số tín dụng theo sổ công nợ — xem _open_invoice_credits.
+	available_credit = _open_invoice_credits(result[0].customer, result[0].company, invoice_name).get(
+		invoice_name, 0
+	)
 
 	if available_credit < amount_to_redeem:
 		frappe.throw(

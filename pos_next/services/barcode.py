@@ -15,6 +15,7 @@ from typing import FrozenSet, TypedDict
 
 import frappe
 from erpnext.stock.get_item_details import get_conversion_factor
+from frappe.utils import flt
 
 # Two-digit prefixes that identify "scale / weighted" internal barcodes (configurable later via POS Settings).
 _DEFAULT_SCALE_PREFIXES: FrozenSet[str] = frozenset({"21"})
@@ -188,6 +189,12 @@ def compute_resolved_item_data(
     For weighted barcodes: uses qty directly from the barcode.
     For priced barcodes: computes qty = encoded_price / item_rate.
 
+    ``item`` may carry ``stock_uom`` / ``stock_rate`` (unit and price per STOCK unit).
+    Callers whose ``uom`` / ``rate`` are not in the stock unit MUST pass them —
+    search_by_barcode() does, because its ``uom`` / ``rate`` are those of the
+    barcode's own UOM. get_items() already hands over stock-unit values, so it
+    can leave them out.
+
     Args:
         resolved_barcode: The result from resolve_barcode().
         item_rate: The item's unit price (required for priced barcodes).
@@ -211,6 +218,9 @@ def compute_resolved_item_data(
     barcode_uom_price = uom_prices.get(barcode_uom) if barcode_uom else None
     item_uom = item.get("uom")
     item_price = item.get("rate")
+    # Đơn vị và giá theo ĐƠN VỊ TỒN KHO — đích của hai nhánh quy đổi bên dưới.
+    stock_uom = item.get("stock_uom") or item_uom
+    stock_price = flt(item.get("stock_rate")) or item_price
 
     item_code_for_conv = item.get("name") or item.get("item_code")
 
@@ -228,12 +238,16 @@ def compute_resolved_item_data(
         uom = barcode_uom
         price = barcode_uom_price
         if barcode_uom and barcode_uom not in uom_prices:
+            # Đơn vị của mã không có giá riêng: quy khối lượng ra đơn vị tồn kho, và
+            # nhãn + giá cũng phải là của đơn vị tồn kho. Trước đây lấy `item_uom` /
+            # `item_price` — với search_by_barcode đó là đơn vị của mã, nên tem 1,25 kg
+            # của món tồn theo Gram ra 1.250 Kg.
             conversion_factor = get_conversion_factor(
                 item_code_for_conv, barcode_uom
             ).get("conversion_factor", 1)
             qty *= conversion_factor
-            uom = item_uom
-            price = item_price
+            uom = stock_uom
+            price = stock_price
         elif not barcode_uom:
             uom = item_uom
             price = item_price
@@ -258,11 +272,12 @@ def compute_resolved_item_data(
             uom = barcode_uom
             qty = encoded_price / price if price and price > 0 else None
         else:
-            conversion_factor = get_conversion_factor(
-                item_code_for_conv, barcode_uom
-            ).get("conversion_factor", 1)
-            uom = item_uom
-            price = conversion_factor * item_price
+            # Đơn vị của mã không có giá riêng: tính số lượng theo đơn vị tồn kho. Bản
+            # cũ chia tiền trên tem cho giá theo đơn vị của mã (ra số lượng theo đơn vị
+            # của mã) rồi gắn nhãn đơn vị tồn kho — tem 50.000 đ của món 200.000/kg tồn
+            # theo Gram ra 0,25 Gram; qua search_by_barcode hệ số còn bị nhân hai lần.
+            uom = stock_uom
+            price = stock_price
             qty = encoded_price / price if price and price > 0 else None
         return {
             "resolved_qty": qty,

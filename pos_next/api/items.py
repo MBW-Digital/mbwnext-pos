@@ -509,7 +509,7 @@ def search_by_barcode(barcode, pos_profile):
 			)
 			if ton_hien_co <= 0:
 				frappe.throw(
-					_("Mặt hàng {0} đã hết tồn tại kho {1}").format(
+					_("Item {0} is out of stock in warehouse {1}").format(
 						item_code, pos_profile_doc.warehouse
 					)
 				)
@@ -557,17 +557,29 @@ def search_by_barcode(barcode, pos_profile):
 				if p.get("valid_upto") and str(p["valid_upto"]) < today:
 					continue
 				uom_prices[p["uom"]] = p["price_list_rate"]
+			# `uom` / `rate` ở đây là của ĐƠN VỊ CỦA MÃ (đã truyền `barcode_uom` vào
+			# get_item_detail ở trên), không phải đơn vị tồn kho như món của get_items().
+			# Nhánh "đơn vị của mã không có giá riêng" trong compute_resolved_item_data
+			# quy số lượng ra đơn vị tồn kho, nên phải có thêm đơn vị và giá theo đơn vị
+			# tồn kho — thiếu thì tem 1,25 kg của món tồn theo Gram ra 1.250 Kg × giá Kg.
+			unit_rate = flt(item_details.get("rate") or item_details.get("price_list_rate"))
+			unit_factor = flt(item_details.get("conversion_factor")) or 1
 			enrich_item = {
 				"name": item_code,
 				"item_code": item_code,
 				"uom": item_details.get("uom") or item_doc.stock_uom,
-				"rate": flt(item_details.get("rate") or item_details.get("price_list_rate")),
+				"rate": unit_rate,
 				"uom_prices": uom_prices,
+				"stock_uom": item_doc.stock_uom,
+				"stock_rate": flt(uom_prices.get(item_doc.stock_uom)) or unit_rate / unit_factor,
 			}
 
 			extra = compute_resolved_item_data(resolved_barcode_data, enrich_item)
 			if extra:
 				item_details.update(extra)
+
+		# Mã của biến thể thì nói nó thuộc mẫu nào — app trừ dòng giỏ này vào huy hiệu tồn của mẫu.
+		item_details["variant_of"] = item_doc.variant_of or None
 
 		return item_details
 	except frappe.ValidationError:
@@ -670,49 +682,55 @@ def get_batch_serial_details(item_code, warehouse):
 		frappe.throw(_("Error fetching batch/serial details: {0}").format(str(e)))
 
 
+def _variants_query(pos_profile_doc):
+	"""Truy vấn các biến thể điểm bán được bán (còn bật, bán được, đúng công ty và thương hiệu) —
+	chưa lọc theo hàng mẫu. `get_item_variants` và `get_variants_for_cache` dùng chung, để hộp chọn
+	biến thể lúc có mạng và lúc mất mạng thấy đúng một danh sách. Trả kèm bảng `Item` để chỗ gọi
+	thêm điều kiện."""
+	# Query Builder for Frappe 16 compatibility
+	# Apply company filter: show variants for specific company + global variants (empty company)
+	Item = DocType("Item")
+	query = (
+		frappe.qb.from_(Item)
+		.select(
+			Item.name.as_("item_code"),
+			Item.item_name,
+			Item.stock_uom,
+			Item.image,
+			Item.is_stock_item,
+			Item.has_batch_no,
+			Item.has_serial_no,
+			Item.item_group,
+			Item.brand,
+			Item.custom_company,
+			Item.variant_of,
+		)
+		.where(Item.disabled == 0)
+		.where(Item.is_sales_item == 1)
+	)
+
+	# Add company filter to show items for specific company + global items
+	if pos_profile_doc.company:
+		query = query.where(
+			fn.Coalesce(Item.custom_company, "").isin([pos_profile_doc.company, ""])
+		)
+
+	# Brand whitelist from POS Profile
+	allowed_brands = _profile_brands(pos_profile_doc)
+	if allowed_brands:
+		query = query.where(fn.Coalesce(Item.brand, "").isin(allowed_brands))
+
+	return query, Item
+
+
 @frappe.whitelist()
 def get_item_variants(template_item, pos_profile):
 	"""Get all variants for a template item with prices and stock"""
 	try:
 		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
 
-		# Get all variants of this template using Query Builder for Frappe 16 compatibility
-		# Apply company filter: show variants for specific company + global variants (empty company)
-		Item = DocType("Item")
-		query = (
-			frappe.qb.from_(Item)
-			.select(
-				Item.name.as_("item_code"),
-				Item.item_name,
-				Item.stock_uom,
-				Item.image,
-				Item.is_stock_item,
-				Item.has_batch_no,
-				Item.has_serial_no,
-				Item.item_group,
-				Item.brand,
-				Item.custom_company,
-				Item.variant_of,
-			)
-			.where(Item.variant_of == template_item)
-			.where(Item.disabled == 0)
-			.where(Item.is_sales_item == 1)
-		)
-
-		# Add company filter to show items for specific company + global items
-		if pos_profile_doc.company:
-			query = query.where(
-				fn.Coalesce(Item.custom_company, "").isin([pos_profile_doc.company, ""])
-			)
-
-		# Brand whitelist from POS Profile
-		brand_rows = getattr(pos_profile_doc, "custom_brand_groups", None) or []
-		if brand_rows:
-			allowed_brands = [row.brand for row in brand_rows if row.brand]
-			if allowed_brands:
-				query = query.where(fn.Coalesce(Item.brand, "").isin(allowed_brands))
-
-		variants = query.run(as_dict=True)
+		query, Item = _variants_query(pos_profile_doc)
+		variants = query.where(Item.variant_of == template_item).run(as_dict=True)
 
 		# If no variants found, return empty with helpful message
 		if not variants:
@@ -721,112 +739,197 @@ def get_item_variants(template_item, pos_profile):
 			)
 			return []
 
-		# Get UOMs for all variants using Query Builder
-		variant_codes = [v["item_code"] for v in variants]
-		uom_map = {}
-		if variant_codes:
-			UOMConversion = DocType("UOM Conversion Detail")
-			uoms = (
-				frappe.qb.from_(UOMConversion)
-				.select(
-					UOMConversion.parent,
-					UOMConversion.uom,
-					UOMConversion.conversion_factor
-				)
-				.where(UOMConversion.parent.isin(variant_codes))
-				.orderby(UOMConversion.parent)
-				.orderby(UOMConversion.idx)
-				.run(as_dict=True)
-			)
-			for uom in uoms:
-				if uom["parent"] not in uom_map:
-					uom_map[uom["parent"]] = []
-				uom_map[uom["parent"]].append(
-					{"uom": uom["uom"], "conversion_factor": uom["conversion_factor"]}
-				)
-
-		# Get all UOM-specific prices for variants using Query Builder
-		uom_prices_map = {}
-		if variant_codes:
-			ItemPrice = DocType("Item Price")
-			prices = (
-				_filter_item_price_by_date(
-					frappe.qb.from_(ItemPrice)
-					.select(
-						ItemPrice.item_code,
-						ItemPrice.uom,
-						ItemPrice.price_list_rate
-					)
-					.where(ItemPrice.item_code.isin(variant_codes))
-					.where(ItemPrice.price_list == pos_profile_doc.selling_price_list),
-					ItemPrice,
-				)
-				.run(as_dict=True)
-			)
-			for price in prices:
-				if price["item_code"] not in uom_prices_map:
-					uom_prices_map[price["item_code"]] = {}
-				uom_prices_map[price["item_code"]][price["uom"]] = price["price_list_rate"]
-
-		# Get all variant attributes in a single query (performance optimization)
-		attributes_map = {}
-		if variant_codes:
-			attributes = frappe.get_all(
-				"Item Variant Attribute",
-				filters={"parent": ["in", variant_codes]},
-				fields=["parent", "attribute", "attribute_value"],
-			)
-			for attr in attributes:
-				if attr["parent"] not in attributes_map:
-					attributes_map[attr["parent"]] = {}
-				attributes_map[attr["parent"]][attr["attribute"]] = attr["attribute_value"]
-
-		# Batch query stock for all variants at once using Query Builder
-		stock_map = {}
-		if variant_codes and pos_profile_doc.warehouse:
-			Bin = DocType("Bin")
-			stocks = (
-				frappe.qb.from_(Bin)
-				.select(
-					Bin.item_code,
-					Bin.actual_qty
-				)
-				.where(Bin.item_code.isin(variant_codes))
-				.where(Bin.warehouse == pos_profile_doc.warehouse)
-				.run(as_dict=True)
-			)
-			stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
-
-		# Enrich each variant with attributes, price, stock, and UOMs
-		for variant in variants:
-			# Get variant attributes from preloaded map
-			variant["attributes"] = attributes_map.get(variant["item_code"], {})
-
-			# Get price from preloaded map (check stock UOM first, then any UOM)
-			variant_prices = uom_prices_map.get(variant["item_code"], {})
-			price = variant_prices.get(variant["stock_uom"])
-			if not price and variant_prices:
-				# Fallback to first available price if stock UOM price not found
-				price = next(iter(variant_prices.values()), None)
-			variant["rate"] = price or 0
-
-			# Get stock from pre-loaded stock map (performance optimization)
-			variant["actual_qty"] = stock_map.get(variant["item_code"], 0)
-
-			# Add warehouse
-			variant["warehouse"] = pos_profile_doc.warehouse
-
-			# Add UOMs (exclude stock UOM to avoid duplicates)
-			all_uoms = uom_map.get(variant["item_code"], [])
-			variant["item_uoms"] = [uom for uom in all_uoms if uom["uom"] != variant["stock_uom"]]
-
-			# Add UOM-specific prices
-			variant["uom_prices"] = uom_prices_map.get(variant["item_code"], {})
-
-		return variants
+		return _enrich_variants(variants, pos_profile_doc)
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Get Item Variants Error")
 		frappe.throw(_("Error fetching item variants: {0}").format(str(e)))
+
+
+@frappe.whitelist()
+def get_variants_for_cache(pos_profile, start=0, limit=500):
+	"""Biến thể của mọi hàng mẫu trong danh mục điểm bán, từng trang — để app POS lưu xuống máy và
+	bán hàng biến thể lúc mất mạng (`get_items` không trả biến thể; hỏi từng mẫu qua
+	`get_item_variants` thì danh mục nhiều mẫu là bấy nhiêu lượt gọi).
+
+	Mỗi biến thể giống hệt một dòng của `get_item_variants` (thuộc tính, giá, tồn, đơn vị), thêm mã
+	vạch và mẫu thuế như một món của `get_items` — lúc mất mạng còn quét mã biến thể và tính thuế.
+	Chỉ lấy biến thể của những mẫu `get_items` trả cho điểm bán (nhóm hàng, công ty, thương hiệu).
+	Xếp theo mã hàng để trang trước trang sau không đổi chỗ.
+	"""
+	try:
+		pos_profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+		start, limit = cint(start), cint(limit) or 500
+
+		# Hàng mẫu điểm bán được bán — cùng điều kiện danh mục. Số mẫu thường nhỏ.
+		conditions, params = _build_item_base_conditions(pos_profile_doc, None, _profile_brands(pos_profile_doc))
+		templates = frappe.db.sql_list(
+			f"SELECT i.name FROM `tabItem` i WHERE {' AND '.join(conditions)} AND i.has_variants = 1",
+			tuple(params),
+		)
+		if not templates:
+			return []
+
+		query, Item = _variants_query(pos_profile_doc)
+		variants = (
+			query.where(Item.variant_of.isin(templates))
+			.orderby(Item.name)
+			.limit(limit)
+			.offset(start)
+			.run(as_dict=True)
+		)
+		if not variants:
+			return []
+
+		variants = _enrich_variants(variants, pos_profile_doc)
+		codes = [v["item_code"] for v in variants]
+
+		# Mã vạch — cùng dạng `get_items` (nối bằng dấu phẩy) để app lưu và tra như món thường.
+		barcode_rows = frappe.db.sql(
+			f"""SELECT parent, GROUP_CONCAT(DISTINCT barcode) AS barcode,
+					GROUP_CONCAT(DISTINCT uom) AS barcode_uoms
+				FROM `tabItem Barcode`
+				WHERE parent IN ({", ".join(["%s"] * len(codes))})
+				GROUP BY parent""",
+			tuple(codes),
+			as_dict=True,
+		)
+		barcodes = {row["parent"]: row for row in barcode_rows}
+
+		from pos_next.controllers.python.sales_invoice import (
+			bulk_ensure_selling_item_tax_for_items,
+		)
+		item_tax_by_code = bulk_ensure_selling_item_tax_for_items(codes, pos_profile_doc.company)
+
+		for variant in variants:
+			code = variant["item_code"]
+			variant["barcode"] = (barcodes.get(code) or {}).get("barcode")
+			variant["barcode_uoms"] = (barcodes.get(code) or {}).get("barcode_uoms")
+			variant["price_list_rate"] = variant["rate"]
+			tax = item_tax_by_code.get(code)
+			if tax:
+				variant["item_tax_template"], variant["item_tax_rate"] = tax
+
+		return variants
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Get Variants For Cache Error")
+		frappe.throw(_("Error fetching item variants: {0}").format(str(e)))
+
+
+def _enrich_variants(variants, pos_profile_doc):
+	"""Gắn thuộc tính, giá, tồn ở kho điểm bán và các đơn vị bán vào từng biến thể."""
+	# Get UOMs for all variants using Query Builder
+	variant_codes = [v["item_code"] for v in variants]
+	uom_map = {}
+	if variant_codes:
+		UOMConversion = DocType("UOM Conversion Detail")
+		uoms = (
+			frappe.qb.from_(UOMConversion)
+			.select(
+				UOMConversion.parent,
+				UOMConversion.uom,
+				UOMConversion.conversion_factor
+			)
+			.where(UOMConversion.parent.isin(variant_codes))
+			.orderby(UOMConversion.parent)
+			.orderby(UOMConversion.idx)
+			.run(as_dict=True)
+		)
+		for uom in uoms:
+			if uom["parent"] not in uom_map:
+				uom_map[uom["parent"]] = []
+			uom_map[uom["parent"]].append(
+				{"uom": uom["uom"], "conversion_factor": uom["conversion_factor"]}
+			)
+
+	# Get all UOM-specific prices for variants using Query Builder
+	uom_prices_map = {}
+	if variant_codes:
+		ItemPrice = DocType("Item Price")
+		prices = (
+			_filter_item_price_by_date(
+				frappe.qb.from_(ItemPrice)
+				.select(
+					ItemPrice.item_code,
+					ItemPrice.uom,
+					ItemPrice.price_list_rate
+				)
+				.where(ItemPrice.item_code.isin(variant_codes))
+				.where(ItemPrice.price_list == pos_profile_doc.selling_price_list),
+				ItemPrice,
+			)
+			.run(as_dict=True)
+		)
+		for price in prices:
+			if price["item_code"] not in uom_prices_map:
+				uom_prices_map[price["item_code"]] = {}
+			uom_prices_map[price["item_code"]][price["uom"]] = price["price_list_rate"]
+
+	# Get all variant attributes in a single query (performance optimization)
+	attributes_map = {}
+	if variant_codes:
+		attributes = frappe.get_all(
+			"Item Variant Attribute",
+			filters={"parent": ["in", variant_codes]},
+			fields=["parent", "attribute", "attribute_value"],
+		)
+		for attr in attributes:
+			if attr["parent"] not in attributes_map:
+				attributes_map[attr["parent"]] = {}
+			attributes_map[attr["parent"]][attr["attribute"]] = attr["attribute_value"]
+
+	# Batch query stock for all variants at once using Query Builder
+	stock_map = {}
+	if variant_codes and pos_profile_doc.warehouse:
+		Bin = DocType("Bin")
+		stocks = (
+			frappe.qb.from_(Bin)
+			.select(
+				Bin.item_code,
+				Bin.actual_qty
+			)
+			.where(Bin.item_code.isin(variant_codes))
+			.where(Bin.warehouse == pos_profile_doc.warehouse)
+			.run(as_dict=True)
+		)
+		stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+
+	# Enrich each variant with attributes, price, stock, and UOMs
+	for variant in variants:
+		# Get variant attributes from preloaded map
+		variant["attributes"] = attributes_map.get(variant["item_code"], {})
+
+		# Get price from preloaded map (check stock UOM first, then any UOM)
+		variant_prices = uom_prices_map.get(variant["item_code"], {})
+		price = variant_prices.get(variant["stock_uom"])
+		if not price and variant_prices:
+			# Fallback to first available price if stock UOM price not found
+			price = next(iter(variant_prices.values()), None)
+		variant["rate"] = price or 0
+
+		# Get stock from pre-loaded stock map (performance optimization)
+		variant["actual_qty"] = stock_map.get(variant["item_code"], 0)
+
+		# Add warehouse
+		variant["warehouse"] = pos_profile_doc.warehouse
+
+		# Add UOMs (exclude stock UOM to avoid duplicates)
+		all_uoms = uom_map.get(variant["item_code"], [])
+		variant["item_uoms"] = [uom for uom in all_uoms if uom["uom"] != variant["stock_uom"]]
+
+		# Add UOM-specific prices
+		variant["uom_prices"] = uom_prices_map.get(variant["item_code"], {})
+
+	return variants
+
+
+def _profile_item_groups(pos_profile_doc):
+	"""Nhóm hàng POS Profile cho bán, kèm mọi nhóm con; danh sách rỗng là không giới hạn."""
+	from frappe.utils.nestedset import get_descendants_of
+
+	groups = {row.item_group for row in pos_profile_doc.get("item_groups") or [] if row.item_group}
+	for group in list(groups):
+		groups.update(get_descendants_of("Item Group", group) or [])
+	return sorted(groups)
 
 
 def _build_item_base_conditions(pos_profile_doc, item_group=None, brand_list=None):
@@ -845,6 +948,15 @@ def _build_item_base_conditions(pos_profile_doc, item_group=None, brand_list=Non
 	if item_group:
 		conditions.append("item_group = %s")
 		params.append(item_group)
+
+	# Chỉ nhóm hàng POS Profile cho bán (bảng Item Groups, kèm nhóm con). Trước đây máy chủ không lọc:
+	# PWA tự lọc trên máy vì nạp cả danh mục (`itemSearch.js`), còn app native lấy từng trang từ đây nên
+	# thẻ "Tất cả" hiện — và bán được — cả món ngoài nhóm của điểm bán.
+	allowed_groups = _profile_item_groups(pos_profile_doc)
+	if allowed_groups:
+		placeholders = ", ".join(["%s"] * len(allowed_groups))
+		conditions.append(f"i.item_group IN ({placeholders})")
+		params.extend(allowed_groups)
 
 	if brand_list:
 		placeholders = ", ".join(["%s"] * len(brand_list))
@@ -1271,11 +1383,16 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 				END)
 			"""
 			score_params = [effective_search_term, prefix_pattern, effective_search_term, effective_search_term, prefix_pattern, prefix_pattern]
-			order_by = f"{relevance} DESC, i.item_name ASC"
+			order_by = f"{relevance} DESC, i.item_name ASC, i.name ASC"
 		else:
 			# No search term - simple ordering
 			score_params = []
-			order_by = "i.item_name ASC"
+			# `i.name` phân thứ tự các món TRÙNG TÊN. Thiếu nó thì MySQL không hứa trả
+			# chúng theo cùng thứ tự giữa hai lần gọi, mà client lấy danh mục theo trang
+			# (LIMIT/OFFSET): hai món trùng tên nằm đúng chỗ giáp trang có thể một món
+			# ra hai lần, món kia không lần nào. App POS RN còn lưu danh mục offline
+			# theo đúng các trang này — món bị sót sẽ bị xoá khỏi máy.
+			order_by = "i.item_name ASC, i.name ASC"
 
 		where_clause = " AND ".join(conditions)
 
@@ -1354,6 +1471,19 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 					.run(as_dict=True)
 				)
 				stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+
+			# Hàng mẫu: tổng tồn các biến thể — một truy vấn cho cả trang, chỉ khi trang có mẫu.
+			# Ghi vào `stock_map` để đi chung nhánh gán `actual_qty` bên dưới (mẫu là hàng quản tồn).
+			template_codes = [item["item_code"] for item in items if item.get("has_variants")]
+			if template_codes:
+				stock_map.update(
+					_variant_stock_totals(
+						template_codes,
+						[pos_profile_doc.warehouse],
+						pos_profile_doc.company,
+						_profile_brands(pos_profile_doc),
+					)
+				)
 
 		# ===================================================================
 		# PRODUCT BUNDLE AVAILABILITY: Calculate bundle stock (bulk optimized)
@@ -1495,11 +1625,17 @@ def get_items(pos_profile, search_term=None, item_group=None, start=0, limit=20)
 			# Example 3 - Service Item (Consulting):
 			#   is_stock_item = 0
 			#   actual_qty = 0 (not a bundle, no stock tracking)
+			#   Template (has_variants = 1):
+			#     actual_qty = tổng tồn các biến thể (`_variant_stock_totals`)
 			item["actual_qty"] = (
 				stock_map.get(item["item_code"], 0)
-				if item.get("is_stock_item")
+				if item.get("is_stock_item") or item.get("has_variants")
 				else bundle_availability_map.get(item["item_code"], 0)
 			)
+			# Báo cho client biết số của hàng mẫu là tổng biến thể thật — máy chủ bản cũ cũng trả
+			# `actual_qty` = 0 cho mẫu, client không có cờ này thì đừng hiện số 0 đó.
+			if item.get("has_variants"):
+				item["stock_from_variants"] = 1
 
 			# ===================================================================
 			# BUNDLE MARKER: Flag items that are Product Bundles
@@ -1658,8 +1794,50 @@ def get_item_groups(pos_profile):
 		frappe.throw(_("Error fetching item groups: {0}").format(str(e)))
 
 
+def _variant_stock_totals(template_codes, warehouses, company=None, brands=None):
+	"""Tổng tồn các biến thể của từng hàng mẫu ở `warehouses` — {mã hàng mẫu: số lượng}.
+
+	Hàng mẫu không có tồn của riêng nó (không có Bin), nên `actual_qty` của nó trước đây luôn là 0
+	và danh mục không hiện được huy hiệu. App POS hiện số này trên ô hàng mẫu: còn hàng hay không,
+	chứ không nói màu / cỡ nào còn — tồn từng biến thể vẫn xem ở hộp chọn biến thể.
+
+	Chỉ cộng những biến thể hộp chọn biến thể liệt kê (`get_item_variants`): còn bật, bán được,
+	đúng công ty (`company`) và thương hiệu của điểm bán (`brands`) — để huy hiệu khớp với hộp.
+
+	Một truy vấn cho cả lượt, đi theo chỉ mục `variant_of` của Item và `(item_code, warehouse)` của
+	Bin: số dòng đọc bằng số biến thể của các mẫu được hỏi, không phụ thuộc cỡ danh mục.
+	"""
+	if not template_codes or not warehouses:
+		return {}
+
+	Item = DocType("Item")
+	Bin = DocType("Bin")
+	query = (
+		frappe.qb.from_(Item)
+		.join(Bin)
+		.on(Bin.item_code == Item.name)
+		.select(Item.variant_of, fn.Coalesce(fn.Sum(Bin.actual_qty), 0).as_("actual_qty"))
+		.where(Item.variant_of.isin(list(template_codes)))
+		.where(Item.disabled == 0)
+		.where(Item.is_sales_item == 1)
+		.where(Bin.warehouse.isin(list(warehouses)))
+		.groupby(Item.variant_of)
+	)
+	if company:
+		query = query.where(fn.Coalesce(Item.custom_company, "").isin([company, ""]))
+	if brands:
+		query = query.where(fn.Coalesce(Item.brand, "").isin(list(brands)))
+	return {row["variant_of"]: flt(row["actual_qty"]) for row in query.run(as_dict=True)}
+
+
+def _profile_brands(pos_profile_doc):
+	"""Thương hiệu điểm bán được bán (bảng `custom_brand_groups` của POS Profile); rỗng là không lọc."""
+	rows = getattr(pos_profile_doc, "custom_brand_groups", None) or []
+	return [row.brand for row in rows if row.brand]
+
+
 @frappe.whitelist()
-def get_stock_quantities(item_codes, warehouse):
+def get_stock_quantities(item_codes, warehouse, pos_profile=None):
 	"""
 	Lightweight endpoint to get only stock quantities for specified items.
 	Used for real-time stock updates after invoice submission.
@@ -1667,9 +1845,13 @@ def get_stock_quantities(item_codes, warehouse):
 	Args:
 		item_codes: JSON string or list of item codes
 		warehouse: Warehouse name
+		pos_profile: Điểm bán đang hỏi (không bắt buộc) — để tổng tồn của hàng mẫu lọc biến thể
+			theo đúng công ty và thương hiệu của điểm bán, như `get_items`. Thiếu thì lấy công ty
+			của kho, không lọc thương hiệu.
 
 	Returns:
-		List of dicts with item_code, warehouse, and actual_qty
+		List of dicts with item_code, warehouse, and actual_qty. Hàng mẫu có biến thể trả tổng tồn
+		các biến thể (`_variant_stock_totals`), cùng số `get_items` trả.
 	"""
 	try:
 		# Parse item_codes if it's a JSON string
@@ -1729,11 +1911,28 @@ def get_stock_quantities(item_codes, warehouse):
 		# Get bundle availability for non-stock items (bulk optimized)
 		bundle_availability_map = _calculate_bundle_availability_bulk(normalized_codes, warehouse)
 
+		# Hàng mẫu có biến thể: tổng tồn các biến thể. Dò mẫu theo khoá chính — rẻ, và đa số lượt
+		# hỏi (dòng giỏ) không có mẫu nào thì bỏ qua luôn truy vấn cộng tồn.
+		template_codes = frappe.get_all(
+			"Item", filters={"name": ["in", normalized_codes], "has_variants": 1}, pluck="name"
+		)
+		variant_totals = {}
+		if template_codes:
+			if pos_profile:
+				profile_doc = frappe.get_cached_doc("POS Profile", pos_profile)
+				company, brands = profile_doc.company, _profile_brands(profile_doc)
+			else:
+				company, brands = frappe.db.get_value("Warehouse", warehouse, "company"), None
+			variant_totals = _variant_stock_totals(template_codes, warehouses, company, brands)
+
 		# Return stock for all requested items
 		result = []
 		for item_code in normalized_codes:
+			if item_code in template_codes:
+				actual_qty = flt(variant_totals.get(item_code))
+				reserved_qty = 0.0
 			# Check if it's a bundle
-			if item_code in bundle_availability_map:
+			elif item_code in bundle_availability_map:
 				# Bundle item - use calculated availability
 				actual_qty = flt(bundle_availability_map[item_code])
 				reserved_qty = 0.0

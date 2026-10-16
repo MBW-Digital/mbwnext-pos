@@ -191,6 +191,66 @@ def apply_coupon_discount(coupon, cart_total, net_total=None):
     }
 
 
+def coupon_discount_on_totals(coupon, grand_total, total_taxes, precision=2):
+    """Tiền giảm của mã trên một hoá đơn đã tính xong mọi giảm giá khác — cùng luật với
+    `couponDiscount` của app POS native (`src/domain/cart/coupon.ts`).
+
+    Gốc tính theo `apply_on` của mã, đúng nghĩa ERPNext:
+    - "Grand Total" (mặc định): tổng cộng khách phải trả trước khi áp mã — sau giảm giá dòng, sau
+      chiết khấu cả hoá đơn của khuyến mại, đã gồm thuế;
+    - "Net Total": cũng số đó nhưng trước thuế.
+    `min_amount` so với cùng số làm gốc; % hoặc số tiền, trần `max_amount`, không vượt chính gốc.
+
+    Khác `apply_coupon_discount` ở trên (bản PWA còn dùng): bản đó tính "Grand Total" trên tiền hàng
+    trước thuế, trước cả giảm giá dòng.
+
+    Trả về dict:
+    - amount: tổng cộng giảm đi (đã gồm thuế) — số khách bớt phải trả; 0 khi chưa đủ mức tối thiểu;
+    - net_amount: phần trước thuế của amount;
+    - missing: tổng cộng còn thiếu để tới mức tối thiểu; 0 là đã đủ.
+    """
+    gross = max(0.0, flt(grand_total))
+    tax = min(max(0.0, flt(total_taxes)), gross)
+    net = gross - tax
+    on_net = coupon.apply_on == "Net Total"
+    base = net if on_net else gross
+
+    def to_gross(value):
+        # Mã trước thuế giảm 100 thì tổng cộng giảm 100 × (tổng cộng / trước thuế).
+        return value * gross / net if on_net and net > 0 else value
+
+    min_amount = flt(coupon.min_amount)
+    if min_amount > 0 and base < min_amount:
+        return {"amount": 0, "net_amount": 0, "missing": flt(to_gross(min_amount - base), precision)}
+
+    percentage = flt(coupon.discount_percentage) if coupon.discount_type == "Percentage" else 0
+    fixed = flt(coupon.discount_amount) if coupon.discount_type == "Amount" else 0
+    if percentage > 0:
+        value = flt(base * percentage / 100, precision)
+    elif fixed > 0:
+        value = flt(fixed, precision)
+    else:
+        value = 0
+
+    max_amount = flt(coupon.max_amount)
+    if max_amount > 0 and value > max_amount:
+        value = flt(max_amount, precision)
+    value = max(0.0, min(value, base))
+    if value <= 0:
+        return {"amount": 0, "net_amount": 0, "missing": 0}
+
+    # Giảm hết gốc thì giảm hết cả hai phần — không sót một đồng làm tròn.
+    if value >= base:
+        return {"amount": flt(gross, precision), "net_amount": flt(net, precision), "missing": 0}
+    if on_net:
+        return {"amount": flt(to_gross(value), precision), "net_amount": value, "missing": 0}
+    return {
+        "amount": value,
+        "net_amount": flt(value * net / gross if gross > 0 else 0, precision),
+        "missing": 0,
+    }
+
+
 def increment_coupon_usage(coupon_code):
     """Increment the usage counter for a coupon"""
     try:

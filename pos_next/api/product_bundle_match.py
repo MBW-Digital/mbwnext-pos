@@ -68,12 +68,19 @@ def _get_active_bundles() -> list[dict[str, Any]]:
 	parent_codes = [b.new_item_code for b in bundles if b.new_item_code]
 	item_names = {}
 	if parent_codes:
+		# Only bundles whose parent item can still be sold. A Product Bundle stays
+		# enabled when its parent Item is disabled, and the cart would then offer to
+		# merge components into an item that cannot be added (get_item_details rejects
+		# it) - noise at best, a failed merge at worst.
 		for row in frappe.get_all(
 			"Item",
-			filters={"name": ["in", parent_codes]},
+			filters={"name": ["in", parent_codes], "disabled": 0},
 			fields=["name", "item_name"],
 		):
 			item_names[row.name] = row.item_name
+	bundles = [b for b in bundles if b.new_item_code in item_names]
+	if not bundles:
+		return []
 
 	component_fields = ["parent", "item_code", "qty", "uom", "description"]
 	pbi_meta = frappe.get_meta("Product Bundle Item")

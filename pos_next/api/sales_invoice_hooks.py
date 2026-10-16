@@ -8,7 +8,7 @@ Event handlers for Sales Invoice document events
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt
+from frappe.utils import cint, flt, fmt_money
 
 
 def validate(doc, method=None):
@@ -24,8 +24,175 @@ def validate(doc, method=None):
 	apply_tax_inclusive(doc)
 	auto_assign_loyalty_program_on_invoice(doc)
 	restore_pos_authoritative_discounts(doc)
+	apply_pos_manual_discount(doc)
+	add_pos_coupon_discount(doc)
 	reconcile_base_grand_total(doc)
 	reconcile_inclusive_tax_rounding(doc)
+
+
+# ==========================================
+# Mã giảm giá cộng trên khuyến mại cả hoá đơn
+# ==========================================
+#
+# Hoá đơn ERPNext chỉ có MỘT ô giảm cả hoá đơn (`discount_amount` / `additional_discount_percentage`
+# + `apply_discount_on`), và mỗi lần lưu / chốt, `validate` của ERPNext áp lại khuyến mại theo giao
+# dịch (`apply_pricing_rule_on_transaction`) ghi đè ô đó — tiền giảm của mã nằm chung ô bị xoá.
+#
+# Hai bước dưới giữ được cả hai:
+# 1. `strip_pos_coupon_discount` (before_validate): bỏ phần của mã ra khỏi ô, ô chỉ còn khuyến mại;
+# 2. ERPNext áp lại khuyến mại như thường (tự kiểm mức tối thiểu, ngày hiệu lực...);
+# 3. `add_pos_coupon_discount` (validate): máy chủ TỰ TÍNH tiền giảm của mã trên số đã trừ khuyến
+#    mại (`coupon_discount_on_totals`) rồi cộng vào ô. Dòng `custom_pos_coupons` ghi hai số:
+#    `discount_amount` — tiền khách thực được bớt (đã gồm thuế), cho người xem / báo cáo;
+#    `invoice_discount_amount` (ẩn) — đúng phần đã cộng vào ô, theo gốc `apply_discount_on` của ô
+#    (gốc "Net Total" thì là phần trước thuế), cho bước 1 lần lưu sau.
+#
+# Chỉ chạy khi máy bán yêu cầu (`coupon_after_offer` trong gói gửi `update_invoice` /
+# `submit_invoice` → `doc.flags.pos_coupon_after_offer`). Bản PWA chưa gửi cờ này: nó tự tính mã theo
+# luật cũ rồi gộp vào `discount_amount`, máy chủ giữ nguyên cách cũ cho nó — đổi số dưới chân PWA là
+# hoá đơn lệch tiền thu ngân vừa thu.
+
+
+def _pos_coupon_row(doc):
+	if not doc.flags.get("pos_coupon_after_offer") or not doc.meta.get_field("custom_pos_coupons"):
+		return None
+	rows = doc.get("custom_pos_coupons") or []
+	return rows[0] if rows and rows[0].get("coupon") else None
+
+
+def strip_pos_coupon_discount(doc, method=None):
+	"""Bước 1: bỏ phần của mã (đã cộng ở lần lưu trước) ra khỏi ô giảm cả hoá đơn.
+
+	`custom_pos_coupons[0].invoice_discount_amount` là đúng phần đã cộng vào `discount_amount`, cùng
+	gốc `apply_discount_on`. Lần lưu đầu nó là 0 (`update_invoice` đặt) — không có gì để bỏ.
+	"""
+	row = _pos_coupon_row(doc)
+	if not row:
+		return
+	added = flt(row.get("invoice_discount_amount"))
+	if added <= 0:
+		return
+	# Đang có % thì ô do % quyết định — số tiền chưa gồm phần của mã.
+	if not flt(doc.get("additional_discount_percentage")):
+		doc.discount_amount = max(0.0, flt(doc.discount_amount) - added)
+	row.invoice_discount_amount = 0
+
+
+def apply_pos_manual_discount(doc):
+	"""Khoản giảm cả hoá đơn thu ngân gõ (`posa_manual_discount_amount`) THAY khuyến mại cả hoá đơn.
+
+	Luật chốt 05/10/2026: có khoản gõ tay thì khuyến mại cả hoá đơn không áp; mã giảm giá vẫn trừ
+	tiếp sau đó (`add_pos_coupon_discount` chạy ngay sau hàm này). ERPNext áp lại khuyến mại trong
+	mỗi lần validate, nên mỗi lần đều đặt lại ô giảm bằng khoản gõ tay — số đó lưu trên hoá đơn nên
+	lưu lại từ Desk cũng giữ. Khuyến mại theo dòng và khuyến mại tặng hàng không đụng tới.
+
+	Máy chủ kiểm: điểm bán có cho thu ngân giảm giá cả hoá đơn không, và trần `max_discount_allowed`
+	(% trên tổng cộng trước giảm giá cả hoá đơn — cùng gốc app tính %). Bản PWA chỉ kiểm trần ở máy
+	bán. Gói không mang số này (PWA) thì không đổi gì.
+	"""
+	manual = flt(doc.get("posa_manual_discount_amount"))
+	if manual <= 0 or not cint(doc.get("is_pos")):
+		return
+
+	settings = frappe.db.get_value(
+		"POS Settings",
+		{"pos_profile": doc.pos_profile},
+		["allow_user_to_edit_additional_discount", "max_discount_allowed"],
+		as_dict=True,
+	) or {}
+	if not cint(settings.get("allow_user_to_edit_additional_discount")):
+		frappe.throw(_("POS Profile {0} does not allow cashiers to discount the whole invoice.").format(doc.pos_profile))
+
+	precision = doc.precision("discount_amount")
+	# Tổng cộng trước mọi giảm giá cả hoá đơn — gốc để kiểm trần.
+	doc.additional_discount_percentage = 0
+	doc.discount_amount = 0
+	doc.apply_discount_on = "Grand Total"
+	doc.calculate_taxes_and_totals()
+	base = flt(doc.grand_total)
+
+	if manual > base:
+		frappe.throw(
+			_("Additional discount {0} is greater than the invoice grand total ({1}).").format(
+				fmt_money(manual, currency=doc.currency), fmt_money(base, currency=doc.currency)
+			)
+		)
+	max_pct = flt(settings.get("max_discount_allowed"))
+	if max_pct > 0 and manual > flt(base * max_pct / 100, precision) + 1:
+		frappe.throw(
+			_("Additional discount is at most {0}% ({1}), but {2} was given.").format(
+				f"{max_pct:g}",
+				fmt_money(base * max_pct / 100, currency=doc.currency),
+				fmt_money(manual, currency=doc.currency),
+			)
+		)
+
+	# Mã giảm giá máy chủ tự tính (có cờ) do `add_pos_coupon_discount` cộng sau. Không có cờ (lưu lại
+	# từ Desk) thì giữ phần của mã đã ghi lần trước, đừng để mã mất theo.
+	kept_coupon = 0.0
+	if not doc.flags.get("pos_coupon_after_offer"):
+		kept_coupon = sum(flt(r.get("invoice_discount_amount")) for r in doc.get("custom_pos_coupons") or [])
+
+	doc.discount_amount = flt(manual + kept_coupon, precision)
+	if doc.meta.get_field("posa_transaction_pricing_rule"):
+		# Khuyến mại không áp — trả hàng không được thu hồi khuyến mại này.
+		doc.posa_transaction_pricing_rule = None
+	doc.calculate_taxes_and_totals()
+	if hasattr(doc, "set_default_additional_discount_account"):
+		doc.set_default_additional_discount_account()
+
+
+def add_pos_coupon_discount(doc):
+	"""Bước 3: tính tiền giảm của mã trên hoá đơn đã trừ khuyến mại, cộng vào ô giảm cả hoá đơn."""
+	row = _pos_coupon_row(doc)
+	if not row:
+		return
+
+	from pos_next.pos_next.doctype.pos_coupon.pos_coupon import coupon_discount_on_totals
+
+	coupon = frappe.get_cached_doc("POS Coupon", row.coupon)
+	precision = doc.precision("discount_amount")
+	result = coupon_discount_on_totals(
+		coupon, doc.grand_total, doc.total_taxes_and_charges, precision
+	)
+	if result["amount"] <= 0:
+		# Gửi mã mà máy chủ thấy không giảm thì lúc chốt vẫn bị trừ lượt dùng — chặn.
+		frappe.throw(
+			_("The invoice has not reached the minimum amount for coupon {0} ({1} short).").format(
+				row.coupon_code or row.coupon,
+				fmt_money(result["missing"], currency=doc.currency),
+			)
+		)
+
+	# Số máy bán đã trừ cho khách phải khớp số máy chủ tính — lệch là đã thu sai tiền.
+	client_amount = doc.flags.get("pos_coupon_client_amount")
+	if client_amount is not None and abs(flt(client_amount) - result["amount"]) > 1:
+		frappe.throw(
+			_("Discount for coupon {0}: the POS calculated {1}, the server calculated {2}. Reload the cart and check out again.").format(
+				row.coupon_code or row.coupon,
+				fmt_money(client_amount, currency=doc.currency),
+				fmt_money(result["amount"], currency=doc.currency),
+			)
+		)
+
+	has_offer = flt(doc.get("additional_discount_percentage")) or flt(doc.get("discount_amount"))
+	if not has_offer:
+		# Chỉ có mã: số của mã đã gồm thuế, trừ thẳng khỏi tổng cộng.
+		doc.apply_discount_on = "Grand Total"
+	# Cộng theo gốc của ô: "Net Total" thì cộng phần trước thuế, ERPNext tự tính lại thuế.
+	added = result["net_amount"] if doc.get("apply_discount_on") == "Net Total" else result["amount"]
+
+	# % của khuyến mại đổi thành số tiền ERPNext vừa tính từ nó, để cộng được phần của mã.
+	doc.additional_discount_percentage = 0
+	doc.discount_amount = flt(flt(doc.discount_amount) + added, precision)
+	row.invoice_discount_amount = added
+	row.discount_amount = result["amount"]
+	doc.calculate_taxes_and_totals()
+
+	# Ô giảm vừa có tiền — điền tài khoản chiết khấu nếu `validate` của hoá đơn chưa điền (lúc đó ô
+	# có thể đang 0 vì phần của mã đã bị bỏ ra ở bước 1).
+	if hasattr(doc, "set_default_additional_discount_account"):
+		doc.set_default_additional_discount_account()
 
 
 def capture_pos_authoritative_discounts(doc, method=None):

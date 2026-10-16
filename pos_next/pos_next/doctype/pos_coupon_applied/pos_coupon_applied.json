@@ -9,7 +9,8 @@
   "coupon_code",
   "discount_type",
   "discount_percentage",
-  "discount_amount"
+  "discount_amount",
+  "invoice_discount_amount"
  ],
  "fields": [
   {
@@ -59,13 +60,23 @@
    "in_list_view": 1,
    "label": "Discount Amount",
    "options": "currency",
+   "read_only": 1,
+   "description": "Tiền giảm của mã. Hoá đơn máy chủ tự tính mã (coupon_after_offer): số khách thực được bớt, đã gồm thuế. Hoá đơn khác: số máy bán gửi lên."
+  },
+  {
+   "description": "Phần cộng vào ô giảm cả hoá đơn của hoá đơn (discount_amount), theo gốc apply_discount_on của nó — gốc Net Total thì là phần trước thuế. Máy chủ dùng để bỏ ra rồi tính lại mỗi lần lưu / chốt.",
+   "fieldname": "invoice_discount_amount",
+   "fieldtype": "Currency",
+   "hidden": 1,
+   "label": "Invoice Discount Amount",
+   "options": "currency",
    "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-07-29 10:00:00.000000",
+ "modified": "2026-10-05 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "POS Next",
  "name": "POS Coupon Applied",

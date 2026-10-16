@@ -51,8 +51,15 @@ OFFERS_CACHE_TTL_SECONDS = 3600
 
 def clear_offers_cache(doc=None, method=None):
 	"""Invalidate cached POS offers. Hooked to Pricing Rule / Promotional
-	Scheme / Promotion Campaign on_update and on_trash."""
+	Scheme / Promotion Campaign on_update and on_trash.
+
+	Also tells open POS terminals to re-fetch their offer list (`pos_offers_updated`)."""
 	frappe.cache().delete_keys(OFFERS_CACHE_KEY_PREFIX)
+
+	# Import here: realtime_events imports api.items at module level.
+	from pos_next.realtime_events import emit_offers_updated_event
+
+	emit_offers_updated_event(doc, method)
 
 
 # ============================================================================
@@ -473,7 +480,7 @@ class OfferBuilder:
 		return Offer(
 			name=rule["name"],
 			title=rule.get("title") or rule.get("promotional_scheme") or rule["name"],
-			description=rule.get("custom_promotion_campaign") or "",
+			description=rule.get("title") or rule.get("promotional_scheme") or "",
 			apply_on=rule["apply_on"],
 			offer="Item Price" if is_price_discount else "Give Product",
 			auto=is_auto,
@@ -632,92 +639,6 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		return []
 
 
-def _campaign_valid_on_date(campaign_name: str, date) -> bool:
-	"""Valid From <= date <= Valid Upto (blank date bounds are ignored)."""
-	if not campaign_name:
-		return False
-	if not frappe.db.exists("Promotion Campaign", campaign_name):
-		return False
-	meta = frappe.get_meta("Promotion Campaign")
-	check_date = getdate(date)
-	if meta.has_field("custom_valid_from"):
-		valid_from = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_from")
-		if valid_from and getdate(valid_from) > check_date:
-			return False
-	if meta.has_field("custom_valid_upto"):
-		valid_upto = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_upto")
-		if valid_upto and getdate(valid_upto) < check_date:
-			return False
-	return True
-
-
-def _campaign_matches_pos_warehouse(campaign_name: str, pos_warehouse: Optional[str]) -> bool:
-	"""Child table Promotional Scheme Warehouse must include a row matching POS warehouse."""
-	if not campaign_name or not pos_warehouse:
-		return False
-
-	meta = frappe.get_meta("Promotion Campaign")
-	child_field = "custom_promotional_scheme_warehouse"
-	if not meta.has_field(child_field):
-		return False
-
-	child_rows = frappe.get_all(
-		"Promotional Scheme Warehouse",
-		filters={
-			"parent": campaign_name,
-			"parenttype": "Promotion Campaign",
-			"parentfield": child_field,
-		},
-		fields=["warehouse"],
-		pluck="warehouse",
-	)
-	if not child_rows:
-		return False
-
-	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
-
-	return any(
-		pricing_rule_matches_warehouse(row_warehouse, pos_warehouse) for row_warehouse in child_rows
-	)
-
-
-@frappe.whitelist()
-def get_promotion_campaigns_for_pos(pos_profile: str) -> List[Dict]:
-	"""Promotion Campaign names for POS: valid today and warehouse matches POS Profile."""
-	if not pos_profile:
-		return []
-	if not frappe.db.exists("DocType", "Promotion Campaign"):
-		return []
-	if not frappe.db.exists("POS Profile", pos_profile):
-		return []
-
-	pos_warehouse = frappe.db.get_value("POS Profile", pos_profile, "warehouse")
-	if not pos_warehouse:
-		return []
-
-	date = getdate()
-	result = []
-
-	for row in frappe.get_all(
-		"Promotion Campaign",
-		fields=["name", "promotion_name"],
-		order_by="promotion_name asc",
-		limit_page_length=100,
-	):
-		if not _campaign_valid_on_date(row.name, date):
-			continue
-		if not _campaign_matches_pos_warehouse(row.name, pos_warehouse):
-			continue
-		result.append(
-			{
-				"name": row.name,
-				"promotion_name": row.promotion_name or row.name,
-			}
-		)
-
-	return result
-
-
 def _get_promotional_scheme_offers(
 	company: str, date: str, pos_warehouse: Optional[str] = None
 ) -> List[Offer]:
@@ -732,7 +653,7 @@ def _get_promotional_scheme_offers(
 			name, title, apply_on, selling, promotional_scheme,
 			promotional_scheme_id, coupon_code_based,
 			price_or_product_discount, apply_discount_on, priority,
-			warehouse, valid_from, valid_upto, custom_promotion_campaign,
+			warehouse, valid_from, valid_upto,
 			mixed_conditions
 			{applicable_cols}
 			{time_cols}

@@ -147,6 +147,168 @@ def get_promotions(pos_profile=None, company=None, include_disabled=False):
 	return all_promotions
 
 
+# Phân trang cho app RN (pos-next-mobile). Hai hàm `get_promotions` / `get_coupons` ở trên giữ
+# nguyên cho PWA: chúng trả cả danh sách một lần và `get_promotions` đọc riêng từng dòng (`get_doc`)
+# để đếm món. Hai hàm `*_page` dưới đây tìm, lọc trạng thái, đếm và cắt trang ngay trong SQL.
+
+PAGE_LIMIT_DEFAULT = 20
+PAGE_LIMIT_MAX = 100
+
+
+def _page_window(start, limit):
+	start = max(cint(start), 0)
+	limit = min(max(cint(limit) or PAGE_LIMIT_DEFAULT, 1), PAGE_LIMIT_MAX)
+	return start, limit
+
+
+def _search_condition(columns, search, values):
+	"""Điều kiện tìm theo chữ trên các cột, hay chuỗi rỗng khi không tìm.
+
+	Collation utf8mb4_unicode_ci đã bỏ dấu khi so (`giảm` khớp `giam`) nhưng coi `đ` khác `d` — đổi
+	`đ` thành `d` ở cả hai phía để gõ "dong" ra "Đông". Ký tự đại diện của LIKE trong chữ gõ được thoát.
+	"""
+	term = cstr(search).strip().lower().replace("đ", "d")
+	if not term:
+		return ""
+	term = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+	values["search"] = f"%{term}%"
+	return "(" + " or ".join(
+		f"replace(lower(ifnull({column}, '')), 'đ', 'd') like %(search)s" for column in columns
+	) + ")"
+
+
+def _status_case(disabled_column, extra=""):
+	"""Trạng thái tính trong SQL — cùng thứ tự xét với `get_promotions` / `get_coupons`."""
+	return f"""case
+		when {disabled_column} = 1 then 'Disabled'
+		when valid_from is not null and valid_from > %(today)s then 'Not Started'
+		when valid_upto is not null and valid_upto < %(today)s then 'Expired'
+		{extra}
+		else 'Active' end"""
+
+
+def _company_of(company, pos_profile):
+	if company:
+		return company
+	if pos_profile:
+		return frappe.db.get_value("POS Profile", pos_profile, "company")
+	frappe.throw(_("Company is required"))
+
+
+@frappe.whitelist()
+def get_promotions_page(company=None, pos_profile=None, start=0, limit=PAGE_LIMIT_DEFAULT, search=None, status=None):
+	"""Một trang của danh sách chương trình khuyến mãi + quy tắc giá đứng riêng (như `get_promotions`,
+	kể cả cái đã tắt).
+
+	- Thứ tự như `get_promotions`: chương trình trước, rồi quy tắc giá; trong mỗi nhóm sửa gần nhất trước.
+	- `search`: tìm trong mã (`name`) và tên quy tắc giá (`title`), không phân biệt hoa thường, dấu.
+	- `status`: "Active" / "Not Started" / "Expired" / "Disabled"; trống là tất cả.
+
+	Trả `{"rows": [...], "total": <số dòng khớp>}`; mỗi dòng cùng các khoá của `get_promotions` mà app dùng.
+	"""
+	check_promotion_permissions("read")
+	company = _company_of(company, pos_profile)
+	start, limit = _page_window(start, limit)
+	values = {"company": company, "today": getdate(nowdate()), "start": start, "limit": limit}
+
+	union = f"""
+		select name, null as title, 'Promotional Scheme' as source, 0 as source_rank, apply_on, disable,
+			valid_from, valid_upto, applicable_for, company, modified, {_status_case("disable")} as status,
+			null as price_or_product_discount, null as rate_or_discount, null as discount_percentage,
+			null as discount_amount, null as rate, null as free_qty
+		from `tabPromotional Scheme`
+		where company = %(company)s
+		union all
+		select name, title, 'Pricing Rule', 1, apply_on, disable,
+			valid_from, valid_upto, applicable_for, company, modified, {_status_case("disable")},
+			price_or_product_discount, rate_or_discount, discount_percentage, discount_amount, rate, free_qty
+		from `tabPricing Rule`
+		where company = %(company)s and ifnull(promotional_scheme, '') = ''
+	"""
+	conditions = []
+	search_sql = _search_condition(["name", "title"], search, values)
+	if search_sql:
+		conditions.append(search_sql)
+	if status:
+		values["status"] = status
+		conditions.append("status = %(status)s")
+	where = f"where {' and '.join(conditions)}" if conditions else ""
+
+	total = frappe.db.sql(f"select count(*) from ({union}) p {where}", values)[0][0]
+	rows = frappe.db.sql(
+		f"""select * from ({union}) p {where}
+		order by source_rank, modified desc, name
+		limit %(limit)s offset %(start)s""",
+		values,
+		as_dict=True,
+	)
+
+	# Số món / nhóm / thương hiệu của các dòng trong trang — một lời đếm mỗi bảng con, không `get_doc`.
+	counts = {}
+	for child, apply_on in (
+		("Pricing Rule Item Code", "Item Code"),
+		("Pricing Rule Item Group", "Item Group"),
+		("Pricing Rule Brand", "Brand"),
+	):
+		names = [row.name for row in rows if row.apply_on == apply_on]
+		if not names:
+			continue
+		for parenttype, parent, count in frappe.db.sql(
+			f"""select parenttype, parent, count(*) from `tab{child}`
+			where parenttype in ('Promotional Scheme', 'Pricing Rule') and parent in %(names)s
+			group by parenttype, parent""",
+			{"names": names},
+		):
+			counts[(parenttype, parent)] = count
+
+	# Mức ưu đãi của chương trình nằm ở bảng bậc — app hiện ở đầu mỗi dòng ("-15%", "Tặng"). Chỉ chương
+	# trình đúng một bậc mới có một mức để hiện; nhiều bậc thì app ghi số bậc (`slab_count`).
+	schemes = [row.name for row in rows if row.source == "Promotional Scheme"]
+	slabs = {}
+	if schemes:
+		for slab in frappe.db.sql(
+			"""select parent, 'Price' as kind, rate_or_discount, discount_percentage, discount_amount, rate,
+				null as free_qty
+			from `tabPromotional Scheme Price Discount` where parent in %(names)s
+			union all
+			select parent, 'Product', null, null, null, null, free_qty
+			from `tabPromotional Scheme Product Discount` where parent in %(names)s""",
+			{"names": schemes},
+			as_dict=True,
+		):
+			slabs.setdefault(slab.parent, []).append(slab)
+
+	for row in rows:
+		row.pop("source_rank", None)
+		row["items_count"] = counts.get((row.source, row.name), 0)
+		if row.source == "Promotional Scheme":
+			own = slabs.get(row.name, [])
+			row["slab_count"] = len(own)
+			if len(own) == 1:
+				slab = own[0]
+				row.update({
+					"price_or_product_discount": slab.kind,
+					"rate_or_discount": slab.rate_or_discount,
+					"discount_percentage": slab.discount_percentage,
+					"discount_amount": slab.discount_amount,
+					"rate": slab.rate,
+					"free_qty": slab.free_qty,
+				})
+		else:
+			row["slab_count"] = 1
+
+	return {"rows": rows, "total": total}
+
+
+def _item_names(codes):
+	"""Tên hàng theo mã — để màn chi tiết hiện tên món được áp / hàng tặng. Thêm cho app RN: món của
+	chương trình thường không nằm trong danh mục đã lưu của điểm bán đang mở."""
+	codes = list({code for code in codes if code})
+	if not codes:
+		return {}
+	return dict(frappe.get_all("Item", filters={"name": ["in", codes]}, fields=["name", "item_name"], as_list=True))
+
+
 @frappe.whitelist()
 def get_promotion_details(scheme_name):
 	"""Get detailed information about a promotional scheme OR standalone pricing rule."""
@@ -163,6 +325,10 @@ def get_promotion_details(scheme_name):
 			"Pricing Rule",
 			filters={"promotional_scheme": scheme_name, "disable": 0},
 			fields=["name", "title", "priority", "valid_from", "valid_upto"]
+		)
+		data["item_names"] = _item_names(
+			[row.item_code for row in scheme.items or []]
+			+ [slab.free_item for slab in scheme.product_discount_slabs or []]
 		)
 
 		return data
@@ -192,6 +358,7 @@ def get_promotion_details(scheme_name):
 			data["price_discount_slabs"] = []
 
 		data["product_discount_slabs"] = []
+		data["item_names"] = _item_names([row.item_code for row in pr.items or []] + [pr.free_item])
 
 		return data
 
@@ -615,6 +782,59 @@ def get_coupons(company=None, include_disabled=False, coupon_type=None):
 			coupon["usage_percent"] = 0
 
 	return coupons
+
+
+@frappe.whitelist()
+def get_coupons_page(company=None, pos_profile=None, start=0, limit=PAGE_LIMIT_DEFAULT, search=None, status=None, coupon_type=None):
+	"""Một trang của danh sách mã giảm giá (như `get_coupons`, kể cả mã đã tắt), sửa gần nhất trước.
+
+	- `search`: tìm trong mã, tên mã, tên khách (thẻ quà tặng).
+	- `status`: "Active" / "Not Started" / "Expired" / "Exhausted" / "Disabled"; trống là tất cả.
+	- `coupon_type`: "Promotional" / "Gift Card"; trống là cả hai.
+
+	Trả `{"rows": [...], "total": <số dòng khớp>}`.
+	"""
+	check_promotion_permissions("read")
+	company = _company_of(company, pos_profile)
+	start, limit = _page_window(start, limit)
+	values = {"company": company, "today": getdate(nowdate()), "start": start, "limit": limit}
+
+	disabled = "disabled" if frappe.db.has_column("POS Coupon", "disabled") else "0"
+	status_sql = _status_case(
+		disabled, "when ifnull(maximum_use, 0) > 0 and ifnull(used, 0) >= maximum_use then 'Exhausted'"
+	)
+	base = f"""
+		select name, coupon_name, coupon_code, coupon_type, customer, customer_name, valid_from, valid_upto,
+			maximum_use, used, one_use, company, campaign, {disabled} as disabled, modified,
+			discount_type, discount_percentage, discount_amount,
+			{status_sql} as status
+		from `tabPOS Coupon`
+		where company = %(company)s
+	"""
+	conditions = []
+	search_sql = _search_condition(["coupon_code", "coupon_name", "customer_name"], search, values)
+	if search_sql:
+		conditions.append(search_sql)
+	if status:
+		values["status"] = status
+		conditions.append("status = %(status)s")
+	if coupon_type:
+		values["coupon_type"] = coupon_type
+		conditions.append("coupon_type = %(coupon_type)s")
+	where = f"where {' and '.join(conditions)}" if conditions else ""
+
+	total = frappe.db.sql(f"select count(*) from ({base}) c {where}", values)[0][0]
+	rows = frappe.db.sql(
+		f"""select * from ({base}) c {where}
+		order by modified desc, name
+		limit %(limit)s offset %(start)s""",
+		values,
+		as_dict=True,
+	)
+	for row in rows:
+		row["usage_percent"] = (row.used / row.maximum_use) * 100 if row.maximum_use else 0
+
+	return {"rows": rows, "total": total}
 
 
 @frappe.whitelist()

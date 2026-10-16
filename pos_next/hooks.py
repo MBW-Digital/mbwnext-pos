@@ -223,7 +223,8 @@ doc_events = {
 	"Sales Invoice": {
         "before_validate": [
             "pos_next.controllers.python.sales_invoice.apply_selling_item_tax_templates",
-            "pos_next.api.sales_invoice_hooks.capture_pos_authoritative_discounts"
+            "pos_next.api.sales_invoice_hooks.capture_pos_authoritative_discounts",
+            "pos_next.api.sales_invoice_hooks.strip_pos_coupon_discount"
         ],
 		"validate": [
 			"pos_next.api.sales_invoice_hooks.validate",
@@ -238,7 +239,12 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
+		"validate": "pos_next.api.sepay.validate_pos_profile_sepay",
 		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
+	},
+	"POS Settings": {
+		"on_update": "pos_next.realtime_events.emit_pos_settings_updated_event",
+		"on_trash": "pos_next.realtime_events.emit_pos_settings_updated_event",
 	},
 	"Loyalty Program": {
 		"validate": "pos_next.api.loyalty_program_hooks.validate",

@@ -53,6 +53,21 @@ def emit_stock_update_event(doc, method=None):
 		if not item_codes_by_warehouse:
 			return
 
+		# Biến thể vừa bán thì gửi kèm tồn mới của hàng mẫu — danh mục hiện tổng tồn các biến thể
+		# trên ô hàng mẫu, mà quầy khác không biết biến thể này thuộc mẫu nào.
+		all_codes = set().union(*item_codes_by_warehouse.values())
+		template_of = dict(
+			frappe.get_all(
+				"Item",
+				filters={"name": ["in", list(all_codes)], "variant_of": ["is", "set"]},
+				fields=["name", "variant_of"],
+				as_list=True,
+			)
+		)
+		if template_of:
+			for codes in item_codes_by_warehouse.values():
+				codes.update(template_of[code] for code in list(codes) if code in template_of)
+
 		# Build stock updates with current quantities
 		stock_updates = []
 		warehouses = set()
@@ -182,4 +197,85 @@ def emit_pos_profile_updated_event(doc, method=None):
 		frappe.log_error(
 			title=_("Real-time POS Profile Update Event Error"),
 			message=f"Failed to emit POS profile update event for {doc.name}: {str(e)}"
+		)
+
+
+def emit_pos_settings_updated_event(doc, method=None):
+	"""
+	Phát sự kiện `pos_settings_updated` khi Cài đặt POS được lưu hoặc xoá.
+
+	Máy đang bán chỉ đọc Cài đặt POS lúc nạp dữ liệu đầu phiên. Không có sự kiện này thì quản trị
+	đổi "Cho phép tồn âm" giữa ca, quầy vẫn chạy theo cài đặt cũ tới khi đăng nhập lại.
+
+	Chỉ gửi TÊN điểm bán, không gửi giá trị cài đặt: sự kiện phát cho phòng `all` (mọi tài khoản
+	System User), mà cài đặt có tài khoản ví, mức giảm giá tối đa... Máy nhận tự gọi lại
+	`get_initial_data`, nên cài đặt chỉ có một nguồn và được tính đúng một cách.
+
+	Đổi điểm bán của bản ghi (sửa trường `pos_profile`) thì báo cả điểm bán cũ: nó vừa mất cài đặt.
+	"""
+	try:
+		profiles = {doc.pos_profile}
+		before = doc.get_doc_before_save() if method == "on_update" else None
+		if before and before.pos_profile:
+			profiles.add(before.pos_profile)
+
+		for pos_profile in filter(None, profiles):
+			frappe.publish_realtime(
+				event="pos_settings_updated",
+				message={
+					"pos_profile": pos_profile,
+					"timestamp": frappe.utils.now(),
+					"change_type": "deleted" if method == "on_trash" else "updated",
+				},
+				user=None,  # Mọi quầy; máy nhận tự lọc theo điểm bán của mình
+				after_commit=True,  # Chỉ phát khi lưu thành công
+			)
+
+	except Exception as e:
+		# Ghi lỗi nhưng không chặn việc lưu cài đặt
+		frappe.log_error(
+			title=_("Real-time POS Settings Update Event Error"),
+			message=f"Failed to emit POS settings update event for {doc.name}: {str(e)}"
+		)
+
+
+def emit_offers_updated_event(doc, method=None):
+	"""
+	Phát sự kiện `pos_offers_updated` khi Pricing Rule / Promotional Scheme / Promotion Campaign được
+	lưu hoặc xoá — gọi từ `pos_next.api.offers.clear_offers_cache`.
+
+	Quầy đang bán chỉ lấy danh sách ưu đãi lúc mở màn bán (hay khi thu ngân bấm tải lại). Không có
+	sự kiện này thì quản trị tắt một khuyến mại giữa ca, quầy vẫn liệt kê nó tới lần nạp sau.
+
+	Chỉ gửi TÊN chứng từ và công ty, không gửi nội dung khuyến mại: sự kiện phát cho phòng `all`.
+	Máy nhận tự gọi lại `get_offers`, lọc theo công ty của điểm bán mình (công ty trống là mọi quầy).
+
+	Lưu một Promotional Scheme sinh lại hàng loạt Pricing Rule, mỗi cái một lần `on_update`: trong một
+	request chỉ phát MỘT sự kiện cho mỗi công ty.
+	"""
+	try:
+		company = doc.get("company") if doc else None
+		sent = frappe.flags.setdefault("pos_offers_updated_sent", set())
+		if company in sent:
+			return
+		sent.add(company)
+
+		frappe.publish_realtime(
+			event="pos_offers_updated",
+			message={
+				"doctype": doc.doctype if doc else None,
+				"name": doc.name if doc else None,
+				"company": company,
+				"timestamp": frappe.utils.now(),
+				"change_type": "deleted" if method == "on_trash" else "updated",
+			},
+			user=None,  # Mọi quầy; máy nhận tự lọc theo công ty của mình
+			after_commit=True,  # Chỉ phát khi lưu thành công
+		)
+
+	except Exception as e:
+		# Ghi lỗi nhưng không chặn việc lưu khuyến mại
+		frappe.log_error(
+			title=_("Real-time POS Offers Update Event Error"),
+			message=f"Failed to emit POS offers update event for {getattr(doc, 'name', None)}: {str(e)}"
 		)

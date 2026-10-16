@@ -453,6 +453,28 @@ def serve_einvoice_pdf(t: str | None = None, token: str | None = None) -> None:
 	frappe.local.response.type = "download"
 
 
+def _self_service_base_url() -> str:
+	"""Gốc đường dẫn in vào QR: đúng địa chỉ máy POS vừa dùng để gọi máy chủ.
+
+	Không gọi thẳng `get_url()`: site chưa khai `host_name` mà bench chạy kiểu dev (không supervisor)
+	thì Frappe gắn thêm `webserver_port` vào mọi tên miền — gọi qua tunnel / tên miền ở cổng 443 ra
+	`https://ten-mien:8000/...`, khách quét không mở được. `request.host` đã mang đúng cổng máy POS
+	dùng (có thì giữ, không thì thôi), giao thức theo `X-Forwarded-Proto` của proxy.
+
+	Site có khai `host_name` thì dùng đúng tên đã khai — để quản trị ép tên miền công khai, ví dụ khi
+	máy POS gọi máy chủ qua IP nội bộ mà điện thoại khách không vào được. Không qua `get_url()`, vì nó
+	gắn cổng dev vào cả `host_name`. Không có request (job nền) thì theo `get_url()`.
+	"""
+	from frappe.utils.data import get_host_name_from_request
+
+	host_name = frappe.local.conf.host_name or frappe.local.conf.hostname
+	if host_name:
+		if not host_name.startswith(("http://", "https://")):
+			host_name = "http://" + host_name
+		return host_name.rstrip("/")
+	return (get_host_name_from_request() or get_url()).rstrip("/")
+
+
 def get_self_service_qr_payload(sales_invoice_name: str) -> Dict[str, Any]:
 	"""For POS receipt / API (authenticated): URL + optional qr image link."""
 	if not sales_invoice_name or not _meta_has_si_field("pos_self_service_einvoice_token"):
@@ -468,7 +490,7 @@ def get_self_service_qr_payload(sales_invoice_name: str) -> Dict[str, Any]:
 	import hashlib
 	from urllib.parse import urlparse
 
-	url = get_url(f"/einvoice_self_service?t={token}")
+	url = f"{_self_service_base_url()}/einvoice_self_service?t={token}"
 	parsed = urlparse(url)
 	site_host = (parsed.netloc or "").strip()
 

@@ -17,13 +17,23 @@ from pos_next.api.utilities import get_wallet_payment_modes
 
 
 def _user_has_submitted_pos_closing_shift_today(user: str) -> bool:
-	"""True if POS Closing Shift is submitted today for this user (posting_date + docstatus)."""
+	"""True if this user submitted, today, the closing of a POS shift that was also OPENED today.
+
+	Đóng ca của hôm trước (quên đóng, hôm sau mới đóng) không tính: phiếu đóng ca lấy ngày ghi sổ là hôm
+	nay, nên trước đây máy chủ coi như "đã đóng ca hôm nay" và chặn mở ca cả ngày (ha-vang: ca mở 18/05,
+	đóng 12/10 lúc 10:09 → cả ngày 12/10 không mở được). `period_start_date` chép từ phiếu mở ca.
+	"""
 	if not user or user == "Guest":
 		return False
 	return bool(
 		frappe.db.exists(
 			"POS Closing Shift",
-			{"user": user, "docstatus": 1, "posting_date": nowdate()},
+			{
+				"user": user,
+				"docstatus": 1,
+				"posting_date": nowdate(),
+				"period_start_date": [">=", get_datetime(nowdate())],
+			},
 		)
 	)
 
@@ -124,9 +134,11 @@ def get_opening_dialog_data():
 			ignore_permissions=True,
 		)
 
-		# Set currency from pos profile
+		# Set currency from pos profile; loại hình thức (Cash / Bank / ...) để máy bán biết dòng nào là
+		# tiền mặt — đếm theo tờ khi mở ca.
 		for mode in data["payments_method"]:
 			mode["currency"] = frappe.get_cached_value("POS Profile", mode["parent"], "currency")
+			mode["type"] = frappe.get_cached_value("Mode of Payment", mode["mode_of_payment"], "type")
 	else:
 		data["payments_method"] = []
 

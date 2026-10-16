@@ -163,8 +163,14 @@
 <div class="totals">
 	<div class="lr"><span>Tổng cộng:</span><span>{{ fmt(R.gross_total, 0) }}</span></div>
 	<div class="lr"><span>CK hàng hóa:</span><span>{{ fmt(R.item_discount_total, 0) }}</span></div>
-	<div class="lr"><span>Chiết khấu:</span><span>{{ fmt(R.invoice_discount_total or R.item_discount_total, 0) }}</span></div>
-	<div class="lr grand"><span>Tổng thanh toán:</span><span>{{ fmt(doc.grand_total or 0, 0) }}</span></div>
+	{%- if (R.receipt_tax_added or 0)|abs >= 0.5 %}
+	<div class="lr"><span>Thuế GTGT:</span><span>{{ fmt(R.receipt_tax_added, 0) }}</span></div>
+	{%- endif %}
+	<div class="lr"><span>Chiết khấu:</span><span>{{ fmt(R.invoice_discount_total or 0, 0) }}</span></div>
+	{%- if (R.receipt_rounding or 0)|abs >= 0.5 %}
+	<div class="lr"><span>Làm tròn:</span><span>{{ fmt(R.receipt_rounding, 0) }}</span></div>
+	{%- endif %}
+	<div class="lr grand"><span>Tổng thanh toán:</span><span>{{ fmt(R.receipt_payable_total if R.receipt_payable_total is not none else (doc.grand_total or 0), 0) }}</span></div>
 	<div class="lr"><span>Chuyển khoản:</span><span>{{ fmt(R.bank_paid, 0) }}</span></div>
 	<div class="lr"><span>Tiền mặt:</span><span>{{ fmt(R.cash_paid, 0) }}</span></div>
 	{%- if (R.wallet_paid or 0) > 0 %}

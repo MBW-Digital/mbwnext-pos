@@ -10,7 +10,7 @@ from erpnext.accounts.doctype.pos_invoice_merge_log.pos_invoice_merge_log import
 )
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 
 def get_base_value(doc, fieldname, base_fieldname=None, conversion_rate=None):
@@ -595,11 +595,43 @@ def _get_hide_shift_closing_information(pos_profile):
 @frappe.whitelist()
 def submit_closing_shift(closing_shift):
     closing_shift = json.loads(closing_shift)
+    if cint(closing_shift.pop("rebuild_from_server", 0)):
+        closing_shift = _rebuild_closing_shift(closing_shift)
     closing_shift_doc = frappe.get_doc(closing_shift)
     closing_shift_doc.flags.ignore_permissions = True
     closing_shift_doc.save()
     closing_shift_doc.submit()
     return closing_shift_doc.name
+
+
+# Khoá `make_closing_shift_from_opening` thêm vào chỉ để hiện, không phải trường của POS Closing Shift.
+_DISPLAY_ONLY_KEYS = ("returns_total", "returns_count", "sales_total", "sales_count", "hide_shift_closing_information")
+
+
+def _rebuild_closing_shift(client):
+    """Dựng lại phiếu đóng ca từ số liệu máy chủ lúc đóng, chỉ lấy số tiền thực đếm từ máy bán.
+
+    Máy bán (app native) xin cách này. Gói máy bán gửi lên là số liệu lúc nó MỞ màn đóng ca: hoá đơn
+    lên giữa lúc đó và lúc bấm đóng (máy khác bán, hoá đơn bán lúc mất mạng vừa gửi bù) sẽ không có
+    trong phiếu, và tổng / số dự kiến là số máy bán tự gửi — không ai kiểm. Hình thức máy bán không
+    gửi số thực đếm (hoá đơn mới có hình thức mới) thì ghi 0 — chênh lệch hiện ra trên phiếu.
+    """
+    opening_name = client.get("pos_opening_shift")
+    if not opening_name:
+        frappe.throw(_("Missing the shift to close (POS Opening Shift)."))
+    opening = frappe.get_doc("POS Opening Shift", opening_name)
+    fresh = make_closing_shift_from_opening(json.dumps(opening.as_dict(), default=str))
+
+    counted = {}
+    for row in client.get("payment_reconciliation") or []:
+        if row.get("mode_of_payment"):
+            counted[row["mode_of_payment"]] = flt(row.get("closing_amount"))
+    for row in fresh.get("payment_reconciliation") or []:
+        row["closing_amount"] = counted.get(row.get("mode_of_payment"), 0)
+
+    for key in _DISPLAY_ONLY_KEYS:
+        fresh.pop(key, None)
+    return json.loads(json.dumps(fresh, default=str))
 
 
 def submit_printed_invoices(pos_opening_shift, doctype):

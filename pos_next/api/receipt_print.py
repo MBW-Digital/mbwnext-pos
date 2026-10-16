@@ -126,7 +126,13 @@ def receipt_payments_for_invoice(inv) -> list[dict[str, Any]]:
 
 def receipt_total_paid_for_invoice(inv) -> float:
 	"""Total collected on receipt — includes Payment Entry bank transfers not on SI Payment child table."""
-	grand = flt(getattr(inv, "grand_total", None) if not isinstance(inv, dict) else inv.get("grand_total"))
+	get = (lambda field: getattr(inv, field, None)) if not isinstance(inv, dict) else inv.get
+	grand = flt(get("grand_total"))
+	# Hoá đơn làm tròn: số khách trả là `rounded_total`, `outstanding_amount` cũng tính theo số đó. Lấy
+	# `grand_total` thì "Tổng đã thanh toán" lệch "Tổng thanh toán" đúng phần làm tròn (5.176 / 5.200).
+	rounded = flt(get("rounded_total"))
+	if rounded and not cint(get("disable_rounded_total")):
+		grand = rounded
 	outstanding = flt(
 		getattr(inv, "outstanding_amount", None) if not isinstance(inv, dict) else inv.get("outstanding_amount")
 	)
@@ -356,6 +362,43 @@ def _nhan_ca(inv: dict[str, Any]) -> str:
 	return f"Ca {max(truoc_do, 1)}"
 
 
+def receipt_header_for_profile(pos_profile_doc, shift_name: str | None = None) -> dict[str, Any]:
+	"""Đầu và chân phiếu của một điểm bán — phần không phụ thuộc hoá đơn.
+
+	App native in phiếu tạm tính (đơn giữ lại, chưa có hoá đơn trên máy chủ) bằng bộ này, gửi kèm gói
+	đầu phiên để in được cả lúc mất mạng. Cùng nguồn với `retail_receipt_meta_for_jinja` nên đầu phiếu
+	tạm tính khớp phiếu bán: tên công ty, tên / địa chỉ / điện thoại cửa hàng, mã cửa hàng, giờ mở cửa,
+	chính sách cuối phiếu, nhân viên, nhãn ca.
+
+	Logo gửi đường dẫn tệp (`pos_logo_path`), không nhúng base64 như phiếu bán: gói đầu phiên nạp lại
+	nhiều lần và được lưu xuống máy. App tự ghép với địa chỉ site đang dùng — `get_url` theo
+	`host_name` của site, có thể khác địa chỉ máy bán đang gọi.
+	"""
+	company = pos_profile_doc.company or ""
+	company_row = (
+		frappe.db.get_value("Company", company, ["company_name", "phone_no"], as_dict=True) if company else None
+	) or {}
+	company_name = company_row.get("company_name") or company
+	company_phone = company_row.get("phone_no") or ""
+	warehouse = pos_profile_doc.get("warehouse")
+	branch = (frappe.db.get_value("Warehouse", warehouse, "warehouse_name") if warehouse else None) or pos_profile_doc.name
+	profile = _pos_profile_store_fields(pos_profile_doc.name)
+	user = frappe.session.user
+	return {
+		"receipt_company_display_name": company_name,
+		"receipt_company_phone": company_phone,
+		"store_display_name": profile.get("custom_store_name_2") or branch or "",
+		"store_address": profile.get("custom_address") or "",
+		"store_phone": profile.get("custom_phone") or company_phone,
+		"shop_code": profile.get("custom_shop_code") or "",
+		"store_hours": profile.get("custom_store_hours") or "",
+		"receipt_policy": _receipt_policy_text(profile.get("tc_name")),
+		"salesperson": frappe.db.get_value("User", user, "full_name") or user,
+		"shift_label": _nhan_ca({"posa_pos_opening_shift": shift_name}) if shift_name else "",
+		"pos_logo_path": profile.get("custom_pos_logo") or "",
+	}
+
+
 def attach_image_url_for_print(file_path: str | None) -> str:
 	"""Absolute URL cho Attach Image (fallback khi không embed base64)."""
 	if not file_path:
@@ -515,7 +558,9 @@ def retail_receipt_meta_for_jinja(doc):
 	item_discount_total = 0.0
 	for row in getattr(doc, "items", None) or []:
 		gross_total += item_gross_amount_for_receipt(row)
-		item_discount_total += flt(getattr(row, "discount_amount", None) or 0)
+		# `Sales Invoice Item.discount_amount` là mức giảm trên MỘT đơn vị (PM-TASK-00027) —
+		# nhân `qty` cho cùng đơn vị với `gross_total`.
+		item_discount_total += flt(getattr(row, "discount_amount", None) or 0) * flt(getattr(row, "qty", None) or 0)
 
 	posting_date = ""
 	if doc.posting_date:
@@ -531,6 +576,10 @@ def retail_receipt_meta_for_jinja(doc):
 	) or owner
 
 	pos_logo_url = attach_image_src_for_print(profile.get("custom_pos_logo"))
+	invoice_discount_total = abs(
+		flt(inv.get("custom_invoice_discount_amount") or inv.get("discount_amount") or 0)
+	)
+	totals_tail = _receipt_totals_tail(doc, gross_total, item_discount_total, invoice_discount_total)
 
 	return frappe._dict(
 		**base,
@@ -546,9 +595,8 @@ def retail_receipt_meta_for_jinja(doc):
 		shift_label=_nhan_ca(inv),
 		gross_total=gross_total,
 		item_discount_total=item_discount_total,
-		invoice_discount_total=abs(
-			flt(inv.get("custom_invoice_discount_amount") or inv.get("discount_amount") or 0)
-		),
+		invoice_discount_total=invoice_discount_total,
+		**totals_tail,
 		cash_paid=pay["cash_paid"],
 		bank_paid=pay["bank_paid"],
 		wallet_paid=pay["wallet_paid"],
@@ -557,6 +605,42 @@ def retail_receipt_meta_for_jinja(doc):
 		receipt_policy=_receipt_policy_text(profile.get("tc_name")),
 		salesperson=salesperson,
 	)
+
+
+def _receipt_totals_tail(doc, gross_total: float, item_discount_total: float, invoice_discount_total: float) -> dict:
+	"""Thuế cộng thêm, làm tròn và số khách phải trả — để các dòng tổng của phiếu cộng ra đúng tổng.
+
+	Trước đây phiếu in "Tổng cộng" (giá chưa thuế), các khoản chiết khấu rồi nhảy thẳng tới "Tổng thanh
+	toán" = `grand_total`: điểm bán giá CHƯA gồm thuế thì phần thuế không hiện ở đâu, và số khách trả
+	thật (`rounded_total`) lại in ở dòng "Tiền mặt phải trả" — một phiếu ba con số. Trên ha-vang 57/75
+	hoá đơn POS có thuế cộng thêm, 61/75 có làm tròn.
+
+	- `receipt_tax_added`: phần tổng còn lại sau tiền hàng − chiết khấu, chỉ khi hoá đơn có dòng thuế
+	  không nằm trong giá. Lấy phần còn lại chứ không lấy `total_taxes_and_charges`: chiết khấu cả hoá
+	  đơn áp trên Grand Total đã gồm thuế, cộng thẳng tiền thuế thì phần thuế trong chiết khấu bị tính hai
+	  lần. Phiếu trả (số âm) giữ dấu như `gross_total`.
+	- `receipt_rounding`: `rounded_total − grand_total` khi hoá đơn làm tròn.
+	- `receipt_payable_total`: số khách phải trả — `rounded_total` khi làm tròn, không thì `grand_total`.
+	"""
+	grand = flt(doc.grand_total)
+	rounded = flt(doc.get("rounded_total"))
+	payable = rounded if rounded and not cint(doc.get("disable_rounded_total")) else grand
+
+	tax_added = 0.0
+	exclusive = any(
+		not cint(row.get("included_in_print_rate")) and flt(row.get("tax_amount"))
+		for row in doc.get("taxes") or []
+	)
+	if exclusive:
+		# `invoice_discount_total` luôn in số dương; phiếu trả thì chiết khấu cùng dấu âm với tiền hàng.
+		sign = -1 if cint(doc.get("is_return")) else 1
+		tax_added = flt(grand - (gross_total - item_discount_total - sign * invoice_discount_total), 2)
+
+	return {
+		"receipt_tax_added": tax_added,
+		"receipt_rounding": flt(payable - grand, 2),
+		"receipt_payable_total": payable,
+	}
 
 
 def receipt_logo_url_for_print(doc=None) -> str:

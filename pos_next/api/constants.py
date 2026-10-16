@@ -38,6 +38,10 @@ POS_SETTINGS_FIELDS = [
 	"create_only_sales_order",
   "allow_manual_cash_drawer",
 	"opening_closing_cash_configuration",
+	# Máy bán native lọc sẵn hoá đơn còn trong hạn trả hàng (bộ lọc "Trả được" của lịch sử hoá đơn).
+	"return_validity_days",
+	# Máy bán native hiện nút in phiếu tạm tính ở danh sách đơn giữ theo cờ này.
+	"allow_print_draft_invoices",
 ]
 
 # Default POS Settings values
@@ -66,4 +70,6 @@ DEFAULT_POS_SETTINGS = {
 	"create_only_sales_order": 0,
 	"allow_manual_cash_drawer": 0,
 	"opening_closing_cash_configuration": 0,
+	"return_validity_days": 0,
+	"allow_print_draft_invoices": 0,
 }

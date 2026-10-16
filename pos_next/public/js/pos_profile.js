@@ -16,5 +16,12 @@ frappe.ui.form.on("POS Profile", {
 				},
 			};
 		});
+
+		// Ô "SePay Mode of Payment": chỉ cho chọn hình thức có trong bảng Payment Methods của chính
+		// điểm bán (máy chủ cũng kiểm lúc lưu — sepay.validate_pos_profile_sepay).
+		frm.set_query("sepay_mode_of_payment", function (doc) {
+			const modes = (doc.payments || []).map((row) => row.mode_of_payment).filter(Boolean);
+			return { filters: { name: ["in", modes] } };
+		});
 	},
 });

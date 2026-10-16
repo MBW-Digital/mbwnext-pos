@@ -12,3 +12,4 @@ pos_next.patches.v1_14_1.bat_lai_mau_in_pos_next_receipt
 pos_next.patches.v1_14_1.sua_doctype_mau_in_ban_le
 pos_next.patches.v1_14_1.sua_but_toan_vi_sai_cong_ty
 pos_next.patches.v1_14_1.bo_but_toan_tich_diem
+pos_next.patches.v1_14_1.khai_hinh_thuc_sepay

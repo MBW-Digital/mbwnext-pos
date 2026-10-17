@@ -569,6 +569,10 @@ def _auto_assign_pos_sale_batches_if_enabled(invoice_doc):
         if not flags:
             continue
         if flags.get("has_serial_no"):
+            # [mobile] Dòng serial đã chọn serial (giỏ POS gửi `serial_no`) thì để ERPNext tự dựng bundle — chỉ
+            # chặn khi thiếu. Bản cũ chặn cả dòng đã có serial: không bán được hàng serial nào qua POS.
+            if (d.get("serial_no") or "").strip() or d.get("serial_and_batch_bundle"):
+                continue
             frappe.throw(
                 _(
                     "Item {0} requires serial numbers. Skipping manual batch applies "

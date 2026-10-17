@@ -315,6 +315,47 @@ def _chuan_hoa(payload):
 	return frappe._dict(payload or {})
 
 
+def _serial_cua_dong(row):
+	"""[mobile] Serial đã bán trên một dòng HĐ gốc, theo thứ tự. Đọc bundle trước (v15), rồi tới ô `serial_no`."""
+	if row.get("serial_and_batch_bundle"):
+		ds = frappe.get_all(
+			"Serial and Batch Entry",
+			filters={"parent": row.serial_and_batch_bundle},
+			order_by="idx asc",
+			pluck="serial_no",
+		)
+		ds = [s for s in ds if s]
+		if ds:
+			return ds
+	return [s.strip() for s in (row.get("serial_no") or "").splitlines() if s.strip()]
+
+
+def _serial_tra(goc, qty, chon):
+	"""[mobile] Serial khách trả của một dòng có serial (F2: đúng máy đã bán).
+
+	Không chỉ rõ thì chỉ cho khi trả cả dòng. Trả bớt mà để ERPNext tự chọn thì nó lấy serial ĐẦU của dòng gốc,
+	không phải máy khách mang tới — đo thật: bán DTB-0001 + 0002, trả 1 máy, sổ ghi 0001 về kho.
+	"""
+	ban = _serial_cua_dong(goc)
+	if isinstance(chon, str):
+		chon = chon.splitlines()
+	chon = list(dict.fromkeys(s.strip() for s in (chon or []) if s and s.strip()))
+	if not chon:
+		if qty < len(ban):
+			frappe.throw(_("Select which serial numbers of {0} the customer is returning.").format(goc.item_name))
+		chon = ban
+	la = [s for s in chon if s not in ban]
+	if la:
+		frappe.throw(_("Serial number {0} was not sold on this line of {1}.").format(la[0], goc.item_name))
+	if len(chon) != qty:
+		frappe.throw(
+			_("Returning {0} of {1} needs exactly {0} serial numbers ({2} selected).").format(
+				frappe.format_value(qty), goc.item_name, len(chon)
+			)
+		)
+	return "\n".join(chon)
+
+
 def _dong_tra(original, return_items, reason):
 	"""Dòng phiếu trả lấy từ HĐ GỐC, không tin giá client gửi lên."""
 	if not return_items:
@@ -357,6 +398,9 @@ def _dong_tra(original, return_items, reason):
 		if qty != int(qty) and cint(frappe.get_cached_value("UOM", goc.uom, "must_be_whole_number")):
 			frappe.throw(_("{0} must be returned in whole {1}.").format(goc.item_name, goc.uom))
 
+		# [mobile] Dòng có serial: trả đúng các serial khách mang tới, ERPNext dựng bundle theo ô `serial_no`
+		serial_tra = _serial_tra(goc, qty, it.get("serial_no")) if _serial_cua_dong(goc) else None
+
 		rows.append(
 			{
 				"item_code": goc.item_code,
@@ -372,7 +416,8 @@ def _dong_tra(original, return_items, reason):
 				"conversion_factor": goc.conversion_factor or 1,
 				"sales_invoice_item": goc.name,
 				"batch_no": goc.get("batch_no"),
-				"serial_no": goc.get("serial_no"),
+				"serial_no": serial_tra if serial_tra is not None else goc.get("serial_no"),
+				**({"use_serial_batch_fields": 1} if serial_tra is not None else {}),
 			}
 		)
 	return rows, ly_do.name
@@ -961,6 +1006,8 @@ def get_invoice(invoice_name, pos_profile):
 				"item_name": r.item_name,
 				# [mobile] Món mẹ của biến thể: app RN mở thẳng hộp chọn màu / size của món đó khi đổi hàng
 				"variant_of": frappe.get_cached_value("Item", r.item_code, "variant_of"),
+				# [mobile] Serial đã bán trên dòng — app cho chọn đúng máy khách trả (F2)
+				"serial_nos": _serial_cua_dong(r),
 				"qty": flt(r.qty),
 				"uom": r.uom,
 				"whole_number": cint(frappe.get_cached_value("UOM", r.uom, "must_be_whole_number")),

@@ -989,6 +989,11 @@ def get_invoice(invoice_name, pos_profile):
 			fields=["name", "stock_destination"],
 			order_by="creation asc",
 		),
+		# [mobile] Có thuế cộng ngoài giá không: `paid_rate` của dòng là giá trước thuế đó, còn tiền hoàn
+		# máy chủ tính đã gồm thuế — app ghi "chưa thuế" bên giá dòng. Thuế đã gồm trong giá thì không.
+		"tax_excluded_from_rate": any(
+			not cint(t.included_in_print_rate) and abs(flt(t.tax_amount)) > 0 for t in original.taxes or []
+		),
 		"has_defective_warehouse": bool(
 			frappe.db.get_value("POS Profile", pos_profile, "posa_defective_warehouse")
 		),

@@ -346,6 +346,36 @@ treo nguyên trên công nợ. Lệch lớn hơn vẫn để bản gốc xử l�
 ⚠ Hàm gốc chỉ được gọi ở đúng MỘT chỗ (`taxes_and_totals.py`), và chỉ cho phiếu trả POS
 chưa consolidated — nên bản vá không đụng gì tới đơn bán thường.
 
+### Đổi / trả hàng đi qua `api/exchange.py` (PM-FEAT-00060)
+
+Trả hàng thuần và đổi hàng dùng chung `calculate_exchange` (xem trước) / `submit_exchange` (lưu). Hộp
+thoại `ExchangeDialog.vue` thay `ReturnInvoiceDialog.vue` (file cũ không còn được dùng). Hàng mới khi
+đổi được chọn bằng chính giỏ POS, ở chế độ đổi hàng (`stores/exchange.js`, `ExchangeBanner.vue`).
+Spec và các con số đã đo: `docs/features/doi-hang.md`, mục 6.
+
+Những điều phải giữ khi sửa:
+
+- **Một transaction.** Phiếu trả và HĐ mới tạo trong cùng request. Không được `commit` giữa chừng:
+  `ensure_self_service_einvoice_token` bỏ commit khi `frappe.flags.pos_next_dang_doi_hang` bật.
+  Thêm hook nào commit trên Sales Invoice là phá tính chất này.
+- **Tiền tính theo giỏ gộp:** hàng giữ lại + hàng mới, KM tổng đơn gốc giữ nếu còn đủ ngưỡng.
+  Phiếu trả hoàn theo giá thực trả. KM còn hiệu lực thì chuyển sang HĐ mới qua `discount_amount`;
+  mất hiệu lực thì thu hồi đúng phần KM nằm trên hàng giữ lại.
+- **Write-off trên phiếu trả là số ÂM.** Số dương làm HĐ gốc treo công nợ âm (ghi có ảo).
+- **`ignore_pricing_rule = 1`** trên cả hai chứng từ. `set_missing_values()` chép giá trị từ POS
+  Profile đè lên, nên `update_invoice` đặt lại khi bên gọi gửi 1. Thiếu cờ này thì ERPNext tự áp KM
+  tổng đơn cho riêng HĐ mới.
+- **Tính trước phải chạy đủ `validate`** (`_dung_tam`). Chỉ `calculate_taxes_and_totals` thì thuế
+  gồm trong giá cộng chiết khấu tổng đơn ra sai.
+- Sau khi lưu, `submit_exchange` **đối chiếu lại** tổng phiếu trả, write-off, tiền hoàn, tổng HĐ
+  mới và số điểm tích lũy với số đã tính; lệch là dừng và hoàn tác cả hai.
+- `allow_return` trong POS Settings nay có tác dụng thật (patch `v1_15_0.bat_cho_phep_tra_hang` bật
+  lại cho site cũ). Thu hồi KM không chịu `write_off_limit` của POS Profile.
+- **Số dư khách đọc theo sổ công nợ, KHÔNG theo `outstanding_amount`** (PM-TASK-00267). Phiếu trả
+  POS ghi công nợ vào HĐ gốc (`update_outstanding_for_self = 0`), nên `outstanding_amount` của chính
+  phiếu trả là số chết. `credit_sales._so_du_theo_so_cong_no` cộng Payment Ledger theo HĐ, bút toán
+  trỏ vào phiếu trả kiểu này được gộp về HĐ gốc. Khoản ghi có chỉ nằm (và chỉ tiêu được) ở HĐ gốc.
+
 ### Tài khoản ví phải thuộc đúng công ty (PM-TASK-00059)
 
 `POS Settings.wallet_account` từng nhận cả tài khoản của công ty khác. Ví sinh ra theo đó

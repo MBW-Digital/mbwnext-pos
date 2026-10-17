@@ -14,21 +14,59 @@ from frappe import _
 from frappe.utils import flt, nowdate, today, cint, get_datetime
 
 
+def _so_du_theo_so_cong_no(customer, company, hoa_don=None):
+	"""Số dư từng hóa đơn của khách theo sổ công nợ (Payment Ledger), PM-TASK-00267.
+
+	KHÔNG đọc trường `outstanding_amount` của Sales Invoice: phiếu trả POS lưu với
+	`update_outstanding_for_self = 0` nên bút toán công nợ ghi vào HĐ gốc, còn trường
+	`outstanding_amount` của chính phiếu trả được ERPNext đặt một lần lúc lưu rồi bỏ đó.
+	Đọc trường đó thì cùng một khoản ghi có hiện hai lần: ở HĐ gốc và ở phiếu trả.
+
+	Bút toán nào lỡ trỏ vào một phiếu trả kiểu này (dữ liệu cũ) được gộp về HĐ gốc của nó,
+	để khoản đã tiêu không còn hiện là số dư ở HĐ gốc nữa.
+
+	Trả về dict {tên HĐ: số dư} — âm là khách đang có tiền, dương là khách còn nợ.
+	"""
+	dieu_kien = ""
+	tham_so = {"customer": customer, "company": company}
+	loc_cong_ty = "and ple.company = %(company)s" if company else ""
+	if hoa_don:
+		dieu_kien = "having hoa_don = %(hoa_don)s"
+		tham_so["hoa_don"] = hoa_don
+
+	rows = frappe.db.sql(
+		f"""
+		select
+			if(si.is_return = 1 and ifnull(si.update_outstanding_for_self, 0) = 0
+				and ifnull(si.return_against, '') != '', si.return_against, si.name) as hoa_don,
+			sum(ple.amount) as so_du
+		from `tabPayment Ledger Entry` ple
+		inner join `tabSales Invoice` si on si.name = ple.against_voucher_no
+		where ple.delinked = 0
+			and ple.against_voucher_type = 'Sales Invoice'
+			and ple.party_type = 'Customer'
+			and ple.party = %(customer)s
+			{loc_cong_ty}
+		group by hoa_don
+		{dieu_kien}
+		""",
+		tham_so,
+		as_dict=True,
+	)
+	return {r.hoa_don: flt(r.so_du) for r in rows}
+
+
 @frappe.whitelist()
 def get_customer_balance(customer, company=None):
 	"""
 	Get customer balance from Sales Invoices.
 
-	Calculates the net balance from:
-	- Regular invoices: Only positive outstanding_amount (what customer owes)
-	- Return invoices: Only negative outstanding_amount (credit added to customer balance)
+	Tính theo sổ công nợ (Payment Ledger), mỗi HĐ một số dư (PM-TASK-00267):
+	- Số dư dương: khách còn nợ → cộng vào total_outstanding
+	- Số dư âm: khách đang có tiền (trả hàng ghi vào số dư, trả thừa) → cộng vào total_credit
 
-	Credit ONLY comes from return invoices where "Add to Customer Credit" was selected:
-	- Cash refund given: outstanding_amount = 0 → NOT counted as credit
-	- Added to customer credit: outstanding_amount < 0 → counted as credit
-
-	Note: Negative outstanding on regular invoices (from linked returns) is NOT counted
-	as credit to avoid double-counting - the credit is tracked on the return invoice.
+	Trả hàng hoàn tiền mặt thì sổ về 0, không thành số dư. Trả hàng ghi vào số dư thì
+	khoản ghi có nằm ở HĐ gốc (phiếu trả POS ghi công nợ vào HĐ gốc), chỉ đếm một lần.
 
 	Args:
 		customer: Customer ID
@@ -45,63 +83,10 @@ def get_customer_balance(customer, company=None):
 		frappe.throw(_("Customer is required"))
 
 	try:
-		from frappe.query_builder import DocType
-		from frappe.query_builder.functions import Sum, Abs, Coalesce
-		from pypika import Case
-
-		SalesInvoice = DocType("Sales Invoice")
-
-		# Build base filters
-		base_filters = (
-			(SalesInvoice.customer == customer) &
-			(SalesInvoice.docstatus == 1)
-		)
-		if company:
-			base_filters = base_filters & (SalesInvoice.company == company)
-
-		# Query for regular invoices (non-returns)
-		# Only count positive outstanding (what customer owes)
-		# Negative outstanding on regular invoices comes from returns linked to them,
-		# so we don't count it here to avoid double-counting (credit comes from returns only)
-		regular_query = (
-			frappe.qb.from_(SalesInvoice)
-			.select(
-				Coalesce(
-					Sum(
-						Case()
-						.when(SalesInvoice.outstanding_amount > 0, SalesInvoice.outstanding_amount)
-						.else_(0)
-					),
-					0
-				).as_("total_outstanding")
-			)
-			.where(base_filters & (SalesInvoice.is_return == 0))
-		)
-
-		# Query for return invoices
-		# Only count returns where outstanding_amount < 0 (not refunded in cash)
-		# If cash refund was given, outstanding_amount = 0 and should NOT count as credit
-		# If no cash refund (added to customer credit), outstanding_amount < 0
-		return_query = (
-			frappe.qb.from_(SalesInvoice)
-			.select(
-				Coalesce(Sum(Abs(SalesInvoice.outstanding_amount)), 0).as_("return_credit")
-			)
-			.where(
-				base_filters &
-				(SalesInvoice.is_return == 1) &
-				(SalesInvoice.outstanding_amount < 0)
-			)
-		)
-
-		# Execute queries
-		regular_result = regular_query.run(as_dict=True)
-		return_result = return_query.run(as_dict=True)
-
-		# Calculate totals
-		total_outstanding = flt(regular_result[0].total_outstanding) if regular_result else 0.0
-		# Credit only comes from return invoices where no cash refund was given
-		total_credit = flt(return_result[0].return_credit) if return_result else 0.0
+		# Theo sổ công nợ, không theo trường outstanding_amount (xem _so_du_theo_so_cong_no)
+		so_du = _so_du_theo_so_cong_no(customer, company).values()
+		total_outstanding = sum(v for v in so_du if v > 0.005)
+		total_credit = -sum(v for v in so_du if v < -0.005)
 
 		# Net balance: positive = owes, negative = has credit
 		net_balance = total_outstanding - total_credit
@@ -179,17 +164,18 @@ def get_available_credit(customer, company, pos_profile=None):
 
 	total_credit = []
 
-	# Tín dụng theo SỔ CÔNG NỢ, không theo trường outstanding_amount (_open_invoice_credits).
-	open_credits = _open_invoice_credits(customer, company)
+	# HĐ khách đang có tiền, tính theo sổ công nợ (PM-TASK-00267). Phiếu trả ghi công nợ
+	# vào HĐ gốc thì khoản ghi có hiện ở HĐ gốc, không hiện thêm lần nữa ở phiếu trả.
+	so_du = {k: v for k, v in _so_du_theo_so_cong_no(customer, company).items() if v < -0.005}
 	outstanding_invoices = frappe.get_all(
 		"Sales Invoice",
-		filters={"name": ["in", list(open_credits) or [""]]},
+		filters={"name": ["in", list(so_du)], "docstatus": 1},
 		fields=["name", "is_return", "posting_date", "grand_total", "modified"],
-		order_by="posting_date desc"
-	)
+		order_by="posting_date desc",
+	) if so_du else []
 
 	for row in outstanding_invoices:
-		available_credit = open_credits.get(row.name, 0)
+		available_credit = -so_du[row.name]
 
 		if available_credit > 0:
 			total_credit.append({
@@ -307,41 +293,6 @@ def redeem_customer_credit(invoice_name, customer_credit_dict):
 	return created_journal_entries
 
 
-def _open_invoice_credits(customer, company, invoice=None):
-	"""Tín dụng còn dùng được của khách, theo từng hoá đơn — đọc SỔ CÔNG NỢ (Payment Ledger Entry).
-
-	Không đọc trường `Sales Invoice.outstanding_amount`: phiếu trả hàng trừ vào hoá đơn gốc
-	(`update_outstanding_for_self = 0`) thì phần tín dụng nằm trên HOÁ ĐƠN GỐC trong sổ, còn trường
-	outstanding của chính phiếu trả vẫn giữ số âm cũ. Đọc trường đó là đếm đôi (ha-vang: khách "1" có
-	79.400đ tín dụng mà hiện 158.800đ) và cho trừ tín dụng hai lần.
-
-	Trả {tên hoá đơn: số tín dụng dương}.
-	"""
-	from frappe.query_builder.functions import Sum
-
-	ple = frappe.qb.DocType("Payment Ledger Entry")
-	query = (
-		frappe.qb.from_(ple)
-		.select(ple.against_voucher_no, Sum(ple.amount).as_("balance"))
-		.where(
-			(ple.party_type == "Customer")
-			& (ple.party == customer)
-			& (ple.company == company)
-			& (ple.delinked == 0)
-			& (ple.against_voucher_type == "Sales Invoice")
-		)
-		.groupby(ple.against_voucher_no)
-	)
-	if invoice:
-		query = query.where(ple.against_voucher_no == invoice)
-	credits = {}
-	for row in query.run(as_dict=True):
-		credit = flt(-flt(row.balance), 2)
-		if credit >= 0.01:
-			credits[row.against_voucher_no] = credit
-	return credits
-
-
 def _validate_and_lock_invoice_credit(invoice_name, amount_to_redeem):
 	"""
 	Validate and lock invoice credit using SELECT FOR UPDATE.
@@ -375,10 +326,10 @@ def _validate_and_lock_invoice_credit(invoice_name, amount_to_redeem):
 	if not result:
 		frappe.throw(_("Credit source invoice {0} not found or not submitted").format(invoice_name))
 
-	# Số tín dụng theo sổ công nợ — xem _open_invoice_credits.
-	available_credit = _open_invoice_credits(result[0].customer, result[0].company, invoice_name).get(
-		invoice_name, 0
-	)
+	# Số dư theo sổ công nợ, không theo trường outstanding_amount (PM-TASK-00267): phiếu trả
+	# ghi công nợ vào HĐ gốc thì tự nó không còn là nguồn tiền, chỉ HĐ gốc mới là nguồn.
+	so_du = _so_du_theo_so_cong_no(result[0].customer, result[0].company, invoice_name)
+	available_credit = -flt(so_du.get(invoice_name))  # Credit is negative balance
 
 	if available_credit < amount_to_redeem:
 		frappe.throw(

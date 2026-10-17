@@ -42,6 +42,7 @@
   "column_break_operations",
   "allow_return_without_invoice",
   "return_validity_days",
+  "exchange_negative_difference",
   "allow_free_batch_return",
   "allow_skip_manual_batch_selection",
   "allow_print_draft_invoices",
@@ -328,6 +329,15 @@
    "label": "Return Validity Days"
   },
   {
+   "default": "Refund",
+   "depends_on": "allow_return",
+   "description": "When exchanging for cheaper items (negative difference): refund the customer, add it to the customer's credit balance, or require the customer to pick more items. Customer Credit only takes effect when Credit Sale or Customer Credit Payment is enabled.",
+   "fieldname": "exchange_negative_difference",
+   "fieldtype": "Select",
+   "label": "When Exchange Difference Is Negative",
+   "options": "Refund\nCustomer Credit\nRequire Top-up"
+  },
+  {
    "default": "0",
    "fieldname": "allow_free_batch_return",
    "fieldtype": "Check",
@@ -537,7 +547,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-15 11:33:51.421373",
+ "modified": "2026-10-06 11:00:00.000000",
  "modified_by": "dovietthang.btm@gmail.com",
  "module": "POS Next",
  "name": "POS Settings",

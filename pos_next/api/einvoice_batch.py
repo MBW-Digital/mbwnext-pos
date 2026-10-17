@@ -83,6 +83,24 @@ def _validate_si_list_for_batch(si_names: List[str]) -> Dict[str, Any]:
 		if r.batch_einvoice_ref:
 			errors.append(_("{0}: Đã thuộc bảng kê {1}.").format(r.name, r.batch_einvoice_ref))
 
+	# Phiếu trả chỉ vào bảng kê khi đơn gốc cũng nằm trong chính bảng kê đó: các dòng
+	# âm trừ thẳng vào dòng bán cùng ngày. Đơn gốc đã xuất HĐĐT (hoặc nằm ở bảng kê
+	# khác) thì phiếu trả phải đi bằng hóa đơn điều chỉnh, không được thành dòng âm
+	# của một bảng kê mới (PM-FEAT-00060, G2).
+	trong_bang_ke = set(si_names)
+	tra_hang = frappe.db.get_all(
+		"Sales Invoice",
+		filters=[["name", "in", si_names], ["is_return", "=", 1]],
+		fields=["name", "return_against"],
+	)
+	for r in tra_hang:
+		if r.return_against not in trong_bang_ke:
+			errors.append(
+				_("{0}: Phiếu trả hàng của {1} chỉ được gộp cùng bảng kê với hóa đơn gốc.").format(
+					r.name, r.return_against or "?"
+				)
+			)
+
 	if errors:
 		frappe.throw("<br>".join(errors))
 
@@ -264,9 +282,12 @@ def get_unissued_retail_si(company: str, date: str, pos_profile: str = "") -> Li
 	if pos_profile:
 		filters["pos_profile"] = pos_profile
 
-	return frappe.db.get_all(
+	rows = frappe.db.get_all(
 		"Sales Invoice",
 		filters=filters,
-		fields=["name", "customer_name", "grand_total", "pos_profile", "posting_date"],
+		fields=["name", "customer_name", "grand_total", "pos_profile", "posting_date", "is_return", "return_against"],
 		order_by="name asc",
 	)
+	# Bỏ phiếu trả mà đơn gốc không nằm trong cùng danh sách (xem _validate_si_list_for_batch)
+	ten = {r.name for r in rows}
+	return [r for r in rows if not r.is_return or r.return_against in ten]

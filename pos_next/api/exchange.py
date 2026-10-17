@@ -959,6 +959,8 @@ def get_invoice(invoice_name, pos_profile):
 				"sales_invoice_item": r.name,
 				"item_code": r.item_code,
 				"item_name": r.item_name,
+				# [mobile] Món mẹ của biến thể: app RN mở thẳng hộp chọn màu / size của món đó khi đổi hàng
+				"variant_of": frappe.get_cached_value("Item", r.item_code, "variant_of"),
 				"qty": flt(r.qty),
 				"uom": r.uom,
 				"whole_number": cint(frappe.get_cached_value("UOM", r.uom, "must_be_whole_number")),

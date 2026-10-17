@@ -2490,6 +2490,27 @@ def check_invoice_return_validity(invoice_name, pos_profile=None):
 
     # Check return validity period from POS Settings
     if invoice_info.pos_profile:
+        # [mobile] Cùng luật chặn của pos_next.api.exchange (H3, A8) — app RN hỏi hàm này để làm mờ nút
+        # Trả hàng trước khi mở màn, thay vì để màn trả hàng mới báo lỗi.
+        if not cint(
+            frappe.db.get_value("POS Settings", {"pos_profile": invoice_info.pos_profile}, "allow_return")
+        ):
+            return {
+                "valid": False,
+                "error_type": "returns_disabled",
+                "message": _("Returns are disabled for this store."),
+            }
+        from pos_next.api.exchange import _ky_da_khoa_so
+
+        company = frappe.db.get_value("Sales Invoice", invoice_name, "company")
+        khoa_den = _ky_da_khoa_so(company, invoice_info.posting_date) if company else None
+        if khoa_den:
+            return {
+                "valid": False,
+                "error_type": "period_closed",
+                "message": _("Accounting period closed"),
+            }
+
         return_validity_days = cint(
             frappe.db.get_value(
                 "POS Settings",

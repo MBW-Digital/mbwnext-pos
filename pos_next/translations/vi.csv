@@ -1843,3 +1843,7 @@
 "Exchange saved: return {0}, new invoice {1}","Đã lưu đổi hàng: phiếu trả {0}, hóa đơn mới {1}",""
 "Exchange payment","Thanh toán đổi hàng",""
 "Exchange: amount after deducting the returned items. Store order promotions and coupons do not apply here.","Đổi hàng: số tiền sau khi trừ hàng trả. KM tổng đơn và coupon của cửa hàng không áp ở đây.",""
+"Accounting period closed","Hoá đơn thuộc kỳ đã khoá sổ",""
+"Service item, not refundable","Hàng dịch vụ, không hoàn",""
+"Already returned once","Đã đổi trả một lần",""
+"Return period expired ({0} days)","Quá hạn đổi trả ({0} ngày)",""

@@ -35,6 +35,7 @@ còn dư mới hoàn / ghi có / chặn theo `POS Settings.exchange_negative_dif
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 
 import frappe
 from frappe import _
@@ -149,6 +150,37 @@ def _kiem_tra_hoa_don_goc(original, pos_profile, lock=False):
 # ---------------------------------------------------------------------------
 # Dựng chứng từ trong bộ nhớ để tính tiền (không lưu)
 # ---------------------------------------------------------------------------
+
+
+def _tong_thanh_toan(doc):
+	"""[mobile] Tổng ERPNext dùng để đối chiếu thanh toán và ghi công nợ: `rounded_total` khi chứng từ có
+	làm tròn, không thì `grand_total` (giữ dấu của chứng từ).
+
+	Tính tiền theo `grand_total` trong khi ERPNext ghi công nợ theo `rounded_total` là lệch đúng phần làm
+	tròn. Đo 17/10 trên ACC-SINV-2026-00116 (tổng 2.682, làm tròn 2.700, đã trả 1.000, nợ 1.700): trả hết thì
+	hoàn 982 + trừ nợ 1.700 = 2.682, HĐ gốc còn treo −18 — khách được ghi có ảo 18đ.
+	"""
+	if not cint(doc.get("disable_rounded_total")) and flt(doc.get("rounded_total")):
+		return flt(doc.rounded_total)
+	return flt(doc.grand_total)
+
+
+@contextmanager
+def _khoa_commit():
+	"""[mobile] Trong khối này `frappe.db.commit()` không làm gì: phiếu trả và HĐ mới chỉ được ghi khi cả
+	request xong (Frappe tự commit), lỗi ở bước nào thì rollback hết.
+
+	Cờ `pos_next_dang_doi_hang` chỉ chặn được commit của pos_next. Hook của app khác vẫn commit giữa chừng:
+	`mbwnext_integration_dms` (`sync_helper.create_sync_queue_item`, chạy ở on_submit Sales Invoice) gọi
+	`frappe.db.commit()`. Đo 17/10: thu hồi tiền ví lỗi sau đó thì phiếu trả vẫn còn, ở trạng thái dở.
+	Các hàm `after_commit` đã đăng ký vẫn chạy ở lần commit thật cuối request.
+	"""
+	frappe.db.commit = lambda *args, **kwargs: None
+	try:
+		yield
+	finally:
+		# Bỏ thuộc tính gắn trên đối tượng là về lại phương thức `commit` của lớp.
+		del frappe.db.commit
 
 
 def _dung_tam(data):
@@ -402,7 +434,7 @@ def _lap_ke_hoach(original, pos_profile, pos_opening_shift, return_items, new_it
 		tra["apply_discount_on"] = original.apply_discount_on or "Grand Total"
 		tra["discount_amount"] = -ck_dong_tra
 	tra_tam = _dung_tam(tra)
-	hoan_theo_dong = -flt(tra_tam.grand_total)  # số dương
+	hoan_theo_dong = -_tong_thanh_toan(tra_tam)  # số dương
 
 	thu_hoi_km = 0.0
 	chuyen_km = 0.0
@@ -439,7 +471,7 @@ def _lap_ke_hoach(original, pos_profile, pos_opening_shift, return_items, new_it
 			moi["apply_discount_on"] = original.apply_discount_on or "Grand Total"
 			moi["discount_amount"] = chuyen_km
 		moi_tam = _dung_tam(moi)
-		tong_moi = flt(moi_tam.grand_total)
+		tong_moi = _tong_thanh_toan(moi_tam)
 
 	hoan = max(0.0, hoan_theo_dong - thu_hoi_km)
 	thu_hoi_km = hoan_theo_dong - hoan  # không thu hồi quá số hoàn
@@ -687,7 +719,8 @@ def submit_exchange(payload):
 	"""
 	frappe.flags.pos_next_dang_doi_hang = True
 	try:
-		return _submit_exchange(payload)
+		with _khoa_commit():
+			return _submit_exchange(payload)
 	finally:
 		frappe.flags.pos_next_dang_doi_hang = False
 
@@ -772,12 +805,12 @@ def _submit_exchange(payload):
 				frappe.format_value(plan.thu_hoi_km, {"fieldtype": "Currency"})
 			)
 		)
-	if abs(-flt(phieu_tra.grand_total) - plan.hoan_theo_dong) > SAI_SO or abs(
+	if abs(-_tong_thanh_toan(phieu_tra) - plan.hoan_theo_dong) > SAI_SO or abs(
 		-flt(phieu_tra.paid_amount) - _tong_tien(tien_hoan)
 	) > SAI_SO:
 		frappe.throw(
 			_("Return total does not match the calculation ({0} vs {1}). Nothing was saved.").format(
-				-flt(phieu_tra.grand_total), plan.hoan_theo_dong
+				-_tong_thanh_toan(phieu_tra), plan.hoan_theo_dong
 			)
 		)
 
@@ -803,7 +836,7 @@ def _submit_exchange(payload):
 			moi["payments"] = [{"mode_of_payment": _hinh_thuc_mac_dinh(p.pos_profile), "amount": 0}]
 		ket_qua_moi = submit_invoice(invoice=json.dumps(moi, default=str), data="{}")
 		hd_moi = frappe.get_doc(DOCTYPE, ket_qua_moi["name"])
-		if abs(flt(hd_moi.grand_total) - plan.tong_moi) > SAI_SO:
+		if abs(_tong_thanh_toan(hd_moi) - plan.tong_moi) > SAI_SO:
 			frappe.throw(_("New invoice total does not match the calculation. Nothing was saved."))
 
 		# Chuyển phần tiền trả lại đang treo trên HĐ gốc (công nợ âm) sang HĐ mới.
@@ -921,6 +954,9 @@ def get_invoice(invoice_name, pos_profile):
 		lines.append(
 			{
 				"name": r.name,
+				# [mobile] _compute_free_item_linkage nối hàng tặng ↔ hàng mua qua khoá này; thiếu thì
+				# free_item_row_ids / paired_paid_item_row_id không bao giờ được điền.
+				"sales_invoice_item": r.name,
 				"item_code": r.item_code,
 				"item_name": r.item_name,
 				"qty": flt(r.qty),

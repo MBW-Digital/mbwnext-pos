@@ -180,6 +180,13 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		}
 	}
 
+	// Công nợ (chức năng Thu nợ): mở hộp thoại Thu nợ / màn hình Công nợ từ bất kỳ đâu.
+	// debtCollection = { customer, invoices: [tên đơn chọn sẵn] } — invoices rỗng = chọn tất cả.
+	// debtCollectedAt = { customer, at } — đặt khi thu xong để chức năng khác tự làm mới.
+	const debtCollection = ref(null)
+	const debtCollectedAt = ref(null)
+	const showDebtScreen = ref(false)
+
 	function resetAllDialogs() {
 		// Close all dialogs on logout to prevent stale state
 		showPaymentDialog.value = false
@@ -201,6 +208,8 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		showItemSelectionDialog.value = false
 		showErrorDialog.value = false
 		showKeyboardShortcutsDialog.value = false
+		debtCollection.value = null
+		showDebtScreen.value = false
 		clearError()
 	}
 
@@ -241,6 +250,9 @@ export const usePOSUIStore = defineStore("posUI", () => {
 		windowWidth,
 		leftPanelWidth,
 		isResizing,
+		debtCollection,
+		debtCollectedAt,
+		showDebtScreen,
 
 		// Computed
 		isDesktop,

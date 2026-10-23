@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>{{ _("Debt Collection Receipt") if not is_refund else _("Refund Voucher") }} {{ debt_collection_id[:10] }}</title>
+<style>
+  @page { size: 80mm auto; margin: 3mm; }
+  body { font-family: Arial, sans-serif; font-size: 12px; width: 74mm; margin: 0 auto; color: #000; }
+  h1 { font-size: 15px; text-align: center; margin: 6px 0 2px; text-transform: uppercase; }
+  .c { text-align: center; } .r { text-align: right; } .b { font-weight: bold; }
+  .muted { color: #444; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0; }
+  td { padding: 2px 0; vertical-align: top; }
+  hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+  .total td { font-size: 14px; font-weight: bold; }
+  @media screen { body { margin-top: 12px; } }
+</style>
+</head>
+<body onload="window.print()">
+  <div class="c b">{{ profile.get("custom_store_name_2") or company }}</div>
+  {% if profile.get("custom_address") %}<div class="c muted">{{ profile.custom_address }}</div>{% endif %}
+  {% if profile.get("custom_phone") %}<div class="c muted">{{ profile.custom_phone }}</div>{% endif %}
+  <h1>{{ _("Refund Voucher") if is_refund else _("Debt Collection Receipt") }}</h1>
+  <div class="c muted">{{ frappe.utils.format_datetime(created, "dd/MM/yyyy HH:mm") }}</div>
+  <hr>
+  <table>
+    <tr><td>{{ _("Customer") }}</td><td class="r b">{{ customer_name }}</td></tr>
+    <tr><td>{{ _("POS") }}</td><td class="r">{{ profile.name }}</td></tr>
+    {% if shift %}<tr><td>{{ _("Shift") }}</td><td class="r">{{ shift }}</td></tr>{% endif %}
+    <tr><td>{{ _("Cashier") }}</td><td class="r">{{ cashier }}</td></tr>
+  </table>
+  <hr>
+  {% if invoices %}
+  <div class="b">{{ _("Invoices") }}</div>
+  <table>
+    {% for i in invoices %}<tr><td>{{ i.invoice }}</td><td class="r">{{ fmt(i.amount if i.amount > 0 else -i.amount) }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  {% if offsets %}
+  <div class="b">{{ _("Offset against debt") }}</div>
+  <table>
+    {% for o in offsets %}<tr><td>{{ o.reference_name }}</td><td class="r">{{ fmt(o.amount) }}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  <hr>
+  <table>
+    {% for e in entries %}<tr><td>{{ e.mode_of_payment }} <span class="muted">({{ e.name }})</span></td><td class="r">{{ fmt(e.paid_amount) }}</td></tr>{% endfor %}
+    <tr class="total"><td>{{ _("Paid to customer") if is_refund else _("Total collected") }}</td><td class="r">{{ fmt(total) }}</td></tr>
+    <tr><td>{{ _("Remaining debt at this POS") }}</td><td class="r b">{{ fmt(remaining) }}</td></tr>
+  </table>
+  {% if note %}<div class="muted">{{ note }}</div>{% endif %}
+  <hr>
+  <table class="c"><tr><td>{{ _("Customer") }}</td><td>{{ _("Cashier") }}</td></tr><tr><td style="height:40px"></td><td></td></tr></table>
+  <div class="c muted">{{ debt_collection_id }}</div>
+</body>
+</html>

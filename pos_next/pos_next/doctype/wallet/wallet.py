@@ -169,7 +169,21 @@ def tong_tien_vi_da_tieu(customer, company=None, exclude_invoice=None):
 		tham_so,
 	)[0][0]
 
-	return flt(tong)
+	# Ví dùng để trả nợ tại quầy (thu nợ POS) nằm ở Payment Entry, không ở hoá đơn
+	dieu_kien_pe = ["pe.party_type = 'Customer'", "pe.party = %(customer)s", "pe.docstatus = 1", "pe.payment_type = 'Receive'"]
+	if company:
+		dieu_kien_pe.append("pe.company = %(company)s")
+	tong_pe = frappe.db.sql(
+		"""
+		select coalesce(sum(pe.paid_amount), 0)
+		from `tabPayment Entry` pe
+		join `tabMode of Payment` mp on mp.name = pe.mode_of_payment
+		where mp.is_wallet_payment = 1 and {dieu_kien}
+		""".format(dieu_kien=" and ".join(dieu_kien_pe)),
+		tham_so,
+	)[0][0]
+
+	return flt(tong) + flt(tong_pe)
 
 
 def get_pending_wallet_payments(customer, exclude_invoice=None):

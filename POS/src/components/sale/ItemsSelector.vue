@@ -319,6 +319,14 @@
 						>
 							{{ Math.floor((item.actual_qty ?? item.stock_qty ?? 0)) }}
 						</div>
+						<!-- Đang giữ cho đơn giữ hàng (PM-FEAT-00070) -->
+						<div
+							v-if="item.held_qty > 0"
+							class="absolute top-5 sm:top-6 -end-1.5 sm:-end-2 z-10 px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 shadow-sm"
+							:title="__('{0} held for customer pickup', [item.held_qty])"
+						>
+							{{ __("Held {0}", [item.held_qty]) }}
+						</div>
 
 						<!-- Item Image -->
 						<div class="relative aspect-square bg-gray-100 rounded-md mb-1.5 sm:mb-2 overflow-hidden">
@@ -588,6 +596,14 @@
 									class="text-xs sm:text-sm text-gray-400 italic"
 								>
 									{{ __('N/A') }}
+								</span>
+								<!-- Đang giữ cho đơn giữ hàng (PM-FEAT-00070) -->
+								<span
+									v-if="item.held_qty > 0"
+									class="ms-1 inline-block px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300"
+									:title="__('{0} held for customer pickup', [item.held_qty])"
+								>
+									{{ __("Held {0}", [item.held_qty]) }}
 								</span>
 							</td>
 							<td class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]">

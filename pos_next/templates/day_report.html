@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>{{ _("Day Report") }} {{ frappe.utils.formatdate(r.report_date, "dd/MM/yyyy") }}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm; }
+  body { font-family: "Times New Roman", serif; font-size: 12px; color: #000; margin: 0; }
+  h1 { font-size: 18px; text-align: center; margin: 14px 0 4px; text-transform: uppercase; }
+  table.grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  table.grid th, table.grid td { border: 1px solid #777; padding: 4px 6px; vertical-align: top; }
+  table.grid th { background: #eee; }
+  .sign { display: flex; justify-content: space-around; margin-top: 36px; text-align: center; }
+  .c { text-align: center; } .r { text-align: right; white-space: nowrap; } .b { font-weight: bold; }
+  .muted { color: #444; font-size: 11px; }
+  @media screen { body { margin-top: 12px; } }
+</style>
+</head>
+<body onload="window.print()">
+{% set d = frappe.utils.formatdate(r.report_date, "dd/MM/yyyy") %}
+{% set filter_text = _("Cashier") ~ ": " ~ (staff_label or _("All")) ~ " · " ~ _("Closed by") ~ ": " ~ (closer_label or _("All")) %}
+{% set has_open = r.rows | selectattr("is_open") | list | length %}
+
+<div style="display:flex;justify-content:space-between">
+  <div><b>{{ r.company }}</b><br>{{ _("Store") }}: {{ r.store_name }}</div>
+  <div class="r">{{ _("Printed at {0}").format(frappe.utils.format_datetime(r.generated_at, "dd/MM/yyyy HH:mm")) }}<br>{{ _("Printed by") }}: {{ printed_by }}</div>
+</div>
+<h1>{{ _("Day Report") }}</h1>
+<div class="c">{{ _("Date") }} {{ d }} · {{ filter_text }}</div>
+{% if r.rows %}
+<table class="grid">
+  <tr>
+    <th>{{ _("Time") }}</th><th>{{ _("Cashier") }}</th><th>{{ _("Closed by") }}</th>
+    <th class="r">{{ _("Qty / invoices") }}</th><th class="r">{{ _("Revenue") }}</th><th class="r">{{ _("VAT") }}</th>
+    <th class="r">{{ _("Return Refunds") }}</th><th class="r">{{ _("Sales Total") }}</th><th class="r">{{ _("Debt Collections") }}</th><th class="r">{{ _("Money Received") }}</th>
+  </tr>
+  {% for row in r.rows %}
+  <tr>
+    <td>{{ frappe.utils.format_datetime(row.start, "HH:mm") }} → {% if row.is_open %}{{ _("not closed") }}*{% else %}{{ frappe.utils.format_datetime(row.end, "HH:mm") }}{% if row.end[:10] != r.report_date %} ({{ frappe.utils.format_datetime(row.end, "dd/MM") }}){% endif %}{% endif %}</td>
+    <td>{{ row.user_name }}</td>
+    <td>{{ row.closed_by_name or "—" }}</td>
+    <td class="r">{{ fmt_num(row.qty) }} / {{ row.sales_count }}</td>
+    <td class="r">{{ fmt(row.net) }}</td>
+    <td class="r">{{ fmt(row.vat) }}</td>
+    <td class="r">{{ fmt(row.returns) }}</td>
+    <td class="r">{{ fmt(row.total_sales) }}</td>
+    <td class="r">{{ fmt(row.debt) }}</td>
+    <td class="r">{{ fmt(row.actual) }}</td>
+  </tr>
+  {% endfor %}
+  <tr class="b">
+    <td colspan="3">{{ _("Total ({0} shifts)").format(r.rows | length) }}</td>
+    <td class="r">{{ fmt_num(r.totals.qty) }} / {{ r.totals.sales_count | int }}</td>
+    <td class="r">{{ fmt(r.totals.net) }}</td>
+    <td class="r">{{ fmt(r.totals.vat) }}</td>
+    <td class="r">{{ fmt(r.totals.returns) }}</td>
+    <td class="r">{{ fmt(r.totals.total_sales) }}</td>
+    <td class="r">{{ fmt(r.totals.debt) }}</td>
+    <td class="r">{{ fmt(r.totals.actual) }}</td>
+  </tr>
+</table>
+{% else %}
+<p class="c">{{ _("No shifts on {0}").format(d) }}</p>
+{% endif %}
+<p class="muted">
+  {% if has_open %}* {{ _("Shift not closed: provisional figures at print time.") }} {% endif %}
+  {{ _("Total Sales = Revenue + VAT − Returns. Money Received = cash and bank transfer/QR received in the shift (including debt collected; excluding credit sales and wallet).") }}
+</p>
+<div class="sign">
+  <div><b>{{ _("Prepared by") }}</b><br><i>{{ _("(sign, full name)") }}</i></div>
+  <div><b>{{ _("Store Manager") }}</b><br><i>{{ _("(sign, full name)") }}</i></div>
+</div>
+</body>
+</html>

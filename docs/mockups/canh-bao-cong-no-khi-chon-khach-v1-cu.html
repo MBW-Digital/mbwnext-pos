@@ -1,0 +1,354 @@
+<!doctype html>
+<!--
+  Mockup: Cảnh báo công nợ khi chọn khách trên POS
+  PM-FEAT-00068 · spec: docs/features/canh-bao-cong-no-khi-chon-khach.md
+  ⚠ ĐÃ CŨ (02/10/2026): bỏ "quản lý xác nhận / chặn", thay bằng cấu hình "Cho phép bán chịu". Bản hiện hành: https://claude.ai/artifact/J8g4kmPDRpMv9LVHRnMNrF (ảnh POS thật) và https://claude.ai/artifact/RKR7NXzdf648qsGT4k5o5b (bấm thử).
+  Vòng duyệt: 1 — nội bộ (bật "Chi tiết kỹ thuật" để xem fieldname). Chưa duyệt khách.
+
+  Lịch sử chốt:
+  - 01/10/2026 (anh Quân): chỉ tính nợ tại quầy đang bán; ngưỡng do quản trị tự đặt; có hiện hạn
+    thanh toán + hạn mức; quá hạn / vượt hạn mức xử lý theo cấu hình quầy, chỉ áp đơn bán chịu;
+    hạn mức so với nợ tại quầy; mất mạng vẫn cảnh báo bằng công nợ gần nhất; có loại trừ nhóm khách.
+  - Còn mở: A (nguồn hạn thanh toán), B (nhóm loại trừ bỏ qua gì), C (cách quản lý xác nhận),
+    D (mất mạng + chặn) — xem tab "Điểm cần chốt".
+-->
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cảnh báo công nợ POS</title>
+<style>
+:root{
+  --bg:#f4f5f7; --card:#fff; --ink:#1f2328; --muted:#667085; --line:#e4e7ec;
+  --blue:#2563eb; --blue-soft:#e8f0fe; --amber:#f59e0b; --amber-soft:#fef3c7;
+  --red:#dc2626; --red-soft:#fee2e2; --green:#16a34a; --grey-soft:#eef0f3;
+  --tech:#7c3aed; --tech-soft:#f3e8ff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:var(--card);border-bottom:1px solid var(--line);padding:14px 20px;position:sticky;top:0;z-index:5}
+header h1{margin:0 0 2px;font-size:18px}
+header .sub{color:var(--muted);font-size:13px}
+.bar{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+.tab{border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:13px}
+.tab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.tog{margin-left:auto;font-size:13px;color:var(--tech);display:flex;gap:6px;align-items:center}
+main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+section{display:none} section.on{display:block}
+.lead{color:var(--muted);margin:0 0 14px}
+.stage{background:#dfe3e8;border-radius:14px;padding:24px;display:flex;justify-content:center}
+.dlg{background:var(--card);border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.15);width:100%;max-width:640px;padding:20px}
+.dlg h2{margin:0 0 12px;font-size:18px;display:flex;align-items:center;gap:10px}
+.ico{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:700;flex:none}
+.ico.warn{background:var(--amber-soft);color:#b45309}.ico.bad{background:var(--red-soft);color:var(--red)}
+.cust{background:var(--grey-soft);border-radius:10px;padding:12px;display:flex;gap:12px;align-items:center}
+.av{width:40px;height:40px;border-radius:50%;border:2px solid var(--blue);display:grid;place-items:center;font-weight:600;flex:none}
+.cust .nm{font-weight:600}.cust .ph{color:var(--muted);font-size:13px}
+.cust .tot{margin-left:auto;text-align:right}.tot small{color:var(--muted);display:block}.tot b{color:var(--red);font-size:17px}
+.limit{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.limit>div{border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.limit>div>small{color:var(--muted);display:block;font-size:12px}.limit b{font-size:15px}
+.meter{height:6px;background:var(--grey-soft);border-radius:4px;margin-top:8px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--amber)}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th{font-weight:500;color:var(--muted);text-align:left;font-size:12.5px;padding:8px 6px;border-bottom:1px solid var(--line)}
+td{padding:9px 6px;border-bottom:1px solid var(--line)}
+.r{text-align:right}
+tr.od td{background:#fff5f5}
+.pill{display:inline-block;font-size:11.5px;border-radius:20px;padding:1px 8px;font-weight:600}
+.pill.red{background:var(--red-soft);color:var(--red)}.pill.grey{background:var(--grey-soft);color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);margin-top:10px}
+.btns{display:flex;gap:10px;justify-content:flex-end;margin-top:16px;flex-wrap:wrap}
+.btn{border:1.5px solid #cfd4dc;background:#fff;border-radius:9px;padding:9px 16px;font-size:14px;cursor:pointer}
+.btn.pri{border-color:var(--blue);background:var(--blue-soft);font-weight:600}
+.btn.dng{border-color:var(--red);background:var(--red-soft);color:var(--red);font-weight:600}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.offl{background:var(--grey-soft);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px;display:flex;gap:8px;align-items:center}
+.alert{border-radius:10px;padding:10px 12px;margin-top:12px;font-size:13.5px}
+.alert.red{background:var(--red-soft);color:#991b1b}.alert.amber{background:var(--amber-soft);color:#92400e}
+.tech{display:none;background:var(--tech-soft);color:var(--tech);border-radius:6px;padding:6px 9px;font:12px/1.4 ui-monospace,Menlo,monospace;margin-top:8px}
+body.showtech .tech{display:block}
+code.t{display:none;color:var(--tech);font-size:11.5px} body.showtech code.t{display:inline}
+/* form cấu hình */
+.form{background:var(--card);border-radius:12px;border:1px solid var(--line);padding:18px;max-width:760px;margin:0 auto}
+.form h3{margin:0 0 4px;font-size:15px}.form .hint{color:var(--muted);font-size:12.5px;margin:0 0 14px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px}
+.f label{display:block;font-size:12.5px;color:var(--muted);margin-bottom:4px}
+.f .in{border:1px solid #cfd4dc;border-radius:7px;padding:7px 9px;background:#fff;min-height:34px}
+.f .desc{font-size:12px;color:var(--muted);margin-top:3px}
+.chk{display:flex;gap:8px;align-items:center}
+.box{width:16px;height:16px;border:1.5px solid var(--blue);border-radius:4px;background:var(--blue);display:inline-block}
+.tagin{display:flex;gap:6px;flex-wrap:wrap}.tag{background:var(--grey-soft);border-radius:5px;padding:2px 7px;font-size:12.5px}
+.seg{display:flex;border:1px solid #cfd4dc;border-radius:7px;overflow:hidden}
+.seg span{flex:1;text-align:center;padding:7px 4px;font-size:12.5px;border-right:1px solid #cfd4dc}
+.seg span:last-child{border-right:0}.seg span.on{background:var(--blue-soft);font-weight:600}
+.open{border:1.5px dashed var(--amber);border-radius:10px;padding:10px 12px;background:#fffbeb;font-size:13px}
+/* giỏ hàng */
+.carts{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}
+.cart{background:var(--card);border-radius:12px;padding:14px;border:1px solid var(--line)}
+.cart .cap{font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.chead{background:var(--grey-soft);border-radius:9px;padding:10px;display:flex;align-items:center;gap:8px}
+.chead .nm{font-weight:600;font-size:13.5px}.chead .ph{font-size:12px;color:var(--muted)}
+.badge{margin-left:auto;border-radius:20px;padding:5px 11px;font-weight:700;font-size:12.5px;border:2px solid;white-space:nowrap;cursor:pointer}
+.badge.y{border-color:var(--amber);background:var(--amber-soft)}
+.badge.rd{border-color:var(--red);background:var(--red-soft);color:var(--red)}
+.badge.g{border-color:#c4c9d1;background:var(--grey-soft);color:#475467}
+.line{display:flex;justify-content:space-between;padding:7px 2px;border-bottom:1px solid var(--line);font-size:13px}
+.pay{margin-top:10px;border:1.5px solid var(--blue);background:var(--blue-soft);border-radius:9px;text-align:center;padding:8px;font-weight:600}
+/* PIN */
+.pin{display:flex;gap:8px;justify-content:center;margin:12px 0}
+.pin i{width:38px;height:44px;border:1.5px solid #cfd4dc;border-radius:8px;display:grid;place-items:center;font-style:normal;font-size:20px}
+.choice{display:flex;gap:6px;margin:10px 0}
+.choice button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:5px 10px;font-size:12.5px;cursor:pointer}
+.choice button.on{background:var(--amber-soft);border-color:var(--amber);font-weight:600}
+/* điểm chốt */
+.q{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.q h4{margin:0 0 4px;font-size:14.5px}.q p{margin:0 0 8px;color:var(--muted);font-size:13px}
+.opt{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:6px}
+.opt b{white-space:nowrap}
+.rec{font-size:11px;background:var(--blue-soft);color:var(--blue);border-radius:4px;padding:1px 6px;margin-left:4px}
+.done li{margin:3px 0}
+@media (max-width:640px){.row{grid-template-columns:1fr}.limit{grid-template-columns:1fr}.stage{padding:10px}.cust{flex-wrap:wrap}.cust .tot{margin-left:0;text-align:left}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Cảnh báo công nợ khi chọn khách trên POS</h1>
+  <div class="sub">Mockup vòng 1 (nội bộ) · PM-FEAT-00068 · ví dụ ngày hôm nay 01/10/2026, quầy "Cửa hàng Quận 1"</div>
+  <div class="bar" id="tabs">
+    <button class="tab on" data-s="s1">1. Cấu hình quầy</button>
+    <button class="tab" data-s="s2">2. Cảnh báo khi chọn khách</button>
+    <button class="tab" data-s="s3">3. Không có quyền thu</button>
+    <button class="tab" data-s="s4">4. Mất mạng</button>
+    <button class="tab" data-s="s5">5. Huy hiệu trên giỏ</button>
+    <button class="tab" data-s="s6">6. Bán chịu: quản lý xác nhận</button>
+    <button class="tab" data-s="s7">7. Bán chịu: chặn</button>
+    <button class="tab" data-s="s8">Điểm cần chốt</button>
+    <label class="tog"><input type="checkbox" id="tt"> Chi tiết kỹ thuật</label>
+  </div>
+</header>
+
+<main>
+
+<!-- 1. Cấu hình -->
+<section id="s1" class="on">
+  <p class="lead"><b>Lối vào:</b> quản trị mở POS Profile của quầy trong ERPNext → mục <b>Công nợ khách hàng</b> (đặt cạnh nhóm cấu hình Thu nợ của chức năng 1). Thu ngân chỉ đọc POS Profile, không tự đổi được.</p>
+  <div class="form">
+    <h3>Cảnh báo công nợ</h3>
+    <p class="hint">Áp cho mọi thu ngân dùng POS Profile này. Chỉ tính đơn nợ bán tại chính quầy này.</p>
+    <div class="row">
+      <div class="f"><label>Bật cảnh báo công nợ <code class="t">posa_enable_debt_warning</code></label>
+        <div class="chk"><span class="box"></span> Bật</div>
+        <div class="desc">Hiện cảnh báo khi chọn khách và huy hiệu Nợ trên giỏ hàng.</div></div>
+      <div class="f"><label>Ngưỡng tổng nợ tối thiểu <code class="t">posa_debt_warning_threshold</code></label>
+        <div class="in">500.000</div>
+        <div class="desc">Quản trị tự đặt. Để trống = mọi khoản nợ đều cảnh báo.</div></div>
+    </div>
+    <div class="row">
+      <div class="f"><label>Nhóm khách không cảnh báo <code class="t">posa_debt_warning_excluded_groups</code></label>
+        <div class="in tagin"><span class="tag">Khách buôn ×</span><span class="tag">Đại lý ×</span></div>
+        <div class="desc">Ví dụ khách buôn ghi nợ thường xuyên. Có bỏ qua cả phần chặn không → điểm chốt <b>B</b>.</div></div>
+      <div class="f"><label>Khi bán chịu cho khách nợ quá hạn / vượt hạn mức <code class="t">posa_debt_block_mode</code></label>
+        <div class="seg"><span>Chỉ cảnh báo</span><span class="on">Quản lý xác nhận</span><span>Chặn</span></div>
+        <div class="desc">Chỉ áp khi đơn mới còn ghi nợ. Khách trả đủ tiền thì bán bình thường.</div></div>
+    </div>
+    <div class="row">
+      <div class="f"><label>Role được xác nhận <code class="t">posa_debt_approve_roles</code></label>
+        <div class="in tagin"><span class="tag">Quản lý cửa hàng ×</span></div>
+        <div class="desc">Chỉ hiện khi chọn "Quản lý xác nhận".</div></div>
+      <div class="f"><label>Số ngày được nợ mặc định <code class="t">posa_default_credit_days</code></label>
+        <div class="in">15</div>
+        <div class="open" style="margin-top:6px">Chỉ có trường này nếu chốt điểm <b>A</b>. Hạn mức công nợ <b>không</b> khai ở đây: lấy từ bảng Hạn mức tín dụng trên hồ sơ khách (theo công ty).</div></div>
+    </div>
+    <div class="tech">POS Profile Custom Field (module POS Next, fixtures). Table MultiSelect: POS Profile Customer Group (DocType con mới), POS Profile Role (của chức năng 1). Select options lưu tiếng Anh: Warn Only / Manager Approval / Block.</div>
+  </div>
+</section>
+
+<!-- 2. Cảnh báo -->
+<section id="s2">
+  <p class="lead"><b>Lối vào:</b> tự hiện ngay khi thu ngân <b>chọn khách</b> trên giỏ hàng (tìm tên / SĐT, hộp thoại chọn khách). Không hiện khi mở lại đơn nháp hay chuyển tab hóa đơn (lúc đó chỉ có huy hiệu).</p>
+  <div class="stage"><div class="dlg">
+    <h2><span class="ico warn">!</span> Khách hàng đang còn nợ</h2>
+    <div class="cust">
+      <div class="av">NA</div>
+      <div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div>
+      <div class="tot"><small>Tổng nợ tại quầy · 3 đơn</small><b>12.450.000 đ</b></div>
+    </div>
+    <div class="limit">
+      <div><small>Hạn mức công nợ</small><b>15.000.000 đ</b></div>
+      <div><small>Đang nợ tại quầy</small><b>12.450.000 đ</b><div class="meter"><i style="width:83%"></i></div></div>
+      <div><small>Còn được nợ</small><b>2.550.000 đ</b></div>
+    </div>
+    <table>
+      <tr><th>Đơn hàng</th><th>Ngày bán</th><th>Hạn TT</th><th class="r">Còn nợ</th><th class="r">Ngày nợ</th></tr>
+      <tr class="od"><td>ACC-SINV-2026-00412</td><td>12/09</td><td>27/09 <span class="pill red">Quá hạn 4 ngày</span></td><td class="r"><b>5.000.000</b></td><td class="r">19</td></tr>
+      <tr><td>ACC-SINV-2026-00437</td><td>18/09</td><td>03/10</td><td class="r"><b>4.200.000</b></td><td class="r">13</td></tr>
+      <tr><td>ACC-SINV-2026-00455</td><td>25/09</td><td>10/10</td><td class="r"><b>3.250.000</b></td><td class="r">6</td></tr>
+    </table>
+    <div class="alert amber">Khách có <b>1 đơn quá hạn</b>. Quầy này yêu cầu <b>quản lý xác nhận</b> nếu bán chịu thêm. Thanh toán đủ tiền thì không cần.</div>
+    <div class="btns">
+      <button class="btn">Đổi khách hàng</button>
+      <button class="btn">Tiếp tục bán hàng</button>
+      <button class="btn pri">Thu nợ ngay</button>
+    </div>
+    <div class="note">Thu nợ ngay → mở hộp thoại Thu nợ (chức năng 1) với 3 đơn chọn sẵn. Thu xong danh sách tự cập nhật; hết nợ thì cảnh báo tự đóng.</div>
+    <div class="tech">pos_next.api.debt_warning.get_customer_debt_warning(pos_profile, customer) → invoices[due_date, is_overdue], credit_limit (Customer Credit Limit theo company), block_mode. Hạn TT = Sales Invoice.due_date — xem điểm chốt A.</div>
+  </div></div>
+  <p class="note">Câu chữ dòng cảnh báo vàng đổi theo cấu hình quầy: "Chỉ cảnh báo" → không có dòng này; "Chặn" → "Quầy này không cho bán chịu thêm cho khách này".</p>
+</section>
+
+<!-- 3. Không quyền -->
+<section id="s3">
+  <p class="lead">Thu ngân không có quyền thu nợ ở quầy (role thu nợ của chức năng 1): vẫn thấy cảnh báo và danh sách, <b>không có nút Thu nợ ngay</b>. Ví dụ khách chưa có đơn nào quá hạn và chưa vượt hạn mức.</p>
+  <div class="stage"><div class="dlg">
+    <h2><span class="ico warn">!</span> Khách hàng đang còn nợ</h2>
+    <div class="cust"><div class="av">TB</div><div><div class="nm">Trần Thị Bích</div><div class="ph">0987 111 222</div></div>
+      <div class="tot"><small>Tổng nợ tại quầy · 1 đơn</small><b>1.800.000 đ</b></div></div>
+    <div class="limit">
+      <div><small>Hạn mức công nợ</small><b>Không giới hạn</b></div>
+      <div><small>Đang nợ tại quầy</small><b>1.800.000 đ</b></div>
+      <div><small>Còn được nợ</small><b>—</b></div>
+    </div>
+    <table>
+      <tr><th>Đơn hàng</th><th>Ngày bán</th><th>Hạn TT</th><th class="r">Còn nợ</th><th class="r">Ngày nợ</th></tr>
+      <tr><td>ACC-SINV-2026-00461</td><td>28/09</td><td>13/10</td><td class="r"><b>1.800.000</b></td><td class="r">3</td></tr>
+    </table>
+    <div class="btns"><button class="btn">Đổi khách hàng</button><button class="btn pri">Tiếp tục bán hàng</button></div>
+    <div class="note">Khách chưa khai hạn mức → ô hạn mức ghi "Không giới hạn", không có kiểm vượt hạn mức.</div>
+  </div></div>
+</section>
+
+<!-- 4. Offline -->
+<section id="s4">
+  <p class="lead">Mất mạng: vẫn cảnh báo bằng <b>công nợ gần nhất</b> POS đã lưu (nạp lúc mở ca, cập nhật mỗi lần online). Nút Thu nợ ngay mờ vì thu nợ cần mạng.</p>
+  <div class="stage"><div class="dlg">
+    <div class="offl">⚠ Đang mất mạng · Công nợ cập nhật lúc <b>08:12 hôm nay</b> — có thể đã thay đổi</div>
+    <h2><span class="ico warn">!</span> Khách hàng đang còn nợ</h2>
+    <div class="cust"><div class="av">NA</div><div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div>
+      <div class="tot"><small>Tổng nợ tại quầy · 3 đơn</small><b>12.450.000 đ</b></div></div>
+    <table>
+      <tr><th>Đơn hàng</th><th>Ngày bán</th><th>Hạn TT</th><th class="r">Còn nợ</th><th class="r">Ngày nợ</th></tr>
+      <tr class="od"><td>ACC-SINV-2026-00412</td><td>12/09</td><td>27/09 <span class="pill red">Quá hạn 4 ngày</span></td><td class="r"><b>5.000.000</b></td><td class="r">19</td></tr>
+      <tr><td>ACC-SINV-2026-00437</td><td>18/09</td><td>03/10</td><td class="r"><b>4.200.000</b></td><td class="r">13</td></tr>
+      <tr><td>ACC-SINV-2026-00455</td><td>25/09</td><td>10/10</td><td class="r"><b>3.250.000</b></td><td class="r">6</td></tr>
+    </table>
+    <div class="btns"><button class="btn">Đổi khách hàng</button><button class="btn">Tiếp tục bán hàng</button><button class="btn pri" disabled title="Cần kết nối mạng để thu nợ">Thu nợ ngay</button></div>
+    <div class="note">Khách chưa có trong bản lưu (vd. khách mới nợ sau lúc mở ca) → không cảnh báo, huy hiệu "Chưa kiểm tra được công nợ".</div>
+    <div class="tech">IndexedDB customer_debts (&amp;customer, pos_profile, fetched_at), nạp bằng get_profile_debtors lúc mở ca. Bán chịu khi offline mà quầy đặt chặn → điểm chốt D.</div>
+  </div></div>
+</section>
+
+<!-- 5. Huy hiệu -->
+<section id="s5">
+  <p class="lead">Sau <b>Tiếp tục bán hàng</b>, giỏ giữ huy hiệu cạnh tên khách. Bấm huy hiệu mở lại danh sách. Huy hiệu mất khi khách hết nợ hoặc bỏ chọn khách.</p>
+  <div class="carts">
+    <div class="cart"><div class="cap">Có nợ</div>
+      <div class="chead"><div><div class="nm">Trần Thị Bích</div><div class="ph">0987 111 222</div></div><span class="badge y">Nợ 1.800.000 đ</span></div>
+      <div class="line"><span>Sản phẩm mẫu 1 ×2</span><span>180.000</span></div>
+      <div class="line"><span><b>Tổng cộng</b></span><b>180.000 đ</b></div><div class="pay">Thanh toán</div></div>
+    <div class="cart"><div class="cap">Quá hạn / vượt hạn mức</div>
+      <div class="chead"><div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div><span class="badge rd">Nợ 12.450.000 đ · Quá hạn</span></div>
+      <div class="line"><span>Sản phẩm mẫu 1 ×2</span><span>180.000</span></div>
+      <div class="line"><span>Sản phẩm mẫu 2 ×1</span><span>95.000</span></div>
+      <div class="line"><span><b>Tổng cộng</b></span><b>275.000 đ</b></div><div class="pay">Thanh toán</div></div>
+    <div class="cart"><div class="cap">Mất mạng</div>
+      <div class="chead"><div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div><span class="badge g">Nợ 12.450.000 đ (08:12)</span></div>
+      <div class="line"><span>Sản phẩm mẫu 1 ×2</span><span>180.000</span></div>
+      <div class="line"><span><b>Tổng cộng</b></span><b>180.000 đ</b></div><div class="pay">Thanh toán</div></div>
+  </div>
+  <div class="tech">Huy hiệu: InvoiceCart.vue cạnh tên khách; cập nhật từ watch(customer) trong posCart.js cho mọi lối khách vào giỏ.</div>
+</section>
+
+<!-- 6. Quản lý xác nhận -->
+<section id="s6">
+  <p class="lead">Quầy đặt <b>Quản lý xác nhận</b>. Thu ngân bấm thanh toán, phần còn nợ của đơn > 0 (bán chịu), khách có đơn quá hạn hoặc vượt hạn mức → hiện hộp thoại này trước khi tạo hóa đơn.</p>
+  <div class="stage"><div class="dlg" style="max-width:520px">
+    <h2><span class="ico warn">!</span> Cần quản lý xác nhận bán chịu</h2>
+    <div class="cust"><div class="av">NA</div><div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div></div>
+    <div class="alert red">
+      • Có 1 đơn quá hạn: ACC-SINV-2026-00412, quá hạn 4 ngày (5.000.000 đ)<br>
+      • Đang nợ 12.450.000 + ghi nợ đơn này 3.000.000 = <b>15.450.000 đ</b>, vượt hạn mức 15.000.000 đ là <b>450.000 đ</b>
+    </div>
+    <div class="choice" id="cc"><span style="font-size:12.5px;align-self:center">Điểm chốt C:</span>
+      <button class="on" data-c="c1">C1 · Mã PIN</button><button data-c="c2">C2 · Tài khoản + mật khẩu</button></div>
+    <div id="c1">
+      <div class="f"><label>Quản lý</label><div class="in">Lê Minh Quản lý (Quản lý cửa hàng)</div></div>
+      <div class="pin"><i>•</i><i>•</i><i>•</i><i>•</i><i></i><i></i></div>
+    </div>
+    <div id="c2" style="display:none">
+      <div class="f" style="margin-bottom:8px"><label>Email quản lý</label><div class="in">quanly.q1@congty.vn</div></div>
+      <div class="f"><label>Mật khẩu</label><div class="in">••••••••</div></div>
+    </div>
+    <div class="f" style="margin-top:10px"><label>Lý do (không bắt buộc)</label><div class="in">Khách hẹn trả thứ 7</div></div>
+    <div class="btns"><button class="btn">Quay lại thanh toán</button><button class="btn pri">Xác nhận và bán chịu</button></div>
+    <div class="note">Sai role / sai mã → "Người này không có quyền xác nhận tại quầy". Hóa đơn ghi lại người xác nhận và lý do.</div>
+    <div class="tech">approve_debt_override → mã xác nhận ngắn hạn gửi kèm hóa đơn; Sales Invoice.validate kiểm lại, ghi posa_debt_override_by / posa_debt_override_reason. ERPNext check_credit_limit (nợ toàn company) vẫn chạy lúc submit — xác nhận này không vượt qua được nó.</div>
+  </div></div>
+</section>
+
+<!-- 7. Chặn -->
+<section id="s7">
+  <p class="lead">Quầy đặt <b>Chặn</b>: không cho bán chịu thêm; vẫn cho thanh toán đủ tiền hoặc thu nợ trước.</p>
+  <div class="stage"><div class="dlg" style="max-width:520px">
+    <h2><span class="ico bad">✕</span> Không thể bán chịu cho khách này</h2>
+    <div class="cust"><div class="av">NA</div><div><div class="nm">Nguyễn Văn An</div><div class="ph">0912 345 678</div></div></div>
+    <div class="alert red">
+      • Có 1 đơn quá hạn: ACC-SINV-2026-00412, quá hạn 4 ngày<br>
+      • Vượt hạn mức công nợ 450.000 đ nếu ghi nợ đơn này
+    </div>
+    <p class="note">Để tiếp tục: thanh toán đủ 3.000.000 đ, hoặc thu nợ trước rồi bán chịu lại.</p>
+    <div class="btns"><button class="btn">Thanh toán đủ</button><button class="btn pri">Thu nợ ngay</button></div>
+    <div class="tech">Chặn cả ở client (PaymentDialog) lẫn server (Sales Invoice.validate) — gọi API trực tiếp cũng không qua được.</div>
+  </div></div>
+</section>
+
+<!-- 8. Điểm cần chốt -->
+<section id="s8">
+  <div class="q done"><h4>Đã chốt 01/10/2026</h4><ul>
+    <li>Chỉ tính nợ ở quầy đang bán; hạn mức so với nợ tại quầy.</li>
+    <li>Ngưỡng nợ do quản trị tự đặt trên từng quầy.</li>
+    <li>Hiện hạn thanh toán và hạn mức công nợ.</li>
+    <li>Quá hạn / vượt hạn mức: theo cấu hình quầy (Chỉ cảnh báo / Quản lý xác nhận / Chặn), chỉ áp đơn bán chịu.</li>
+    <li>Mất mạng: vẫn cảnh báo bằng công nợ gần nhất.</li>
+    <li>Có loại trừ nhóm khách.</li></ul></div>
+
+  <div class="q"><h4>A. Hạn thanh toán của đơn bán chịu lấy từ đâu?</h4>
+    <p>Hiện POS ghi hạn thanh toán = ngày bán (kiểm site retail.mbwnext: 38/38 hóa đơn POS). Giữ nguyên thì mọi đơn nợ đều "quá hạn" từ hôm sau, quầy đặt Chặn sẽ chặn mọi khách đang nợ.</p>
+    <div class="opt"><b>A1</b><span>Áp điều khoản thanh toán khai trên hồ sơ khách khi bán chịu; khách không khai thì dùng "Số ngày được nợ mặc định" của quầy. Đơn cũ giữ nguyên hạn cũ.<span class="rec">đề xuất</span></span></div>
+    <div class="opt"><b>A2</b><span>Mỗi quầy khai "Số ngày được nợ"; hạn = ngày bán + số ngày, tính được cho cả đơn cũ. Mọi khách của quầy cùng một hạn.</span></div></div>
+
+  <div class="q"><h4>B. Nhóm khách được loại trừ bỏ qua những gì?</h4>
+    <div class="opt"><b>B1</b><span>Chỉ bỏ cảnh báo và huy hiệu; quá hạn / vượt hạn mức vẫn xử lý theo cấu hình quầy.<span class="rec">đề xuất</span></span></div>
+    <div class="opt"><b>B2</b><span>Bỏ cả cảnh báo lẫn chặn — nhóm này không bị kiểm gì tại POS.</span></div></div>
+
+  <div class="q"><h4>C. Quản lý xác nhận tại quầy bằng cách nào? (xem tab 6)</h4>
+    <div class="opt"><b>C1</b><span>Quản lý nhập mã PIN riêng (tự đặt), nhanh tại quầy. Thêm trường PIN cho người dùng.<span class="rec">đề xuất</span></span></div>
+    <div class="opt"><b>C2</b><span>Quản lý gõ email + mật khẩu ERPNext trên máy thu ngân; không thêm trường nhưng chậm hơn.</span></div></div>
+
+  <div class="q"><h4>D. Mất mạng mà quầy đặt "Chặn" hoặc "Quản lý xác nhận"?</h4>
+    <div class="opt"><b>D1</b><span>Dùng công nợ gần nhất để chặn / đòi xác nhận như lúc online; đơn đồng bộ sau không bị chặn lại.<span class="rec">đề xuất</span></span></div>
+    <div class="opt"><b>D2</b><span>Cho bán chịu, ghi vết "bán khi mất mạng, chưa kiểm công nợ" để quản lý xem lại.</span></div></div>
+
+  <div class="q"><h4>Lưu ý cho kế toán</h4>
+    <p style="margin:0">ERPNext vẫn tự chặn khi tổng nợ <b>toàn công ty</b> vượt hạn mức lúc lưu hóa đơn (chỉ người có quyền "Credit Controller" mới vượt được). Quản lý cửa hàng xác nhận ở POS không vượt được kiểm tra này.</p></div>
+</section>
+
+</main>
+<script>
+document.querySelectorAll('#tabs .tab').forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll('#tabs .tab').forEach(function(x){x.classList.toggle('on',x===b)});
+    document.querySelectorAll('main section').forEach(function(s){s.classList.toggle('on',s.id===b.dataset.s)});
+  };
+});
+document.getElementById('tt').onchange=function(e){document.body.classList.toggle('showtech',e.target.checked)};
+document.querySelectorAll('#cc button').forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll('#cc button').forEach(function(x){x.classList.toggle('on',x===b)});
+    document.getElementById('c1').style.display=b.dataset.c==='c1'?'':'none';
+    document.getElementById('c2').style.display=b.dataset.c==='c2'?'':'none';
+  };
+});
+</script>
+</body>
+</html>

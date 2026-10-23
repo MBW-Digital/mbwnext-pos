@@ -274,6 +274,8 @@ class POSClosingShift(Document):
             )
             base_amount = flt(payment_doc.get("base_paid_amount") or 0)
             paid_amount = flt(payment_doc.get("paid_amount") or 0)
+            if payment_doc.get("payment_type") == "Pay":
+                base_amount, paid_amount = -base_amount, -paid_amount
             mode_of_payment = row.get("mode_of_payment") or payment_doc.get("mode_of_payment")
 
             update_payment_breakdown(mode_of_payment, base_amount, currency, paid_amount)
@@ -388,24 +390,36 @@ def get_pos_invoices(pos_opening_shift, doctype=None):
 
 @frappe.whitelist()
 def get_payments_entries(pos_opening_shift):
-    return frappe.get_all(
-        "Payment Entry",
-        filters={
-            "docstatus": 1,
-            "reference_no": pos_opening_shift,
-            "payment_type": "Receive",
-        },
-        fields=[
-            "name",
-            "mode_of_payment",
-            "paid_amount",
-            "base_paid_amount",
-            "target_exchange_rate",
-            "reference_no",
-            "posting_date",
-            "party",
-        ],
+    """Phiếu thu / chi tiền gắn ca: theo posa_pos_opening_shift (thu nợ, trả tiền dư từ POS),
+    hoặc reference_no = tên ca (dữ liệu cũ). Phiếu chi (Pay) trả về số âm."""
+    pe = frappe.qb.DocType("Payment Entry")
+    rows = (
+        frappe.qb.from_(pe)
+        .select(
+            pe.name,
+            pe.mode_of_payment,
+            pe.paid_amount,
+            pe.base_paid_amount,
+            pe.target_exchange_rate,
+            pe.reference_no,
+            pe.posting_date,
+            pe.party,
+            pe.payment_type,
+        )
+        .where(pe.docstatus == 1)
+        .where(pe.payment_type.isin(["Receive", "Pay"]))
+        .where(
+            (pe.posa_pos_opening_shift == pos_opening_shift)
+            | ((pe.reference_no == pos_opening_shift) & (pe.payment_type == "Receive"))
+        )
+        .orderby(pe.creation)
+        .run(as_dict=True)
     )
+    for row in rows:
+        if row.payment_type == "Pay":
+            row.paid_amount = -flt(row.paid_amount)
+            row.base_paid_amount = -flt(row.base_paid_amount)
+    return rows
 
 
 def _get_cash_mode_of_payment(pos_profile):

@@ -135,7 +135,47 @@ const getLocale = (): string => {
 async function init() {
   const locale = getLocale()
   const loaded = await loadLocale(locale, { preferCache: true })
-  if (!loaded) fallbackFetch(locale)
+  if (!loaded) {
+    fallbackFetch(locale)
+    return
+  }
+  refreshIfNewBuild(locale)
+}
+
+const BUILD_KEY = "pos_next_translation_build"
+
+/** Phiên bản bundle đang chạy (vite define, đổi mỗi lần build) */
+function currentBuild(): string {
+  try {
+    // @ts-ignore - hằng số do vite.config define lúc build
+    return typeof __BUILD_VERSION__ !== "undefined" ? String(__BUILD_VERSION__) : ""
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Bản build mới có thể thêm chuỗi dịch mới, mà bản dịch đã lưu trên máy còn hạn 24 giờ.
+ * Gặp bản build khác lần trước thì tải lại bản dịch ngay (chạy nền, không chặn giao diện).
+ */
+async function refreshIfNewBuild(locale: string) {
+  const build = currentBuild()
+  if (!build) return
+  let previous: string | null = null
+  try {
+    previous = window.localStorage?.getItem(BUILD_KEY) ?? null
+  } catch {
+    previous = null
+  }
+  if (previous === build) return
+  const refreshed = await loadLocale(locale, { forceNetwork: true })
+  if (refreshed) {
+    try {
+      window.localStorage?.setItem(BUILD_KEY, build)
+    } catch {
+      // trình duyệt chặn localStorage: lần sau lại tải lại, không sao
+    }
+  }
 }
 
 /**

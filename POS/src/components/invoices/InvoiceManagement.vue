@@ -470,6 +470,17 @@
 								</div>
 							</div>
 
+							<!-- Đơn chờ lấy (Giữ hàng, PM-FEAT-00070) -->
+							<div v-if="activeTab === 'holds'">
+								<HoldOrdersTab
+									ref="holdsTabRef"
+									@open-detail="(name) => openHold(name, 'detail')"
+									@pickup="(name) => openHold(name, 'pickup')"
+									@extend="(name) => openHold(name, 'extend')"
+									@cancel="(name) => openHold(name, 'cancel')"
+								/>
+							</div>
+
 							<!-- Return Invoices Tab -->
 							<div v-if="activeTab === 'returns'">
 								<!-- Empty State -->
@@ -553,11 +564,24 @@
 		:allow-partial-payment="true"
 		@payment-completed="handlePaymentCompleted"
 	/>
+
+	<HoldOrderDetailDialog
+		v-if="holdDetail"
+		:name="holdDetail.name"
+		:initial-mode="holdDetail.mode"
+		:cart-busy="cartBusy"
+		@close="holdDetail = null"
+		@changed="holdsTabRef?.refresh(); holdStore.loadAccess(true)"
+		@picked-up="handleHoldPickedUp"
+	/>
 </template>
 
 <script setup>
 import InvoiceFilters from "@/components/invoices/InvoiceFilters.vue"
 import PaymentDialog from "@/components/sale/PaymentDialog.vue"
+import HoldOrderDetailDialog from "@/components/hold/HoldOrderDetailDialog.vue"
+import HoldOrdersTab from "@/components/hold/HoldOrdersTab.vue"
+import { useHoldOrderStore } from "@/stores/holdOrder"
 import { useInvoiceFilters } from "@/composables/useInvoiceFilters"
 import { useInvoiceFiltersStore } from "@/stores/invoiceFilters"
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency"
@@ -595,6 +619,11 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
+	// Giỏ đang có hàng → "Khách đến lấy" phải lưu nháp / xoá giỏ trước
+	cartBusy: {
+		type: Boolean,
+		default: false,
+	},
 })
 
 const emit = defineEmits([
@@ -604,11 +633,27 @@ const emit = defineEmits([
 	"load-draft",
 	"delete-draft",
 	"refresh-history",
+	"pickup-hold",
 ])
+
+const holdStore = useHoldOrderStore()
+const holdsTabRef = ref(null)
+const holdDetail = ref(null) // { name, mode }
+
+function openHold(name, mode) {
+	holdDetail.value = { name, mode }
+}
+
+function handleHoldPickedUp(res) {
+	emit("pickup-hold", res)
+	show.value = false
+}
 
 const show = ref(props.modelValue)
 const loading = ref(false)
-const activeTab = ref("partial")
+// Tab "Chưa thanh toán" (thanh toán từng phần cũ) tạm ẩn: thu nợ làm ở màn Công nợ
+const SHOW_UNPAID_TAB = false
+const activeTab = ref(SHOW_UNPAID_TAB ? "partial" : "history")
 
 // Initialize filter store and composable
 const filterStore = useInvoiceFiltersStore()
@@ -684,14 +729,18 @@ const filteredHistoryInvoices = computed(() => {
 
 // Tabs configuration
 const tabs = computed(() => [
-	{
-		id: "partial",
-		label: __("Unpaid"),
-		icon: "M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z",
-		color: "orange",
-		activeClass: "text-orange-600",
-		badge: () => unpaidInvoices.value.length,
-	},
+	...(SHOW_UNPAID_TAB
+		? [
+				{
+					id: "partial",
+					label: __("Unpaid"),
+					icon: "M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z",
+					color: "orange",
+					activeClass: "text-orange-600",
+					badge: () => unpaidInvoices.value.length,
+				},
+			]
+		: []),
 	{
 		id: "history",
 		label: __("Invoice History"),
@@ -708,6 +757,18 @@ const tabs = computed(() => [
 		activeClass: "text-purple-600",
 		badge: () => props.draftInvoices.length,
 	},
+	...(holdStore.canView
+		? [
+				{
+					id: "holds",
+					label: __("Pickup Orders"),
+					icon: "M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8",
+					color: "teal",
+					activeClass: "text-teal-600",
+					badge: () => holdStore.liveCount,
+				},
+			]
+		: []),
 	{
 		id: "returns",
 		label: __("Returns"),
@@ -733,6 +794,8 @@ function getTabActiveClass(tabId) {
 			return "text-purple-600 border-purple-500"
 		case "returns":
 			return "text-red-600 border-red-500"
+		case "holds":
+			return "text-teal-600 border-teal-500"
 		default:
 			return "text-gray-600 border-gray-500"
 	}
@@ -749,6 +812,8 @@ function getBadgeActiveClass(tabId) {
 			return "bg-purple-100 text-purple-700"
 		case "returns":
 			return "bg-red-100 text-red-700"
+		case "holds":
+			return "bg-teal-100 text-teal-700"
 		default:
 			return "bg-gray-100 text-gray-700"
 	}
@@ -775,8 +840,11 @@ watch(
 	(val) => {
 		show.value = val
 		if (val) {
-			loadUnpaidInvoices()
-			loadUnpaidSummary()
+			holdStore.loadAccess(true)
+			if (SHOW_UNPAID_TAB) {
+				loadUnpaidInvoices()
+				loadUnpaidSummary()
+			}
 			// Also request history refresh if we don't have data
 			if (props.historyInvoices.length === 0) {
 				emit("refresh-history")
@@ -819,6 +887,9 @@ async function refreshCurrentTab() {
 	} else if (activeTab.value === "returns") {
 		// Returns would also need a refresh
 		emit("refresh-history")
+	} else if (activeTab.value === "holds") {
+		holdStore.loadAccess(true)
+		holdsTabRef.value?.refresh()
 	}
 }
 
@@ -1000,7 +1071,7 @@ onMounted(() => {
 	// Load saved filter presets from localStorage
 	filterStore.loadSavedFiltersFromStorage()
 
-	if (show.value) {
+	if (show.value && SHOW_UNPAID_TAB) {
 		loadUnpaidInvoices()
 		loadUnpaidSummary()
 	}

@@ -65,6 +65,10 @@ def execute():
 
 
 def _cac_cong_ty_con_but_toan_vi() -> list[str]:
+	# Patch chạy trước khi đồng bộ fixtures: site lần đầu lên bản này chưa có cột cờ,
+	# tức chưa công ty nào bật cờ, không có gì để đảo.
+	if not frappe.db.has_column("Company", "pos_next_khong_ghi_so_khi_tich_diem"):
+		return []
 	rows = frappe.db.sql(
 		"""
 		SELECT company, COUNT(*) AS so_dong

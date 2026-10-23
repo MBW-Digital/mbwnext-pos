@@ -87,6 +87,10 @@ const CURRENT_SCHEMA = {
 	// Unpaid invoices cache for offline viewing
 	// Stores invoices with outstanding amounts for partial payment management
 	unpaid_invoices: "&name, pos_profile, outstanding_amount, customer",
+
+	// Công nợ gần nhất theo khách, để cảnh báo công nợ khi mất mạng (PM-FEAT-00068).
+	// Khoá = "<pos_profile>::<customer>"; nạp lúc mở ca và cập nhật mỗi lần hỏi được máy chủ.
+	customer_debts: "&key, pos_profile, customer, fetched_at",
 }
 
 /**

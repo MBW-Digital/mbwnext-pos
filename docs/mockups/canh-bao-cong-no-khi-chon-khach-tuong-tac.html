@@ -1,0 +1,397 @@
+<!doctype html>
+<!--
+  Mockup BẤM THỬ (đã duyệt cùng bản ảnh): Cảnh báo công nợ khi chọn khách trên POS — pos_next · PM-FEAT-00068
+  Anh Quân duyệt 02/10/2026 ("ok. duyet"). Bản gốc: https://claude.ai/artifact/RKR7NXzdf648qsGT4k5o5b
+  Bản ảnh đi kèm: canh-bao-cong-no-khi-chon-khach.html
+  Giao diện đã code (chụp POS thật): canh-bao-cong-no-khi-chon-khach-ban-code.html
+  Giữ nguyên để đối chiếu — không sửa nội dung bản đã duyệt.
+-->
+<html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Cảnh báo công nợ bấm thử</title>
+<style>
+/* Bố cục: dựng lại màn hình bán hàng POS Next (trái: hàng hoá, phải: giỏ) + ngăn kéo "Cấu hình quầy" để thử các phương án.
+   Một giao diện sáng cố ý, giống POS thật — không có chế độ tối. */
+:root{
+  color-scheme:light;
+  --bg:#f6f6f7; --card:#ffffff; --ink:#1f2328; --muted:#6b7280; --line:#ececef; --soft:#f9fafb;
+  --red:#dc2626; --red-d:#b91c1c; --red-soft:#fee2e2; --red-row:#fef2f2;
+  --amber:#f59e0b; --amber-soft:#fef3c7; --amber-ink:#92400e;
+  --green:#15803d; --green-soft:#dcfce7; --orange:#ea6c0a; --grey:#d1d5db;
+  --f:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 var(--f)}
+button{font:inherit;cursor:pointer;color:inherit}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--red);outline-offset:1px}
+.app{display:flex;flex-direction:column;height:100%;min-height:560px}
+/* thanh trên */
+.top{display:flex;align-items:center;gap:12px;background:var(--card);border-bottom:1px solid var(--line);padding:8px 16px;padding-top:calc(8px + env(safe-area-inset-top,0px))}
+.logo{width:34px;height:34px;border-radius:9px;background:var(--red);display:grid;place-items:center;color:#fff;font-weight:800}
+.brand b{display:block;font-size:13px}.brand small{color:var(--muted);font-size:11px}
+.pill{border-radius:8px;padding:4px 10px;font-size:12px;font-weight:600;white-space:nowrap}
+.pill.t{background:#fdecec;color:var(--red-d)}.pill.o{background:#fef9c3;color:#854d0e}
+.top .sp{flex:1}
+.net{border:1px solid var(--line);border-radius:8px;padding:4px 10px;font-size:12px;background:var(--card)}
+.net.off{background:#fff7ed;border-color:#fdba74;color:#c2410c;font-weight:600}
+.cfgbtn{border:1.5px dashed var(--red);background:#fff;color:var(--red-d);border-radius:8px;padding:5px 12px;font-weight:700;font-size:12px}
+.av{width:30px;height:30px;border-radius:50%;background:var(--red);color:#fff;display:grid;place-items:center;font-size:11px;font-weight:700;flex:none}
+/* thân */
+.body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);min-height:0}
+.left{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--card)}
+.tabs{display:flex;gap:6px;padding:10px 14px 0}.tabs span{background:var(--red);color:#fff;border-radius:7px;padding:4px 10px;font-size:12px;font-weight:600}
+.search{margin:10px 14px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;color:var(--muted);background:var(--soft)}
+.grid{flex:1;overflow:auto;padding:0 14px 14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:10px;align-content:start}
+.item{border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--card);text-align:left;position:relative}
+.item:hover{border-color:#fca5a5}
+.item .img{height:64px;border-radius:7px;background:#f1f2f4;display:grid;place-items:center;color:#c4c8cf;font-size:20px}
+.item .nm{font-size:11.5px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .pr{font-size:11px;color:var(--red-d);font-weight:700}
+.item .st{position:absolute;top:4px;right:4px;background:#16a34a;color:#fff;border-radius:6px;font-size:10px;font-weight:700;padding:1px 6px}
+.right{display:flex;flex-direction:column;min-height:0;background:var(--bg)}
+.cust{margin:10px 12px 0;position:relative}
+.csearch{width:100%;border:1.5px solid var(--line);border-radius:10px;padding:9px 12px;font:inherit;background:var(--card)}
+.csearch:focus{border-color:#93c5fd;outline:none}
+.drop{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.12);z-index:20;max-height:300px;overflow:auto}
+.drop button{display:flex;gap:10px;align-items:center;width:100%;border:0;background:none;padding:8px 12px;text-align:left}
+.drop button:hover{background:var(--soft)}
+.drop small{display:block;color:var(--muted);font-size:11px}
+.drop .hd{padding:6px 12px;color:var(--muted);font-size:10.5px;font-weight:700;letter-spacing:.05em}
+.ccard{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;flex-wrap:wrap}
+.ccard .nm{font-weight:700}.ccard small{display:block;color:var(--muted);font-size:11px}
+.ccard .x{margin-left:auto;border:0;background:none;color:var(--red);font-size:16px;padding:2px 6px}
+.badge{border-radius:999px;padding:3px 10px;font-size:11.5px;font-weight:800;border:1.5px solid;white-space:nowrap;background:none}
+.badge.y{background:var(--amber-soft);border-color:var(--amber);color:var(--amber-ink)}
+.badge.r{background:var(--red-soft);border-color:var(--red);color:var(--red-d)}
+.badge.g{background:#f3f4f6;border-color:var(--grey);color:#4b5563}
+.tn{background:var(--red);color:#fff;border:0;border-radius:7px;padding:4px 10px;font-size:11.5px;font-weight:700}
+.tn[disabled]{opacity:.45;cursor:not-allowed}
+.lines{flex:1;overflow:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.empty{margin:auto;text-align:center;color:var(--muted)}
+.empty .ic{width:56px;height:56px;border-radius:50%;background:#eceef1;display:grid;place-items:center;margin:0 auto 8px;font-size:22px}
+.line{display:flex;align-items:center;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.line .nm{flex:1;min-width:0;font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qty{display:flex;align-items:center;border:1px solid var(--line);border-radius:7px}
+.qty button{border:0;background:none;width:24px;height:24px}
+.qty span{min-width:22px;text-align:center}
+.line .am{font-weight:700;color:var(--red-d);min-width:86px;text-align:right;font-variant-numeric:tabular-nums}
+.line .rm{border:0;background:none;color:#9ca3af}
+.foot{background:var(--card);border-top:1px solid var(--line);padding:10px 12px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px))}
+.tot{display:flex;justify-content:space-between;align-items:center;background:linear-gradient(90deg,#fff1f1,#fff);border-radius:9px;padding:9px 12px;font-weight:700}
+.tot b{color:var(--red-d);font-size:18px;font-variant-numeric:tabular-nums}
+.ck{width:100%;margin-top:8px;border:0;border-radius:9px;background:var(--red-d);color:#fff;padding:10px;font-weight:700}
+.ck[disabled]{background:#e5e7eb;color:#9ca3af;cursor:not-allowed}
+/* hộp thoại */
+.ov{position:fixed;inset:0;background:rgba(17,24,39,.45);z-index:50;display:flex;align-items:center;justify-content:center;padding:12px}
+.dl{background:var(--card);border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.25);width:620px;max-width:100%;max-height:100%;overflow:auto}
+.dl.sm{width:500px}.dl.lg{width:860px}
+.dh{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dh .ic{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-weight:800;flex:none}
+.ic.w{background:var(--amber-soft);color:#b45309}.ic.b{background:var(--red-soft);color:var(--red)}.ic.ok{background:var(--green-soft);color:var(--green)}
+.dh h3{margin:0;font-size:16px}.dh .cl{margin-left:auto;border:0;background:none;color:#9ca3af;font-size:18px}
+.db{padding:14px 18px}
+.off{background:#f3f4f6;color:#374151;font-size:12px;padding:7px 18px;border-bottom:1px solid var(--line)}
+.cbox{display:flex;align-items:center;gap:10px;background:var(--soft);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.cbox b{font-size:14px}.cbox small{display:block;color:var(--muted);font-size:11px}
+.cbox .t{margin-left:auto;text-align:right}.cbox .t div{color:var(--red);font-weight:800;font-size:18px;font-variant-numeric:tabular-nums}
+.lim{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
+.lim>div{border:1px solid var(--line);border-radius:9px;padding:7px 10px}.lim small{color:var(--muted);font-size:11px;display:block}.lim b{font-size:14px;font-variant-numeric:tabular-nums}
+.bar{height:5px;background:#f3f4f6;border-radius:3px;margin-top:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--amber)}.bar i.over{background:var(--red)}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+th{font-weight:500;color:var(--muted);text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}
+td{padding:8px 6px;border-bottom:1px solid #f3f4f6;white-space:nowrap}
+.r{text-align:right;font-variant-numeric:tabular-nums}
+tr.od td{background:var(--red-row)}tr.paid td{color:#9ca3af;text-decoration:line-through}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;border-radius:20px;padding:1px 7px;margin-left:4px;text-decoration:none}
+.tag.r{background:var(--red-soft);color:var(--red)}.tag.g{background:var(--green-soft);color:var(--green)}
+.al{border-radius:9px;padding:9px 12px;margin-top:10px;font-size:12.5px;line-height:1.5}
+.al.a{background:#fffbeb;color:var(--amber-ink);border:1px solid #fde68a}.al.r{background:var(--red-row);color:#991b1b;border:1px solid #fecaca}
+.al.g{background:#f3f4f6;color:#374151;border:1px solid #e5e7eb}.al.ok{background:#f0fdf4;color:#166534;border:1px solid #bbf7d0}
+.df{display:flex;gap:8px;justify-content:flex-end;padding:12px 18px;border-top:1px solid var(--line);background:#fafafa;flex-wrap:wrap}
+.bt{border:1px solid #e5e7eb;background:var(--card);border-radius:9px;padding:8px 14px;font-weight:600;color:#374151}
+.bt.p{background:var(--red);border-color:var(--red);color:#fff}.bt.o{background:var(--orange);border-color:var(--orange);color:#fff}
+.bt[disabled]{opacity:.45;cursor:not-allowed}
+.lb{font-size:11.5px;color:var(--muted);margin:10px 0 4px;display:block}
+.in{width:100%;border:1px solid #e5e7eb;border-radius:8px;padding:8px 10px;font:inherit;background:var(--card)}
+.in.num{text-align:right;font-variant-numeric:tabular-nums}
+.err{color:var(--red);font-size:12px;margin-top:6px}
+.pay{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.ob{display:flex;justify-content:space-between;background:#fff1f1;border:1px solid #fecaca;border-radius:8px;padding:7px 10px;color:var(--red-d);font-weight:700;font-size:12px}
+.sum{border:1px solid var(--line);border-radius:10px;margin-top:8px}
+.sum .row{display:flex;justify-content:space-between;padding:7px 10px;border-bottom:1px solid #f3f4f6}
+.sum .row:last-child{border:0}
+.mop{display:flex;gap:8px;flex-wrap:wrap}.mop button{border:1.5px solid var(--line);background:var(--card);border-radius:9px;padding:7px 12px;font-weight:600}
+.mop button.on{border-color:var(--red);background:#fff5f5}
+.paid{display:grid;grid-template-columns:1fr 1fr;margin-top:10px;border:1px solid var(--line);border-radius:10px;overflow:hidden;text-align:center}
+.paid div{padding:8px}.paid div:last-child{background:#fff7ed}.paid small{display:block;font-size:11px;color:var(--muted);font-weight:700}.paid b{font-size:16px;color:var(--red-d)}
+.chk{display:flex;align-items:center;gap:8px}
+/* ngăn kéo cấu hình */
+.drawer{position:fixed;top:0;right:0;bottom:0;width:380px;max-width:100%;background:var(--card);box-shadow:-10px 0 30px rgba(0,0,0,.15);z-index:60;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.drawer .dh{border-bottom:1px solid var(--line)}
+.drawer .dbody{flex:1;overflow:auto;padding:4px 16px 16px}
+.grp{border-top:1px solid var(--line);padding-top:10px;margin-top:12px}
+.grp h4{margin:0 0 4px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.seg{display:flex;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden}
+.seg button{flex:1;border:0;border-right:1px solid #e5e7eb;background:var(--card);padding:6px 4px;font-size:12px}
+.seg button:last-child{border-right:0}.seg button.on{background:var(--red-soft);color:var(--red-d);font-weight:700}
+.hint{color:var(--muted);font-size:11.5px;margin-top:4px}
+.toast{position:fixed;bottom:calc(16px + env(safe-area-inset-bottom,0px));left:50%;transform:translateX(-50%);z-index:70;background:#f0fdf4;border:1px solid #86efac;color:#166534;border-radius:10px;padding:10px 14px;box-shadow:0 6px 20px rgba(0,0,0,.12);max-width:340px}
+.toast b{display:block}
+.guide{background:#fffbeb;border-bottom:1px solid #fde68a;color:var(--amber-ink);padding:7px 16px;font-size:12px}
+.guide b{color:#78350f}
+@media (max-width:900px){
+  .body{grid-template-columns:1fr;grid-template-rows:auto 1fr}
+  .left{border-right:0;border-bottom:1px solid var(--line);max-height:42vh}
+  .pay{grid-template-columns:1fr}
+  .brand small,.pill.o{display:none}
+}
+@media (max-width:520px){.lim{grid-template-columns:1fr}.top{flex-wrap:wrap}}
+@media (prefers-reduced-motion:no-preference){.dl,.drawer{animation:pop .14s ease-out}@keyframes pop{from{transform:translateY(6px);opacity:.6}to{transform:none;opacity:1}}}
+</style>
+
+<div class="app" id="app"></div>
+
+<script>
+// ===== Dữ liệu thật quầy POS Chiềng Sại (site pos.next, 02/10/2026); hạn mức & điều khoản là giả định =====
+const TODAY = '2026-10-02';
+const ITEMS = [
+  ['146047','Chả cá thát lát ốc vị sả ớt 200g',43240.74],['146048','Chả Tôm 200G',59351.85],
+  ['146049','Chả viên thát lát 200g',40833.33],['1000002260','Cốc nhựa sọc 330ml',2682],
+  ['146100','COLGATE BCĐ than hoạt tính',78703.70],['146101','COLGATE KĐR bạc hà',52777.78],
+  ['146050','Hapi cá thát lát 500g',55648.15],['146102','KDR COL TOT trắng',53703.70]];
+const MANAGERS = [{name:'Quân Đặng',role:'Store Manager',email:'quandm@mbw.vn'},{name:'Hằng Nguyễn',role:'Store Manager',email:'hangnt@mbw.vn'}];
+function freshCustomers(){ return withG([
+  {id:'walkin',name:'Khách lẻ',phone:'',group:'Individual',walkin:true,terms:0,limit:0,inv:[]},
+  {id:'840975961375-1',name:'0975961375',phone:'+84-0975961375',group:'Individual',terms:0,limit:300000,
+    inv:[{n:'ACC-SINV-2026-00101',d:'2026-07-25',o:154900},{n:'ACC-SINV-2026-00102',d:'2026-07-25',o:86200}]},
+  {id:'KH010504',name:'A Linh',phone:'0906003728',group:'Khách quen',terms:180,limit:500000,
+    inv:[{n:'ACC-SINV-2026-00045',d:'2026-05-19',o:59900},{n:'ACC-SINV-2026-00048',d:'2026-05-19',o:2809}]},
+  {id:'84940297480',name:'Chị Huế',phone:'+84-940297480',group:'Khách buôn',terms:0,limit:0,
+    inv:[{n:'ACC-SINV-2026-00046',d:'2026-05-19',o:17700}]},
+  {id:'1',name:'THU HUONG',phone:'',group:'Individual',terms:0,limit:0,inv:[{n:'ACC-SINV-2026-00050',d:'2026-05-19',o:7864},{n:'ACC-SINV-2026-00060',d:'2026-05-22',o:25},{n:'ACC-SINV-2026-00092',d:'2026-07-23',o:19.99},{n:'ACC-SINV-2026-00044',d:'2026-05-19',o:15.04}]},
+  {id:'KH-HANG',name:'Hằng',phone:'+84-975961375',group:'Individual',terms:0,limit:0,inv:[]},
+]);}
+function withG(list){ list.forEach(c=>c.inv.forEach(i=>i.g=i.o)); return list; }
+const DEF_CFG = {enabled:true, threshold:0, excluded:['Khách buôn'], allowCredit:true, hideBelow:1000, collectOn:true, canCollect:true, offline:false,
+  optA:'A1', defDays:15};
+
+let S; // trạng thái
+function reset(){ S={cfg:{...DEF_CFG, excluded:[...DEF_CFG.excluded]}, custs:freshCustomers(), cust:null, cart:[], q:'', drop:false,
+  dlg:null, toast:null, drawer:false, seq:103, collected:null, payPaid:0, payMop:'Cash', approveErr:'', lastCredit:null}; }
+reset();
+
+// ===== tiện ích =====
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const vnd=n=>Math.round(n).toLocaleString('vi-VN')+' ₫';
+const vnd2=n=>'₫ '+n.toLocaleString('vi-VN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const d=s=>new Date(s+'T00:00:00Z');
+const addDays=(s,n)=>{const x=d(s);x.setUTCDate(x.getUTCDate()+n);return x.toISOString().slice(0,10);};
+const dm=s=>s.slice(8,10)+'/'+s.slice(5,7);
+const diff=(a,b)=>Math.round((d(b)-d(a))/86400000);
+const ini=n=>n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+
+// Hạn TT = ngày bán + số ngày được nợ của quầy (chốt A2), tính khi đọc nên áp cả đơn cũ
+function dueOf(c,i){ return addDays(i.d, S.cfg.defDays||0); }
+function debts(c){ return c.inv.filter(i=>i.o>=1 && i.o>=S.cfg.hideBelow).sort((a,b)=>a.d<b.d?-1:a.d>b.d?1:a.n<b.n?-1:1)
+  .map(i=>{const due=dueOf(c,i); const late=diff(due,TODAY); return {...i,due,days:diff(i.d,TODAY),late,od:late>0&&i.o>=i.g-1};}); }
+function total(c){ return debts(c).reduce((s,i)=>s+i.o,0); }
+// Quá hạn = chưa trả đồng nào và đã qua hạn thanh toán (thống nhất với chức năng 1)
+function overdue(c){ return debts(c).filter(i=>i.od); }
+function excluded(c){ return S.cfg.excluded.includes(c.group); }
+function warnable(c){ return c && S.cfg.enabled && !c.walkin && total(c)>0 && total(c)>=S.cfg.threshold && !excluded(c); }
+function cartSub(){ return S.cart.reduce((s,l)=>s+l.p*l.q,0); }
+function cartTotal(){ return Math.round(cartSub()*1.08*100)/100; } // thuế 8% như POS Chiềng Sại
+function badgeKind(c){ if(S.cfg.offline) return 'g'; return (overdue(c).length || (c.limit>0&&total(c)>c.limit))?'r':'y'; }
+function toast(t,s){ S.toast={t,s}; render(); clearTimeout(window.__tt); window.__tt=setTimeout(()=>{S.toast=null;render();},3200); }
+
+// ===== hành động =====
+const canColl=()=>S.cfg.collectOn&&S.cfg.canCollect;
+const A={
+  focusSearch(){ S.drop=true; render(); setTimeout(()=>$('#csearch')?.focus(),0); },
+  type(v){ S.q=v; S.drop=true; renderDrop(); },
+  pick(id){ const c=S.custs.find(x=>x.id===id); S.cust=c; S.q=''; S.drop=false;
+    S.dlg = warnable(c)?{k:'warn'}:null; toast(`Đã chọn ${c.name}`, c.walkin?'Khách lẻ không theo dõi công nợ':(total(c)>0&&!warnable(c)?whyNoWarn(c):'')); },
+  clearCust(){ S.cust=null; S.dlg=null; A.focusSearch(); },
+  change(){ S.dlg=null; A.clearCust(); },
+  cont(){ S.dlg=null; S.collected=null; render(); },
+  reopen(){ if(warnable(S.cust)) { S.dlg={k:'warn'}; render(); } else A.collect(); },
+  add(i){ const it=ITEMS[i]; const l=S.cart.find(x=>x.c===it[0]); l?l.q++:S.cart.push({c:it[0],n:it[1],p:it[2],q:1}); render(); },
+  qty(i,dq){ S.cart[i].q+=dq; if(S.cart[i].q<=0) S.cart.splice(i,1); render(); },
+  rm(i){ S.cart.splice(i,1); render(); },
+  collect(){ if(!S.cust||S.cfg.offline||!canColl()) return; const ds=debts(S.cust);
+    S.dlg={k:'collect', sel:ds.map(i=>i.n), amt:total(S.cust), mop:'Cash', back:S.dlg?.k==='warn'?'warn':'none'}; render(); },
+  collSel(n,on){ const g=S.dlg; on?g.sel.push(n):g.sel=g.sel.filter(x=>x!==n);
+    g.amt=Math.min(g.amt, selTotal()); if(g.amt===0) g.amt=selTotal(); render(); },
+  collAmt(v){ S.dlg.amt=Math.max(0,Number(String(v).replace(/[^\d]/g,''))||0); renderDialogOnly(); },
+  collDo(){ const g=S.dlg; const c=S.cust; const st=selTotal(); if(g.amt<=0||g.amt>st) return;
+    let left=g.amt; const paid=[];
+    debts(c).filter(i=>g.sel.includes(i.n)).forEach(i=>{ if(left<=0) return; const take=Math.min(left,i.o); const inv=c.inv.find(x=>x.n===i.n); inv.o-=take; left-=take; paid.push(i.n); });
+    S.collected={amt:g.amt, paid};
+    const rest=total(c);
+    if(g.back!=='warn'||!warnable(c)){ S.dlg=null; S.collected=null; toast(rest<=0?`Đã thu hết nợ ${vnd(g.amt)}`:`Đã thu nợ ${vnd(g.amt)}`, `Khách ${c.name} · còn nợ ${vnd(rest)}`); return; }
+    if(rest<=0){ S.dlg=null; S.collected=null; toast(`Đã thu hết nợ ${vnd(g.amt)}`, `Khách ${c.name} không còn nợ tại quầy · cảnh báo đã đóng`); return; }
+    S.dlg={k:'warn'}; toast(`Đã thu nợ ${vnd(g.amt)}`, `Khách ${c.name} · còn nợ ${vnd(rest)}`); },
+  checkout(){ if(!S.cart.length) return; S.payPaid=0; S.payMop='Cash'; S.dlg={k:'pay'}; render(); },
+  payAmt(v){ S.payPaid=Math.max(0,Number(String(v).replace(/[^\d]/g,''))||0); renderDialogOnly(); },
+  payQuick(v){ S.payPaid=v; render(); },
+  payFull(){ const tot=Math.round(cartTotal()); if(S.payPaid<tot) return; finishSale(0,null); },
+  payOnAccount(){ const c=S.cust; const tot=Math.round(cartTotal()); const credit=Math.max(0,tot-Math.min(S.payPaid,tot));
+    if(!S.cfg.allowCredit) return;
+    if(!c||c.walkin){ S.dlg={k:'msg',t:'Cần chọn khách có tên',s:'Bán chịu (Pay on Account) phải gắn với một khách. Khách lẻ không theo dõi công nợ — chọn hoặc tạo khách trước.'}; render(); return; }
+    finishSale(credit,null); },
+  backToPay(){ S.dlg={k:'pay'}; render(); },
+  close(){ S.dlg=null; render(); },
+  drawer(on){ S.drawer=on; render(); },
+  set(k,v){ S.cfg[k]=v; render(); },
+  toggleEx(g){ const e=S.cfg.excluded; e.includes(g)?S.cfg.excluded=e.filter(x=>x!==g):e.push(g); render(); },
+  resetAll(){ reset(); render(); toast('Đã đặt lại dữ liệu mockup','Công nợ và cấu hình về như ban đầu'); },
+};
+function selTotal(){ const g=S.dlg; return debts(S.cust).filter(i=>g.sel.includes(i.n)).reduce((s,i)=>s+i.o,0); }
+function whyNoWarn(c){ if(!S.cfg.enabled) return 'Quầy đang tắt cảnh báo công nợ'; if(excluded(c)) return `Nhóm "${c.group}" không cảnh báo — vẫn còn nợ ${vnd(total(c))}`; if(total(c)<S.cfg.threshold) return `Nợ ${vnd(total(c))} dưới ngưỡng ${vnd(S.cfg.threshold)} nên không cảnh báo`; return ''; }
+function finishSale(credit, approvedBy, note){ const c=S.cust; const tot=Math.round(cartTotal()); const name='ACC-SINV-2026-00'+(S.seq++);
+  if(credit>0 && c){ c.inv.push({n:name,d:TODAY,o:credit,g:credit}); }
+  S.cart=[]; S.dlg={k:'done', name, tot, credit, approvedBy, note, cname:c?c.name:'Khách lẻ'}; render(); }
+
+// ===== vẽ =====
+function render(){
+  const c=S.cust, cfg=S.cfg, tot=cartTotal();
+  $('#app').innerHTML = `
+  <div class="guide"><b>Mockup bấm thử</b> — dựng lại màn hình POS Chiềng Sại với công nợ thật (hạn mức là giả định). Gõ tìm khách, ví dụ <b>0975961375</b>, <b>A Linh</b>, <b>Chị Huế</b>. Đổi cấu hình ở nút <b>Cấu hình quầy</b>. Không ghi gì vào hệ thống.</div>
+  <div class="top">
+    <div class="logo">▣</div><div class="brand"><b>MBW Next POS</b><small>POS Chiềng Sại</small></div>
+    <span class="pill t">10:30</span><span class="pill o">Open: 1 Hr 37 Min</span>
+    <span class="sp"></span>
+    <button class="net ${cfg.offline?'off':''}" onclick="A.set('offline',!S.cfg.offline)" title="Bật/tắt giả lập mất mạng">${cfg.offline?'⚠ Mất mạng':'● Online'}</button>
+    <button class="cfgbtn" onclick="A.drawer(true)">⚙ Cấu hình quầy</button>
+    <div class="av">TT</div>
+  </div>
+  <div class="body">
+    <div class="left">
+      <div class="tabs"><span>Hóa đơn 1</span></div>
+      <div class="search">🔍 Search by item code, name or scan barcode</div>
+      <div class="grid">${ITEMS.map((it,i)=>`<button class="item" onclick="A.add(${i})"><span class="st">${96+i}</span><div class="img">🖼</div><div class="nm">${esc(it[1])}</div><div class="pr">${vnd2(it[2])}</div></button>`).join('')}</div>
+    </div>
+    <div class="right">
+      <div class="cust">${c?custCard(c):`<input id="csearch" class="csearch" placeholder="Tìm hoặc thêm khách (tên, SĐT)…" value="${esc(S.q)}" onfocus="S.drop=true;renderDrop()" oninput="A.type(this.value)" autocomplete="off"><div id="drop"></div>`}</div>
+      <div class="lines">${S.cart.length?S.cart.map((l,i)=>`<div class="line"><div class="nm">${esc(l.n)}<div style="font-weight:400;color:var(--muted);font-size:11px">${l.c}</div></div><div class="qty"><button onclick="A.qty(${i},-1)" aria-label="Bớt">−</button><span>${l.q}</span><button onclick="A.qty(${i},1)" aria-label="Thêm">+</button></div><div class="am">${vnd2(l.p*l.q)}</div><button class="rm" onclick="A.rm(${i})" aria-label="Xoá dòng">✕</button></div>`).join(''):`<div class="empty"><div class="ic">🛍</div><b>Giỏ hàng trống</b><div>Chọn khách và bấm vào món để thêm</div></div>`}</div>
+      <div class="foot"><div class="tot"><span>Grand Total</span><b>${vnd2(tot)}</b></div><button class="ck" ${S.cart.length?'':'disabled'} onclick="A.checkout()">Checkout</button></div>
+    </div>
+  </div>
+  ${S.dlg?`<div class="ov" id="ov">${dialog()}</div>`:''}
+  ${S.drawer?drawer():''}
+  ${S.toast?`<div class="toast" role="status"><b>${esc(S.toast.t)}</b>${esc(S.toast.s||'')}</div>`:''}`;
+  if(!c) renderDrop();
+}
+function custCard(c){
+  const n=debts(c).length, t=total(c);
+  // Huy hiệu dùng chung với chức năng 1: hiện khi khách đủ điều kiện cảnh báo, hoặc quầy tắt cảnh báo nhưng bật thu nợ
+  const show = warnable(c) || (!S.cfg.enabled && canColl() && t>0 && !c.walkin);
+  const kind = warnable(c)?badgeKind(c):'y';
+  const bd = show?`<button class="badge ${kind}" onclick="A.reopen()" title="${warnable(c)?'Bấm huy hiệu nợ để xem lại danh sách công nợ':'Bấm để thu nợ'}">Nợ ${vnd(t)} · ${n} đơn${kind==='r'?' · Quá hạn':''}${S.cfg.offline&&warnable(c)?' (08:52)':''}</button>`:'';
+  return `<div class="ccard"><div class="av">${ini(c.name)}</div><div><span class="nm">${esc(c.name)}</span><small>${esc(c.phone||(c.walkin?'Khách lẻ mặc định của quầy':''))}</small></div>${bd}<button class="x" onclick="A.clearCust()" aria-label="Bỏ khách">✕</button></div>`;
+}
+function renderDrop(){ const el=$('#drop'); if(!el) return; if(!S.drop){el.innerHTML='';return;}
+  const q=S.q.trim().toLowerCase();
+  const list=S.custs.filter(c=>!q||c.name.toLowerCase().includes(q)||c.phone.replace(/\D/g,'').includes(q.replace(/\D/g,'')||'#'));
+  el.innerHTML=`<div class="drop">${q?'':'<div class="hd">KHÁCH HÀNG</div>'}${list.map(c=>`<button onmousedown="event.preventDefault();A.pick('${c.id}')"><div class="av" style="background:#fde2e2;color:var(--red-d)">${ini(c.name)}</div><div><b>${esc(c.name)}</b><small>${esc(c.phone||(c.walkin?'Khách lẻ mặc định':''))}${total(c)>0?' · có nợ':''}</small></div></button>`).join('')||'<div class="hd">Không tìm thấy</div>'}</div>`; }
+function renderDialogOnly(){ const ov=$('#ov'); if(!ov) return; const a=document.activeElement; const id=a&&a.id; const pos=a&&a.selectionStart; ov.innerHTML=dialog(); if(id){const e=document.getElementById(id); if(e){e.focus(); try{e.setSelectionRange(pos,pos);}catch(_){}}} }
+
+function dialog(){ const g=S.dlg, c=S.cust;
+  if(g.k==='warn') return warnDlg(c);
+  if(g.k==='collect') return collectDlg(c);
+  if(g.k==='pay') return payDlg(c);
+  if(g.k==='done') return doneDlg();
+  if(g.k==='msg') return `<div class="dl sm"><div class="dh"><span class="ic w">!</span><h3>${esc(g.t)}</h3></div><div class="db">${esc(g.s)}</div><div class="df"><button class="bt p" onclick="A.backToPay()">Quay lại</button></div></div>`;
+  return ''; }
+function head(c,count){ return `<div class="cbox"><div class="av">${ini(c.name)}</div><div><b>${esc(c.name)}</b><small>${esc(c.phone)}</small></div><div class="t"><small>Tổng nợ tại quầy · ${count} đơn</small><div>${vnd(total(c))}</div></div></div>`; }
+function limBlock(c){ if(S.cfg.offline) return '';
+  if(!c.limit) return `<div class="lim"><div><small>Hạn mức công nợ</small><b>Không giới hạn</b></div><div><small>Đang nợ tại quầy</small><b>${vnd(total(c))}</b></div><div><small>Còn được nợ</small><b>—</b></div></div>`;
+  const t=total(c), pct=Math.min(100,Math.round(t/c.limit*100));
+  return `<div class="lim"><div><small>Hạn mức công nợ</small><b>${vnd(c.limit)}</b></div><div><small>Đang nợ tại quầy</small><b>${vnd(t)}</b><div class="bar"><i class="${t>c.limit?'over':''}" style="width:${pct}%"></i></div></div><div><small>Còn được nợ</small><b>${vnd(Math.max(0,c.limit-t))}</b></div></div>`; }
+function debtTable(c,withPaid){ const rows=debts(c);
+  const paidRows = withPaid&&S.collected ? S.collected.paid.filter(n=>!rows.find(r=>r.n===n)).map(n=>{const i=c.inv.find(x=>x.n===n);return `<tr class="paid"><td>${n}</td><td>${dm(i.d)}</td><td>${dm(dueOf(c,i))}<span class="tag g">Đã thu đủ</span></td><td class="r">0</td><td class="r">—</td></tr>`;}).join('') : '';
+  return `<div class="tw"><table><tr><th>Đơn hàng</th><th>Ngày bán</th><th>Hạn TT</th><th class="r">Còn nợ</th><th class="r">Ngày nợ</th></tr>${paidRows}${rows.map(i=>`<tr class="${i.od?'od':''}"><td>${i.n}</td><td>${dm(i.d)}</td><td>${dm(i.due)}${i.od?`<span class="tag r">Quá hạn ${i.late} ngày</span>`:(i.late>0?`<span class="tag g">Đã trả một phần</span>`:'')}</td><td class="r"><b>${i.o.toLocaleString('vi-VN')}</b></td><td class="r">${i.days}</td></tr>`).join('')}</table></div>`; }
+function warnDlg(c){ const od=overdue(c), cfg=S.cfg; let al='';
+  if(S.collected) al+=`<div class="al ok">Vừa thu <b>${vnd(S.collected.amt)}</b>. Danh sách và tổng nợ đã cập nhật.</div>`;
+  if(!canColl()) al+=`<div class="al g">${cfg.collectOn?'Bạn chỉ xem được công nợ. Thu nợ cần quyền thu nợ tại quầy này — nhờ quản lý hoặc thu ngân được cấp quyền.':'Quầy này chưa bật thu nợ trên POS.'}</div>`;
+  const over = c.limit>0 && total(c)>c.limit;
+  if(od.length||over) al+=`<div class="al a">Khách có ${od.length?`<b>${od.length} đơn quá hạn</b>`:''}${od.length&&over?' và ':''}${over?'<b>đã vượt hạn mức</b>':''}. Nhắc khách trả nợ trước khi bán tiếp — cảnh báo chỉ để thông tin.</div>`;
+  if(!cfg.allowCredit) al+=`<div class="al g">Quầy này không bán chịu: đơn mới phải thanh toán đủ.</div>`;
+  return `<div class="dl">${cfg.offline?'<div class="off">⚠ Đang mất mạng · Công nợ cập nhật lúc <b>08:52 hôm nay</b> — có thể đã thay đổi</div>':''}
+  <div class="dh"><span class="ic w">!</span><h3>Khách hàng đang còn nợ</h3><button class="cl" onclick="A.cont()" aria-label="Đóng">✕</button></div>
+  <div class="db">${head(c,debts(c).length)}${limBlock(c)}${debtTable(c,true)}${al}</div>
+  <div class="df"><button class="bt" onclick="A.change()">Đổi khách hàng</button><button class="bt" onclick="A.cont()">Tiếp tục bán hàng</button>${canColl()?`<button class="bt p" ${cfg.offline?'disabled title="Cần kết nối mạng để thu nợ"':''} onclick="A.collect()">Thu nợ ngay</button>`:''}</div></div>`; }
+function collectDlg(c){ const g=S.dlg, ds=debts(c), st=selTotal(); let left=g.amt;
+  const alloc=ds.map(i=>{ if(!g.sel.includes(i.n)) return 0; const t=Math.min(left,i.o); left-=t; return t; });
+  const bad = g.amt<=0 ? 'Nhập số tiền thu.' : g.amt>st ? `Thu nhiều hơn số nợ đã chọn (${vnd(st)}). Phần dư trả lại khách.` : '';
+  return `<div class="dl lg"><div class="dh"><h3>Thu nợ khách hàng</h3><button class="cl" onclick="S.dlg=(S.dlg.back==='warn'&&warnable(S.cust))?{k:'warn'}:null;render()" aria-label="Đóng">✕</button></div>
+  <div class="db"><div class="pay"><div>
+    <div class="cbox"><div><b>${esc(c.name)}</b><small>${esc(c.phone)} · POS Chiềng Sại</small></div><div class="t"><small>Tổng nợ tại quầy</small><div>${vnd(total(c))}</div></div></div>
+    <div class="tw"><table><tr><th></th><th>Đơn</th><th class="r">Còn nợ</th><th class="r">Thu lần này</th></tr>${ds.map((i,k)=>`<tr><td><input type="checkbox" ${g.sel.includes(i.n)?'checked':''} onchange="A.collSel('${i.n}',this.checked)" aria-label="Chọn ${i.n}"></td><td><b>${i.n}</b><div style="color:var(--muted);font-size:11px">${dm(i.d)} · ${i.days} ngày</div></td><td class="r">${i.o.toLocaleString('vi-VN')}</td><td class="r"><b>${alloc[k].toLocaleString('vi-VN')}</b></td></tr>`).join('')}</table></div>
+    <div class="paid"><div><small>THU LẦN NÀY</small><b>${vnd(Math.min(g.amt,st))}</b></div><div><small>NỢ CÒN LẠI</small><b>${vnd(Math.max(0,total(c)-Math.min(g.amt,st)))}</b></div></div>
+    <div class="hint">Phân bổ vào đơn cũ nhất trước. <i>Hộp thoại này là phần của chức năng Thu nợ (PM-FEAT-00066) — ở đây làm gọn để thử luồng.</i></div>
+  </div><div>
+    <span class="lb">PHƯƠNG THỨC THANH TOÁN</span><div class="mop"><button class="${g.mop==='Cash'?'on':''}" onclick="S.dlg.mop='Cash';render()">💵 Cash</button><button class="${g.mop==='Wire'?'on':''}" onclick="S.dlg.mop='Wire';render()">🏦 Wire Transfer</button></div>
+    <span class="lb">Số nhanh</span><div class="mop"><button onclick="S.dlg.amt=${st};render()">${vnd(st)} (hết nợ)</button>${st>100000?`<button onclick="S.dlg.amt=${Math.floor(st/2/1000)*1000};render()">${vnd(Math.floor(st/2/1000)*1000)}</button>`:''}</div>
+    <label class="lb" for="camt">Số tiền khách đưa</label><input id="camt" class="in num" inputmode="numeric" value="${g.amt.toLocaleString('vi-VN')}" oninput="A.collAmt(this.value)">
+    ${bad?`<div class="err">${bad}</div>`:''}
+    <button class="bt p" style="width:100%;margin-top:12px;padding:11px" ${bad?'disabled':''} onclick="A.collDo()">✓ Xác nhận thu nợ</button>
+  </div></div></div></div>`; }
+function payDlg(c){ const tot=Math.round(cartTotal()), paid=Math.min(S.payPaid,tot);
+  return `<div class="dl lg"><div class="dh"><h3>Complete Payment</h3><button class="cl" onclick="A.close()" aria-label="Đóng">✕</button></div>
+  <div class="db"><div class="pay"><div>
+    ${c&&total(c)>0?`<div class="ob"><span>Outstanding Balance</span><span>${vnd2(total(c))}</span></div>`:''}
+    <div class="sum"><div class="row"><b>Invoice Summary</b><span style="color:var(--muted)">${S.cart.length} items</span></div>${S.cart.map(l=>`<div class="row"><span>${esc(l.n)} × ${l.q}</span><b>${vnd2(l.p*l.q)}</b></div>`).join('')}<div class="row"><span>Subtotal</span><span>${vnd2(cartSub())}</span></div><div class="row"><span>Tax</span><span>${vnd2(cartTotal()-cartSub())}</span></div><div class="row"><b>Grand Total</b><b>${vnd2(cartTotal())}</b></div></div>
+    <div class="paid"><div><small>PAID</small><b>${vnd(paid)}</b></div><div><small>REMAINING</small><b>${vnd(tot-paid)}</b></div></div>
+  </div><div>
+    <span class="lb">PAYMENT METHOD</span><div class="mop"><button class="${S.payMop==='Cash'?'on':''}" onclick="S.payMop='Cash';render()">💵 Cash</button><button class="${S.payMop==='Wire'?'on':''}" onclick="S.payMop='Wire';render()">🏦 Wire Transfer</button></div>
+    <span class="lb">Quick amounts</span><div class="mop"><button onclick="A.payQuick(${tot})">${vnd(tot)}</button><button onclick="A.payQuick(${Math.ceil(tot/50000)*50000})">${vnd(Math.ceil(tot/50000)*50000)}</button><button onclick="A.payQuick(0)">0 ₫</button></div>
+    <label class="lb" for="pamt">Khách đưa</label><input id="pamt" class="in num" inputmode="numeric" value="${S.payPaid.toLocaleString('vi-VN')}" oninput="A.payAmt(this.value)">
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      ${S.cfg.allowCredit?`<button class="bt o" style="flex:1;padding:11px" onclick="A.payOnAccount()" ${paid>=tot?'disabled':''}>📄 Pay on Account</button>`:''}
+      <button class="bt p" style="flex:1;padding:11px" onclick="A.payFull()" ${paid>=tot?'':'disabled'}>✓ Complete Payment</button></div>
+    <div class="hint">${S.cfg.allowCredit?`Pay on Account = ghi nợ phần còn lại (${vnd(tot-paid)}). Quầy cho bán chịu nên không bị chặn, kể cả khách đang quá hạn.`:'Quầy này không cho bán chịu: không có nút Pay on Account, phải thanh toán đủ. Server cũng từ chối hoá đơn còn nợ.'}</div>
+    ${c&&overdue(c).length&&S.cfg.allowCredit?`<div class="al a">Khách có ${overdue(c).length} đơn quá hạn — chỉ để thông tin.</div>`:''}
+  </div></div></div></div>`; }
+function doneDlg(){ const g=S.dlg;
+  return `<div class="dl sm"><div class="dh"><span class="ic ok">✓</span><h3>Đã tạo hoá đơn ${g.name}</h3></div>
+  <div class="db"><div>Khách <b>${esc(g.cname)}</b> · Tổng ${vnd(g.tot)}</div>
+  ${g.credit>0?`<div class="al a">Ghi nợ <b>${vnd(g.credit)}</b>, hạn thanh toán ${dm(dueOf(S.cust||{terms:0},{d:TODAY}))}.</div>`:'<div class="al ok">Đã thanh toán đủ.</div>'}
+  ${g.note?`<div class="al g">${esc(g.note)}</div>`:''}
+  <div class="hint" style="margin-top:8px">Mockup: không có hoá đơn thật nào được tạo.</div></div>
+  <div class="df"><button class="bt p" onclick="A.close()">Đơn mới</button></div></div>`; }
+
+function drawer(){ const f=S.cfg; const seg=(k,opts)=>`<div class="seg">${opts.map(([v,l])=>`<button class="${f[k]===v?'on':''}" onclick="A.set('${k}','${v}')">${l}</button>`).join('')}</div>`;
+  const groups=['Khách buôn','Khách quen','Individual'];
+  return `<div class="ov" onclick="A.drawer(false)" style="background:rgba(17,24,39,.25)"></div><aside class="drawer" aria-label="Cấu hình quầy">
+  <div class="dh"><h3>Cấu hình quầy · POS Chiềng Sại</h3><button class="cl" onclick="A.drawer(false)" aria-label="Đóng">✕</button></div>
+  <div class="dbody">
+    <div class="hint" style="margin-top:8px">Trên hệ thống thật, quản trị đặt các ô này trong POS Profile. Đổi ở đây có hiệu lực ngay cho lần chọn khách tiếp theo.</div>
+    <div class="grp"><h4>Cảnh báo công nợ</h4>
+      <label class="chk"><input type="checkbox" ${f.enabled?'checked':''} onchange="A.set('enabled',this.checked)"> Bật cảnh báo công nợ</label>
+      <label class="lb" for="thr">Ngưỡng tổng nợ tối thiểu (₫)</label><input id="thr" class="in num" inputmode="numeric" value="${f.threshold.toLocaleString('vi-VN')}" onchange="A.set('threshold',Number(this.value.replace(/\\D/g,''))||0)">
+      <div class="hint">Thử 50.000: THU HUONG (nợ 7.864 ₫) sẽ không còn cảnh báo.</div>
+      <span class="lb">Nhóm khách không cảnh báo</span>${groups.map(g=>`<label class="chk"><input type="checkbox" ${f.excluded.includes(g)?'checked':''} onchange="A.toggleEx('${g}')"> ${g}</label>`).join('')}
+      <div class="hint">Chị Huế thuộc "Khách buôn", A Linh thuộc "Khách quen".</div></div>
+    <div class="grp"><h4>Bán chịu</h4><label class="chk"><input type="checkbox" ${f.allowCredit?'checked':''} onchange="A.set('allowCredit',this.checked)"> Cho phép bán chịu (bán có nợ)</label>
+      <div class="hint">Không tick: mọi đơn phải thanh toán đủ, không có Pay on Account. Có tick: được bán chịu, cảnh báo chỉ để thông tin. Đã chốt 02/10: dùng ô có sẵn "Allow Credit Sale" trong POS Settings của quầy; server chặn hoá đơn còn nợ — chức năng Thu nợ làm.</div></div>
+    <div class="grp"><h4>Thu nợ (chức năng 1)</h4><label class="chk"><input type="checkbox" ${f.collectOn?'checked':''} onchange="A.set('collectOn',this.checked)"> Quầy bật thu nợ trên POS</label>
+      <label class="chk"><input type="checkbox" ${f.canCollect?'checked':''} onchange="A.set('canCollect',this.checked)"> Thu ngân đang đăng nhập có quyền thu nợ</label>
+      <label class="lb" for="hb">Ẩn nợ lẻ dưới (₫)</label><input id="hb" class="in num" inputmode="numeric" value="${f.hideBelow.toLocaleString('vi-VN')}" onchange="A.set('hideBelow',Number(this.value.replace(/\D/g,''))||0)">
+      <div class="hint">Đơn còn nợ dưới mức này không hiện ở Thu nợ, huy hiệu lẫn cảnh báo (để 0 = không ẩn). Thử với THU HUONG: có 3 đơn nợ lẻ 15–25 ₫ do làm tròn.</div>
+      <div class="hint">Thử: tắt cảnh báo nhưng bật thu nợ → bấm huy hiệu sẽ mở thẳng hộp thoại Thu nợ.</div></div>
+    <div class="grp"><h4>Mạng</h4><label class="chk"><input type="checkbox" ${f.offline?'checked':''} onchange="A.set('offline',this.checked)"> Giả lập mất mạng</label></div>
+    <div class="grp"><h4>Hạn thanh toán (đã chốt A2)</h4>
+      <label class="lb" for="dd">Số ngày được nợ của quầy</label><input id="dd" class="in num" inputmode="numeric" value="${f.defDays}" onchange="A.set('defDays',Number(this.value)||0)">
+      <div class="hint">Hạn = ngày bán + số ngày này, áp cả đơn cũ. Để 0 = hạn là ngày bán (như dữ liệu hiện nay: mọi đơn chưa trả đều quá hạn từ hôm sau). Thử 180 để thấy A Linh chưa tới hạn (huy hiệu vàng).</div></div>
+    <div class="grp"><button class="bt" style="width:100%" onclick="A.resetAll()">↺ Đặt lại dữ liệu và cấu hình</button></div>
+  </div></aside>`; }
+
+document.addEventListener('mousedown',e=>{ if(S.drop && !e.target.closest('.cust')){ S.drop=false; renderDrop(); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ if(S.drawer) A.drawer(false); else if(S.dlg&&S.dlg.k==='warn') A.cont(); } });
+render();
+</script>
+
+</body></html>

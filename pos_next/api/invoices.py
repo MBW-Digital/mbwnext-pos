@@ -191,11 +191,13 @@ def _get_available_stock(item):
     if batch_no:
         return get_batch_qty(batch_no, warehouse) or 0
 
-    # Get stock from Bin
-    bin_qty = frappe.db.get_value(
-        "Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"
+    # Get stock from Bin — trừ phần đang giữ cho đơn giữ hàng (Stock Reservation, PM-FEAT-00070)
+    bin_row = frappe.db.get_value(
+        "Bin", {"item_code": item_code, "warehouse": warehouse}, ["actual_qty", "reserved_stock"], as_dict=True
     )
-    return flt(bin_qty) or 0
+    if not bin_row:
+        return 0
+    return flt(bin_row.actual_qty) - flt(bin_row.reserved_stock)
 
 
 def _collect_stock_errors(items):
@@ -297,12 +299,73 @@ def _validate_stock_on_invoice(invoice_doc):
     if hasattr(invoice_doc, "packed_items"):
         items_to_check.extend([d.as_dict() for d in invoice_doc.packed_items])
 
+    # Hàng đang giữ: ERPNext luôn chặn (kể cả quầy cho bán âm) → báo rõ đơn giữ thay vì lỗi "Reserved Stock" thô
+    _validate_held_stock(items_to_check)
+
     # Check for stock errors
     errors = _collect_stock_errors(items_to_check)
 
     # Throw error if stock insufficient and blocking is enabled
     if errors and _should_block(invoice_doc.pos_profile):
         frappe.throw(frappe.as_json({"errors": errors}), frappe.ValidationError)
+
+
+def _stock_reservation_enabled():
+    return cint(frappe.db.get_single_value("Stock Settings", "enable_stock_reservation"))
+
+
+def _validate_held_stock(items):
+    """Chặn bán vào phần đang giữ cho đơn giữ hàng, nêu mã đơn / khách / hạn giữ."""
+    from pos_next.api.hold_orders import (
+        _holds_for_items,
+        release_expired_holds,
+        stock_reservation_enabled,
+    )
+
+    if not stock_reservation_enabled():
+        return
+
+    need = {}
+    for d in items:
+        # ERPNext luôn kiểm theo tổng số lượng (cả hàng theo lô) nên dòng có lô cũng kiểm
+        if not d.get("item_code") or not d.get("warehouse"):
+            continue
+        qty = flt(d.get("stock_qty") or (flt(d.get("qty")) * flt(d.get("conversion_factor") or 1)))
+        if qty > 0:
+            key = (d.get("item_code"), d.get("warehouse"))
+            need[key] = need.get(key, 0) + qty
+    if not need:
+        return
+
+    release_expired_holds({k[0] for k in need}, {k[1] for k in need})
+    messages = []
+    for (item_code, warehouse), qty in need.items():
+        bin_row = frappe.db.get_value(
+            "Bin", {"item_code": item_code, "warehouse": warehouse}, ["actual_qty", "reserved_stock"], as_dict=True
+        )
+        if not bin_row or flt(bin_row.reserved_stock) <= 0:
+            continue
+        sellable = flt(bin_row.actual_qty) - flt(bin_row.reserved_stock)
+        if qty <= sellable + 1e-6:
+            continue
+        holds = _holds_for_items([item_code], warehouse).get(item_code, [])
+        held_text = ", ".join(
+            _("{0} ({1}, until {2})").format(
+                h["name"], h["customer_name"], frappe.utils.format_datetime(h["hold_until"], "HH:mm dd/MM")
+            )
+            for h in holds
+        )
+        messages.append(
+            _("{0}: selling {1}, only {2} can be sold — {3} are held for {4}").format(
+                frappe.db.get_value("Item", item_code, "item_name") or item_code,
+                flt(qty),
+                flt(max(sellable, 0)),
+                flt(bin_row.reserved_stock),
+                held_text or _("hold orders"),
+            )
+        )
+    if messages:
+        frappe.throw("<br>".join(messages), title=_("Stock is held for customers"))
 
 
 def _auto_set_return_batches(invoice_doc):
@@ -403,7 +466,8 @@ def _fifo_allocate_batches_for_stock_qty(
                     "based_on": pick_based_on,
                     "posting_date": posting_date,
                     "posting_time": nowtime(),
-                    "ignore_reserved_stock": True,
+                    # Site bật giữ tồn (PM-FEAT-00070): không chọn trúng lô đang giữ cho đơn giữ hàng
+                    "ignore_reserved_stock": not _stock_reservation_enabled(),
                 }
             )
         )
@@ -1679,6 +1743,16 @@ def submit_invoice(invoice=None, data=None):
         invoice_doc.flags.ignore_permissions = True
         frappe.flags.ignore_account_permission = True
         invoice_doc.save()
+
+        # Quầy không bán chịu (POS Settings.allow_credit_sale) thì không nhận hoá đơn còn nợ
+        if doctype == "Sales Invoice":
+            from pos_next.api.debt_collection import validate_credit_sale_allowed
+
+            credit_rows = data.get("customer_credit_dict") or invoice.get("customer_credit_dict") or []
+            if isinstance(credit_rows, str):
+                credit_rows = json.loads(credit_rows) or []
+            redeemed = sum(flt(r.get("credit_to_redeem")) for r in credit_rows if isinstance(r, dict))
+            validate_credit_sale_allowed(invoice_doc, redeemed)
 
         # Submit invoice
         invoice_doc.submit()

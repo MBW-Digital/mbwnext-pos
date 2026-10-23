@@ -230,6 +230,8 @@ doc_events = {
 			"pos_next.api.wallet.validate_wallet_payment"
 		],
 		"before_cancel": "pos_next.api.sales_invoice_hooks.before_cancel",
+		# Giữ hàng (PM-FEAT-00070): nhả đơn giữ quá hạn trước khi ERPNext kiểm "Reserved Stock"
+		"before_submit": "pos_next.api.hold_orders.release_expired_before_stock_submit",
 		"on_submit": [
 			"pos_next.realtime_events.emit_stock_update_event",
 			"pos_next.api.wallet.process_loyalty_to_wallet"
@@ -238,7 +240,28 @@ doc_events = {
 		"after_insert": "pos_next.realtime_events.emit_invoice_created_event"
 	},
 	"POS Profile": {
+		"validate": "pos_next.api.hold_orders.validate_pos_profile_hold",
 		"on_update": "pos_next.realtime_events.emit_pos_profile_updated_event",
+	},
+	# Giữ hàng: chỉ cảnh báo khi bật tự sinh hoá đơn từ Sales Order (site có mbwnext_localization)
+	"MBWNext System Setting": {
+		"validate": "pos_next.api.hold_orders.validate_system_setting_auto_submit",
+	},
+	"Payment Entry": {
+		"validate": "pos_next.api.debt_collection.validate_payment_entry_shift",
+	},
+	# Giữ hàng (PM-FEAT-00070): nhả đơn giữ quá hạn trước khi xuất kho; giao từ đơn giữ thì kết thúc đơn
+	"Delivery Note": {
+		"before_submit": "pos_next.api.hold_orders.release_expired_before_stock_submit",
+		"on_submit": "pos_next.api.hold_orders.on_delivery_note_submit",
+	},
+	"Stock Entry": {
+		"before_submit": "pos_next.api.hold_orders.release_expired_before_stock_submit",
+	},
+	# Giữ hàng: Đóng / Huỷ SO đơn giữ ở desk thì nhả hàng, đơn giữ về Đã huỷ
+	"Sales Order": {
+		"on_change": "pos_next.api.hold_orders.on_sales_order_change",
+		"on_cancel": "pos_next.api.hold_orders.on_sales_order_cancel",
 	},
 	"Loyalty Program": {
 		"validate": "pos_next.api.loyalty_program_hooks.validate",
@@ -261,6 +284,12 @@ doc_events = {
 # ---------------
 
 scheduler_events = {
+	# Giữ hàng (PM-FEAT-00070): nhả đơn giữ quá hạn mà chưa ai đụng tới tồn
+	"cron": {
+		"* * * * *": [
+			"pos_next.api.hold_orders.expire_hold_orders",
+		],
+	},
 	"hourly": [
 		"pos_next.tasks.branding_monitor.monitor_branding_integrity",
 	],

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>{{ _("Hold Slip") }} {{ doc.name }}</title>
+<style>
+  @page { size: 80mm auto; margin: 3mm; }
+  body { font-family: Arial, sans-serif; font-size: 12px; width: 74mm; margin: 0 auto; color: #000; }
+  h1 { font-size: 15px; text-align: center; margin: 6px 0 2px; text-transform: uppercase; }
+  .c { text-align: center; } .r { text-align: right; } .b { font-weight: bold; }
+  .muted { color: #444; font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0; }
+  td { padding: 2px 0; vertical-align: top; }
+  hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+  .code { font-size: 16px; font-weight: bold; letter-spacing: 1px; }
+  @media screen { body { margin-top: 12px; } }
+</style>
+</head>
+<body onload="window.print()">
+  <div class="c b">{{ profile.get("custom_store_name_2") or company }}</div>
+  {% if profile.get("custom_address") %}<div class="c muted">{{ profile.custom_address }}</div>{% endif %}
+  {% if profile.get("custom_phone") %}<div class="c muted">{{ profile.custom_phone }}</div>{% endif %}
+  <h1>{{ _("Hold Slip") }}</h1>
+  <div class="c muted">{{ _("Not an invoice. No payment has been taken.") }}</div>
+  <hr>
+  <div class="c code">{{ doc.name }}</div>
+  <table>
+    <tr><td>{{ _("Customer") }}</td><td class="r b">{{ doc.customer_name }}</td></tr>
+    {% if customer_mobile %}<tr><td>{{ _("Phone") }}</td><td class="r">{{ customer_mobile }}</td></tr>{% endif %}
+    <tr><td>{{ _("Pickup store") }}</td><td class="r">{{ doc.posa_hold_pos_profile }}</td></tr>
+    <tr><td>{{ _("Held until") }}</td><td class="r b">{{ frappe.utils.format_datetime(doc.posa_hold_until, "HH:mm dd/MM/yyyy") }}</td></tr>
+    <tr><td>{{ _("Created by") }}</td><td class="r">{{ created_by }} · {{ frappe.utils.format_datetime(doc.creation, "HH:mm dd/MM") }}</td></tr>
+  </table>
+  <hr>
+  <table>
+    {% for i in doc.items %}
+    <tr><td>{{ i.item_name }}</td><td class="r">{{ frappe.utils.flt(i.stock_qty) | round(3) }} {{ i.stock_uom }}</td></tr>
+    {% endfor %}
+  </table>
+  <hr>
+  <table>
+    <tr><td>{{ _("Estimated value") }}</td><td class="r b">{{ fmt(doc.grand_total) }}</td></tr>
+  </table>
+  <div class="muted">{{ _("The price is confirmed when the goods are picked up.") }}</div>
+  {% if doc.posa_hold_note %}<hr><div>{{ _("Note") }}: {{ doc.posa_hold_note }}</div>{% endif %}
+  <hr>
+  <div class="muted">{{ _("After the hold period the goods go back on sale. Bring this slip or quote the order code when you come to pick up.") }}</div>
+</body>
+</html>

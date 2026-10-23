@@ -1,0 +1,127 @@
+<title>Giữ hàng trên POS</title>
+<style>
+/* Tài liệu duyệt: cặp ảnh POS thật xếp chồng (hiện tại → đề xuất / phương án A → B), cùng khung với trang Thu nợ */
+:root{--bg:#f5f5f3;--card:#ffffff;--ink:#1d2024;--muted:#666b73;--line:#dddbd5;--soft:#efeee9;
+ --now:#6b7280;--new:#047857;--opa:#b45309;--opb:#7c3aed;--red:#b42318;--amber-soft:#fdf2d9;--green-soft:#e3f4ea;--blue:#1f5fd6;--on:#ffffff;
+ --f:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#15171a;--card:#1e2125;--ink:#e6e7e9;--muted:#9da1a8;--line:#33373e;--soft:#272a2f;
+ --now:#9ca3af;--new:#34d399;--opa:#f2b84b;--opb:#b794f6;--red:#ff8a80;--amber-soft:#382d16;--green-soft:#16301f;--blue:#7aa5ff;--on:#15171a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#15171a;--card:#1e2125;--ink:#e6e7e9;--muted:#9da1a8;--line:#33373e;--soft:#272a2f;
+ --now:#9ca3af;--new:#34d399;--opa:#f2b84b;--opb:#b794f6;--red:#ff8a80;--amber-soft:#382d16;--green-soft:#16301f;--blue:#7aa5ff;--on:#15171a;color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 var(--f);margin:0}
+.wrap{max-width:1400px;margin:0 auto;padding-inline:16px;padding-block:24px 60px}
+h1{font-size:26px;margin:0 0 6px;text-wrap:balance} h2{font-size:21px;margin:44px 0 6px;padding-top:12px;border-top:2px solid var(--line);text-wrap:balance} h3{font-size:17px;margin:0 0 4px}
+p{margin:0 0 10px;max-width:80ch} .muted{color:var(--muted)} a{color:var(--blue)}
+nav.toc{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0} nav.toc a{font-size:13px;padding:5px 12px;border-radius:999px;background:var(--card);border:1px solid var(--line);text-decoration:none;color:var(--ink)}
+.item{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:16px 0}
+.why{color:var(--muted);font-size:14px}
+.pair{display:grid;gap:16px;grid-template-columns:1fr} .pair>*{min-width:0}
+@media (min-width:1100px){.pair.two{grid-template-columns:1fr 1fr}}
+figure{margin:0} figure img{display:block;width:100%;height:auto;border:1px solid var(--line);border-radius:8px;cursor:zoom-in}
+figure.narrow img{max-width:340px}
+figcaption{font-size:14px;margin-top:6px}
+.tg{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.04em;color:var(--on);border-radius:6px;padding:3px 9px;margin-bottom:6px}
+.tg.now{background:var(--now)} .tg.new{background:var(--new)} .tg.opa{background:var(--opa)} .tg.opb{background:var(--opb)}
+.txt{border:1px dashed var(--line);border-radius:8px;padding:12px;font-size:14px}
+.steps{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr))} .st{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;min-width:0}
+.sn{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--new);color:var(--on);font-weight:700;margin-bottom:6px}
+.rec{background:var(--green-soft);border-radius:8px;padding:8px 12px;font-size:14px;margin-top:10px}
+.ask{background:var(--amber-soft);border-radius:8px;padding:8px 12px;font-size:14px;margin-top:10px}
+.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px} th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top} th{background:var(--soft);color:var(--muted)}
+td.k{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.lb{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.9);display:flex;align-items:center;justify-content:center;padding:12px;cursor:zoom-out} .lb img{max-width:100%;max-height:100%;border-radius:6px}
+.lbx{position:fixed;top:12px;right:16px;font:600 15px var(--f);background:var(--card);color:var(--ink);border:0;border-radius:8px;padding:6px 12px;cursor:pointer}
+</style>
+<div class="wrap">
+<h1>Giữ hàng cho khách đến nhận: hiện tại và đề xuất</h1>
+<p class="muted">PM-FEAT-00070 · <code>pos_next</code> · hướng A (dùng giữ tồn có sẵn của ERPNext, chốt 02/10/2026). Ảnh chụp từ POS Next đang chạy, quầy <b>POS Chiềng Sại</b>, tồn kho thật (Chả cá 258 gói, Chả Tôm 97 gói, Colgate 100). Phần mới được chèn tạm vào màn hình để xem trước, chưa có dòng code nào. Các đơn giữ trong danh sách là <b>dữ liệu ví dụ</b>. Bấm vào ảnh để phóng to.</p>
+<nav class="toc"><a href="#vi-tri">1. Nằm ở đâu</a><a href="#tung-buoc">2. Từng bước</a><a href="#de-xuat">3. Hiện tại → Đề xuất</a><a href="#can-chot">4. Cần chốt (A/B)</a><a href="#diem-mo">5. Điểm còn mở</a><a href="#chan">6. Bị chặn</a></nav>
+
+<h2 id="vi-tri">1. Giữ hàng nằm ở đâu</h2>
+<p>Hai chỗ trên POS và một mục cấu hình trên desk.</p>
+<div class="steps">
+<figure class="st"><span class="sn">A</span><img src="img/giu-hang/new-cart.jpg" alt="Nút Giữ hàng mới cạnh Checkout" loading="lazy"><figcaption>Nút <b>Giữ hàng</b> cạnh Checkout, dùng khi giỏ có khách và hàng. Nút Hold cũ đổi tên thành <b>Lưu nháp</b> (xem mục 4.1).</figcaption></figure>
+<figure class="st"><span class="sn">B</span><img src="img/giu-hang/new-tab.jpg" alt="Tab Đơn chờ lấy trong Invoice Management" loading="lazy"><figcaption>Tab <b>Đơn chờ lấy</b> trong màn quản lý hoá đơn: xem, gia hạn, huỷ giữ.</figcaption></figure>
+<figure class="st"><span class="sn">C</span><img src="img/giu-hang/new-config.jpg" alt="Mục cấu hình trên POS Profile" loading="lazy"><figcaption>Mục <b>Giữ hàng cho khách đến nhận</b> trên POS Profile (desk): bật/tắt, hạn giữ, role.</figcaption></figure>
+</div>
+
+<h2 id="tung-buoc">2. Từng bước tạo đơn giữ</h2>
+<p>Ví dụ: chị Huệ gọi điện đặt 2 gói chả cá, 1 gói chả tôm, 1 Colgate, chiều mai chồng chị qua lấy.</p>
+<div class="steps">
+<figure class="st"><span class="sn">1</span><img src="img/giu-hang/new-cart.jpg" alt="Chọn khách, thêm hàng, bấm Giữ hàng" loading="lazy"><figcaption>Chọn khách (bắt buộc), thêm hàng như bán thường, bấm <b>Giữ hàng</b>.</figcaption></figure>
+<figure class="st"><span class="sn">2</span><img src="img/giu-hang/new-dialog.jpg" alt="Hộp thoại Giữ hàng" loading="lazy"><figcaption>Kiểm cửa hàng nhận, chọn hạn giữ (mặc định 24 giờ), ghi giờ hẹn. Mỗi dòng hiện tồn kho, phần đang giữ cho đơn khác và số khả dụng.</figcaption></figure>
+<figure class="st"><span class="sn">3</span><img src="img/giu-hang/new-success.jpg" alt="Giữ thành công, hiện mã đơn" loading="lazy"><figcaption>Xác nhận → tạo đơn giữ, hiện mã đơn để đọc cho khách, giỏ làm trống. <span class="muted">(Ảnh chụp đè lên giỏ chưa làm trống.)</span></figcaption></figure>
+<figure class="st"><span class="sn">4</span><img src="img/giu-hang/new-slip.jpg" alt="Phiếu giữ hàng 80mm" loading="lazy"><figcaption>In phiếu giữ khổ nhiệt 80mm, ghi rõ không phải hoá đơn, chưa thu tiền. In lại được từ tab Đơn chờ lấy.</figcaption></figure>
+</div>
+
+<h2 id="de-xuat">3. Hiện tại → Đề xuất</h2>
+<section class="item"><h3>3.1 Nút dưới giỏ hàng</h3><p class="why">Hiện POS chỉ có nút Hold. Nút này lưu nháp vào máy đang dùng, không giữ tồn, quầy khác không thấy.</p><div class="pair two">
+<figure><span class="tg now">HIỆN TẠI</span><img src="img/giu-hang/now-cart.jpg" alt="Checkout và Hold" loading="lazy"><figcaption>Checkout + Hold. Bản tiếng Việt dịch Hold là “Giữ”, nên dễ nhầm với giữ hàng.</figcaption></figure>
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-cart.jpg" alt="Checkout, Giữ hàng, Lưu nháp" loading="lazy"><figcaption>Checkout · <b>Giữ hàng</b> (mới) · Lưu nháp (Hold cũ, giữ nguyên chức năng).</figcaption></figure></div></section>
+
+<section class="item"><h3>3.2 Số tồn trên lưới hàng</h3><p class="why">Mọi quầy dùng kho Chiềng Sại phải thấy số đã trừ hàng đang giữ, để không bán mất hàng của khách.</p><div class="pair two">
+<figure><span class="tg now">HIỆN TẠI</span><img src="img/giu-hang/now-stock.jpg" alt="Chả Tôm hiện 96" loading="lazy"><figcaption>Chả Tôm hiện 96 = tồn 97 trừ 1 gói trong giỏ. Không biết gì về hàng đang giữ.</figcaption></figure>
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-stock.jpg" alt="Chả Tôm hiện 91 kèm nhãn Giữ 5" loading="lazy"><figcaption>Chả Tôm hiện <b>91</b> = 97 − 5 đang giữ − 1 trong giỏ, kèm nhãn <b>Giữ 5</b>. Desk ERPNext cũng thấy số đã trừ phần giữ và cũng bị chặn bán vào phần này.</figcaption></figure></div></section>
+
+<section class="item"><h3>3.3 Không đủ hàng để giữ</h3><p class="why">Khách cần 100 gói Chả Tôm, kho còn 97 nhưng 5 gói đang giữ cho đơn khác.</p><div class="pair">
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-short.jpg" alt="Dòng thiếu tô đỏ, nút Giảm về 92 / Bỏ dòng" loading="lazy"><figcaption>Dòng thiếu tô đỏ, báo rõ giữ được 92. Bấm <b>Giảm về 92</b> hoặc <b>Bỏ dòng</b>; nút Xác nhận khoá tới khi hết dòng thiếu. Hai quầy cùng giữ món cuối thì người bấm sau nhận đúng thông báo này.</figcaption></figure></div></section>
+
+<section class="item"><h3>3.4 Màn quản lý hoá đơn</h3><p class="why">Đơn giữ nằm cạnh các tab đang có, thu ngân không phải học chỗ mới.</p><div class="pair two">
+<figure><span class="tg now">HIỆN TẠI</span><img src="img/giu-hang/now-invmgmt.jpg" alt="Invoice Management hiện tại" loading="lazy"><figcaption>Unpaid · Invoice History · Drafts · Returns. Không có đơn giữ.</figcaption></figure>
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-tab.jpg" alt="Tab Đơn chờ lấy" loading="lazy"><figcaption>Thêm tab <b>Đơn chờ lấy</b>: lọc theo trạng thái, tìm theo tên/SĐT/mã đơn; đơn sắp hết hạn tô vàng; tổng đang giữ của quầy.</figcaption></figure></div></section>
+
+<section class="item"><h3>3.5 Gia hạn và huỷ giữ</h3><p class="why">Chỉ role “được gia hạn và huỷ giữ” của quầy thấy hai nút này.</p><div class="pair two">
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-extend.jpg" alt="Chi tiết đơn giữ và gia hạn" loading="lazy"><figcaption>Chi tiết đơn + lịch sử thao tác. Gia hạn +4 / +24 / +48 giờ, không vượt 72 giờ tính từ lúc tạo.</figcaption></figure>
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-cancel.jpg" alt="Huỷ giữ có lý do" loading="lazy"><figcaption>Huỷ giữ bắt buộc chọn lý do. Hàng trả lại số bán được ngay; đơn không mở lại được.</figcaption></figure></div></section>
+
+<section class="item"><h3>3.6 Cấu hình trên POS Profile (desk)</h3><p class="why">Bật riêng từng quầy, không có cờ chung toàn site.</p><div class="pair two">
+<div class="txt"><span class="tg now">HIỆN TẠI</span><div>Không có cấu hình giữ hàng.</div></div>
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/new-config.jpg" alt="Mục Giữ hàng trên POS Profile" loading="lazy"><figcaption>Bật giữ hàng · hạn mặc định / tối đa (giờ) · role tạo và xem · role gia hạn và huỷ. System Manager cũng phải được thêm vào role mới thao tác được.</figcaption></figure></div></section>
+
+<h2 id="can-chot">4. Phương án A / B (đã chốt)</h2>
+<section class="item"><h3>4.1 Tên nút: Hold cũ và Giữ hàng mới — đã chốt A</h3><p class="why">Hai việc khác nhau: lưu nháp trên máy và giữ tồn cho khách.</p><div class="pair two">
+<figure><span class="tg new">ĐÃ CHỐT · A</span><img src="img/giu-hang/new-cart.jpg" alt="Ba nút riêng" loading="lazy"><figcaption>Ba nút riêng: Checkout · Giữ hàng · Lưu nháp. Một chạm, không nhầm.</figcaption></figure>
+<figure><span class="tg opb">PHƯƠNG ÁN B</span><img src="img/giu-hang/name-b.jpg" alt="Hold mở menu hai lựa chọn" loading="lazy"><figcaption>Giữ nút Hold, bấm vào mở menu chọn Lưu nháp hoặc Giữ hàng. Ít đổi giao diện nhưng thêm một chạm.</figcaption></figure></div>
+<div class="rec">Chốt A (02/10): ba nút riêng, sửa bản dịch “Hold” thành “Lưu nháp”.</div></section>
+
+<section class="item"><h3>4.2 Bán vào phần hàng đang giữ — đã chốt: luôn chặn</h3><p class="why">Giỏ bán 95 gói Chả Tôm, kho 97, đang giữ 5 cho đơn khác. Với hướng A, ERPNext luôn chặn ở mọi kênh; POS chỉ báo rõ đơn nào đang giữ.</p><div class="pair">
+<figure><span class="tg new">ĐÃ CHỐT · chặn</span><img src="img/giu-hang/conflict-a.jpg" alt="Chặn, chỉ cho bán 92" loading="lazy"><figcaption>Chặn hẳn, chỉ bán được 92. Muốn bán hơn phải nhờ quản lý huỷ hoặc rút bớt đơn giữ.</figcaption></figure>
+</div>
+<div class="rec">Ngoại lệ: site hoặc mặt hàng bật “cho phép tồn âm” thì ERPNext bỏ qua kiểm tra hàng giữ — vì vậy không cho bật giữ hàng ở site đó (điểm 12).</div></section>
+
+<h2 id="diem-mo">5. Đã chốt và còn mở</h2>
+<div class="tbl"><table>
+<tr><th>#</th><th>Nội dung</th><th>Trạng thái</th></tr>
+<tr><td class="k">A</td><td>Hướng làm: dùng giữ tồn có sẵn của ERPNext (phải bật cho cả site; giữ ở mọi kênh)</td><td>Đã chốt 02/10</td></tr>
+<tr><td class="k">3</td><td>Chọn cửa hàng nhận khác: các quầy cùng công ty đã bật giữ hàng. Quầy A tạo, giữ ở kho quầy B, đơn hiện ở quầy B</td><td>Đã chốt</td></tr>
+<tr><td class="k">4–6</td><td>Hạn 24 / 72 giờ theo quầy · in phiếu theo cấu hình quầy · tạo nhanh khách mới</td><td>Đã chốt</td></tr>
+<tr><td class="k">8</td><td>Quá hạn là nhả ngay, không chờ job</td><td>Đã chốt</td></tr>
+<tr><td class="k">9</td><td>Đơn giữ từ POS bỏ qua Workflow</td><td>Đã chốt</td></tr>
+<tr><td class="k">1</td><td>Site bật tự sinh hoá đơn từ Sales Order: chỉ cảnh báo (không sửa app selling)</td><td>Đã chốt</td></tr>
+<tr><td class="k">3b</td><td>Quầy A xem lại đơn đã giữ hộ quầy B</td><td>Xem xét sau · đề xuất chỉ xem</td></tr>
+<tr><td class="k">7</td><td>Lấy một lần là hết: giao / lấy thiếu thì phần còn lại trả về kệ ngay</td><td>Đã chốt</td></tr>
+<tr><td class="k">8b</td><td>Nhãn “Hết hạn” tách khỏi “Đã hủy”</td><td>Đã chốt</td></tr>
+<tr><td class="k">10</td><td>Nút “Khách đến lấy”: kết thúc đơn giữ, đưa hàng vào giỏ, Checkout tại POS (xem bản bấm thử)</td><td>Đã chốt · làm đợt này</td></tr>
+<tr><td class="k">11</td><td>Đổi Hold thành “Lưu nháp” + thêm nút “Giữ hàng” (mục 4.1)</td><td>Đã chốt</td></tr>
+<tr><td class="k">12</td><td>Site cho phép tồn âm: giữ tồn không có tác dụng</td><td>Xem xét sau · đề xuất không cho bật</td></tr>
+</table></div>
+<p class="muted" style="margin-top:10px">Chưa hỏi thủ kho / quản lý cửa hàng (người trực tiếp thao tác).</p>
+
+<h2 id="chan">6. Các trạng thái bị chặn</h2>
+<section class="item"><h3>6.1 Mất mạng</h3><p class="why">Giữ hàng phải kiểm tồn trực tiếp trên hệ thống.</p><div class="pair">
+<figure><span class="tg new">ĐỀ XUẤT</span><img src="img/giu-hang/st-offline.jpg" alt="Nút Giữ hàng mờ khi mất mạng" loading="lazy"><figcaption>Nút Giữ hàng mờ, kèm lý do. Lưu nháp vẫn dùng được.</figcaption></figure></div></section>
+<div class="tbl" style="margin-top:12px"><table>
+<tr><th>Tình huống</th><th>POS xử lý</th></tr>
+<tr><td>Quầy chưa bật giữ hàng / người dùng không có role</td><td>Không hiện nút Giữ hàng, không hiện tab Đơn chờ lấy</td></tr>
+<tr><td>Giỏ chưa chọn khách</td><td>Bấm Giữ hàng thì mở ô chọn khách trước</td></tr>
+<tr><td>Thao tác vào đơn vừa hết hạn / bị huỷ / đã lấy</td><td>Báo đơn đã đổi trạng thái, tải lại danh sách</td></tr>
+<tr><td>Gia hạn vượt 72 giờ</td><td>Khoá lựa chọn vượt mốc, hiện mốc tối đa</td></tr>
+</table></div>
+</div>
+<div class="lb" id="lb" hidden><button class="lbx" type="button">Đóng ✕</button><img id="lbi" alt=""></div>
+<script>
+(function(){const lb=document.getElementById('lb'),im=document.getElementById('lbi');
+document.querySelectorAll('figure img').forEach(i=>i.addEventListener('click',()=>{im.src=i.src;im.alt=i.alt;lb.hidden=false;}));
+lb.addEventListener('click',()=>{lb.hidden=true;});document.addEventListener('keydown',e=>{if(e.key==='Escape')lb.hidden=true;});})();
+</script>

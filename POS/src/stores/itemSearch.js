@@ -613,7 +613,9 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 				...item,
 				actual_qty: displayStock,
 				stock_qty: displayStock,
-				original_stock: originalStock
+				original_stock: originalStock,
+				// SL đang giữ cho đơn giữ hàng (PM-FEAT-00070) — thẻ hàng hiện nhãn "Giữ N"
+				held_qty: stockStore.held.get(item.item_code) || 0
 			}
 		})
 

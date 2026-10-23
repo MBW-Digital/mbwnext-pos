@@ -36,6 +36,7 @@ export const useStockStore = defineStore('stock', () => {
 	// ========================================================================
 	const server = ref(new Map())    // item_code -> { qty, warehouse, ts }
 	const reserved = ref(new Map())  // item_code -> qty
+	const held = ref(new Map())      // item_code -> qty đang giữ cho đơn giữ hàng (Stock Reservation, PM-FEAT-00070)
 	const warehouse = ref(null)      // Current warehouse
 	const refreshing = ref(false)    // Loading state
 
@@ -45,13 +46,14 @@ export const useStockStore = defineStore('stock', () => {
 	const getDisplayStock = (itemCode) => {
 		// Always return the actual calculated stock (can be negative)
 		// Display is independent of whether negative stock sales are allowed
-		return (server.value.get(itemCode)?.qty || 0) - (reserved.value.get(itemCode) || 0)
+		return (server.value.get(itemCode)?.qty || 0) - (held.value.get(itemCode) || 0) - (reserved.value.get(itemCode) || 0)
 	}
 
 	const getStockInfo = (itemCode) => ({
 		code: itemCode,
 		server: server.value.get(itemCode)?.qty || 0,
 		reserved: reserved.value.get(itemCode) || 0,
+		held: held.value.get(itemCode) || 0,
 		display: getDisplayStock(itemCode),
 		warehouse: server.value.get(itemCode)?.warehouse || warehouse.value
 	})
@@ -98,13 +100,32 @@ export const useStockStore = defineStore('stock', () => {
 	// Called by: POSSale.vue:770 (realtime), various refresh flows
 	// Does NOT clear reservations - only updates server stock
 	// Pinia reactivity automatically recalculates display stock
-	const update = (stockUpdates) => stockUpdates?.forEach(stockUpdate =>
+	const update = (stockUpdates) => stockUpdates?.forEach(stockUpdate => {
 		server.value.set(stockUpdate.item_code, {
 			qty: stockUpdate.actual_qty ?? stockUpdate.stock_qty,
 			warehouse: stockUpdate.warehouse || warehouse.value,
 			ts: Date.now()
 		})
-	)
+		// Server có trả phần đang giữ thì cập nhật luôn (site chưa bật giữ tồn thì không có trường này)
+		if (stockUpdate.reserved_stock !== undefined) setHeldQty(stockUpdate.item_code, stockUpdate.reserved_stock)
+	})
+
+	const setHeldQty = (itemCode, qty) => {
+		const value = Number(qty) || 0
+		if (value > 0) held.value.set(itemCode, value)
+		else held.value.delete(itemCode)
+	}
+
+	// Nạp toàn bộ phần đang giữ của kho (lúc mở POS: danh sách hàng tải từ get_items chưa có trường này)
+	const loadHeld = async (posProfile) => {
+		if (!posProfile) return
+		try {
+			const rows = await call('pos_next.api.hold_orders.get_held_stock', { pos_profile: posProfile })
+			held.value = new Map((rows || []).map((r) => [r.item_code, Number(r.reserved_stock) || 0]))
+		} catch (error) {
+			log.warn('Không tải được phần hàng đang giữ', error)
+		}
+	}
 
 	// Refresh stock from server (direct API call)
 	// Called after invoice submission, manual refresh, or warehouse change
@@ -172,6 +193,7 @@ export const useStockStore = defineStore('stock', () => {
 		// State
 		server,
 		reserved,
+		held,
 		warehouse,
 		refreshing,
 
@@ -184,8 +206,9 @@ export const useStockStore = defineStore('stock', () => {
 		reserve,
 		update,
 		refresh,
+		loadHeld,
 		setWarehouse: (targetWarehouse) => warehouse.value = targetWarehouse,
 		clear: () => reserved.value.clear(),
-		reset: () => { server.value.clear(); reserved.value.clear() }
+		reset: () => { server.value.clear(); reserved.value.clear(); held.value.clear() }
 	}
 })

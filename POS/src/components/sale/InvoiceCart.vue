@@ -139,6 +139,17 @@
 									>
 										{{ customer.customer_name || customer.name }}
 									</p>
+									<DebtBadge
+										v-if="cartDebtBadge"
+										class="mt-0.5"
+										:amount="cartDebtBadge.amount"
+										:tone="cartDebtBadge.tone"
+										:suffix="cartDebtBadge.suffix"
+										:warning-enabled="cartDebtBadge.warningEnabled"
+										:currency="currency"
+										@open-warning="debtWarningStore.open()"
+										@open-collect="openDebtCollection"
+									/>
 									<p
 										v-if="customer.mobile_no && items.length === 0"
 										class="text-[10px] text-gray-500 truncate leading-tight"
@@ -1349,7 +1360,24 @@
 					<span>{{ offersPending ? __("Đang tính khuyến mại...") : __("Checkout") }}</span>
 				</button>
 
-				<!-- Hold Order Button (Secondary - 50% width) -->
+				<!-- Giữ hàng cho khách đến nhận (PM-FEAT-00070): giữ tồn thật, khác Lưu nháp chỉ lưu trên máy -->
+				<button
+					type="button"
+					v-if="items.length > 0 && holdOrderStore.canCreate"
+					@click="handleHoldOrder"
+					:disabled="isOffline()"
+					:title="isOffline() ? __('An internet connection is required to hold stock') : ''"
+					:class="[
+						'flex-1 py-2.5 px-2 rounded-lg font-bold text-xs text-white transition-all touch-manipulation flex items-center justify-center',
+						isOffline() ? 'bg-gray-300 cursor-not-allowed' : 'bg-teal-600 hover:bg-teal-700 active:bg-teal-800 shadow-lg active:scale-[0.98]',
+					]"
+					:aria-label="__('Hold stock for customer pickup')"
+				>
+					<FeatherIcon name="package" class="w-4 h-4 me-1.5" />
+					<span>{{ __("Hold Stock") }}</span>
+				</button>
+
+				<!-- Lưu nháp (nút Hold cũ: lưu giỏ vào máy, không giữ tồn) -->
 				<button
 					type="button"
 					v-if="items.length > 0"
@@ -1370,7 +1398,7 @@
 							d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"
 						/>
 					</svg>
-					<span>{{ __("Hold", null, "order") }}</span>
+					<span>{{ __("Save Draft") }}</span>
 				</button>
 			</div>
 		</div>
@@ -1410,6 +1438,11 @@ const log = logger.create("InvoiceCart");
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import EditItemDialog from "./EditItemDialog.vue";
+import DebtBadge from "@/components/debt/DebtBadge.vue";
+import { useDebtCollectionStore } from "@/stores/debtCollection";
+import { useDebtWarningStore } from "@/stores/debtWarning";
+import { usePOSUIStore } from "@/stores/posUI";
+import { useHoldOrderStore } from "@/stores/holdOrder";
 
 /**
  * ============================================================================
@@ -1422,6 +1455,40 @@ const stockStore = useStockStore(); // Tồn kho theo thời gian thực, dùng 
 const { showError } = useToast();
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
+const debtCollectionStore = useDebtCollectionStore();
+const holdOrderStore = useHoldOrderStore();
+const debtWarningStore = useDebtWarningStore();
+const uiStore = usePOSUIStore();
+
+// Huy hiệu "Nợ …" cạnh tên khách: quầy bật cảnh báo thì lấy số của Cảnh báo công nợ,
+// tắt cảnh báo thì lấy nợ do store Thu nợ tải (bấm mở thẳng hộp thoại Thu nợ)
+const cartDebtBadge = computed(() => {
+	const name = props.customer?.name || props.customer;
+	if (!name) return null;
+	if (debtWarningStore.enabled) {
+		const data = debtWarningStore.data;
+		if (!data?.show || data.customer !== name) return null;
+		return {
+			amount: Number(data.total_outstanding) || 0,
+			tone: debtWarningStore.tone || "yellow",
+			suffix: debtWarningStore.suffix || "",
+			warningEnabled: true,
+		};
+	}
+	const debt = debtCollectionStore.cartDebt;
+	if (!debt || debt.customer !== name || !debtCollectionStore.canView) return null;
+	return {
+		amount: Number(debt.total_outstanding) || 0,
+		tone: debt.overdue_count > 0 ? "red" : "yellow",
+		suffix: debt.overdue_count > 0 ? __("· Overdue") : "",
+		warningEnabled: false,
+	};
+});
+
+function openDebtCollection() {
+	const name = props.customer?.name || props.customer;
+	if (name) uiStore.debtCollection = { customer: name, invoices: [] };
+}
 const { formatQuantity } = useFormatters(); // Quantity formatting utilities
 
 /**
@@ -1440,6 +1507,11 @@ const offersPending = computed(() => {
 
 function handleProceedToPayment() {
 	emit("proceed-to-payment");
+}
+
+function handleHoldOrder() {
+	if (isOffline()) return;
+	emit("hold-order");
 }
 
 /**
@@ -1529,6 +1601,7 @@ const emit = defineEmits([
 	"proceed-to-payment", // () - Navigate to payment screen
 	"clear-cart", // () - Clear all items from cart
 	"save-draft", // () - Save current cart as draft/hold order
+	"hold-order", // () - Giữ hàng cho khách đến nhận (đã có khách)
 	"apply-coupon", // () - Open coupon application dialog
 	"show-coupons", // () - Show available coupons
 	"show-offers", // () - Show available offers dialog
@@ -2370,7 +2443,7 @@ function handleOutsideClick(event) {
 
 		// Restore previous customer if set and no customer selected
 		if (previousCustomer.value && !props.customer) {
-			emit("select-customer", previousCustomer.value);
+			emit("select-customer", previousCustomer.value, { restored: true });
 			previousCustomer.value = null;
 		}
 	}
@@ -2399,6 +2472,15 @@ function handleOutsideClick(event) {
  * Component mounted - register global click listener.
  * Used for click-outside detection on dropdowns.
  */
+// Quyền + cấu hình giữ hàng theo quầy: tải khi biết quầy (ẩn nút nếu site/quầy chưa bật)
+watch(
+	() => props.posProfile,
+	(profile) => {
+		if (profile) holdOrderStore.loadAccess();
+	},
+	{ immediate: true },
+);
+
 onMounted(() => {
 	if (typeof document === "undefined") return;
 	// Use mousedown instead of click to catch events before they are swallowed by other handlers

@@ -166,7 +166,8 @@ pos_next/
 ### 1. Real-time Stock (Socket.IO)
 - `realtime_events.py` — emit `pos_stock_update`, `pos_invoice_created`, `pos_profile_updated`
 - Broadcast khi SI submit/cancel → POS terminals cập nhật stock tức thì
-- Frontend subscribe qua `socket.js`
+- Frontend nghe qua `composables/useRealtimeStock.js` (`window.frappe.realtime`); `socket.js` chưa được gọi ở đâu
+- ⚠ Trang /pos không có `window.frappe` nên hiện **không nhận** `pos_stock_update`: quầy khác chỉ thấy tồn mới khi tải lại hoặc bật đồng bộ tồn định kỳ (worker, mặc định tắt, chỉnh theo từng máy) — PM-TASK-00265
 
 ### 2. Offline Mode (PWA)
 - Service Worker: `pos_static_renderer.py` serve SW + workbox
@@ -196,6 +197,13 @@ pos_next/
 - Custom field `custom_company` trên Item
 - `item_query` lọc: items của company + global items (custom_company rỗng)
 - `validate_item` đảm bảo custom_company = "" cho global items mới
+
+### 8–11. Tính năng mới: tài liệu
+Chi tiết ở `docs/`: spec `docs/features/`, test case `docs/testcases/`, HDSD (`-van-hanh` cho người dùng, `-cau-hinh` cho quản trị) `docs/huong-dan/`, cùng tên file:
+- **Thu nợ khách hàng trên POS** — `thu-no-khach-hang-tren-pos`
+- **Cảnh báo công nợ khi chọn khách** — `canh-bao-cong-no-khi-chon-khach`
+- **Giữ hàng cho khách đến nhận** (Sales Order + Stock Reservation, `api/hold_orders.py`) — `giu-hang-cho-khach-den-nhan`
+- **Xem báo cáo kết ngày theo ca** — `xem-bao-cao-ket-ngay-theo-ca`
 
 ## Frontend (POS/src/)
 

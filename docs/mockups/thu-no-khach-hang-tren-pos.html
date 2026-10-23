@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mockup Thu nợ POS</title>
+<!--
+  Mockup: Thu nợ khách hàng trên POS — pos_next (tầng 2)
+  Spec: apps/pos_next/docs/features/thu-no-khach-hang-tren-pos.md · PM-FEAT-00066 (PM-PRJ-00025)
+  Trạng thái: ĐÃ DUYỆT 02/10/2026 (anh Quân). Bật "Chi tiết kỹ thuật" để xem fieldname / API.
+  Lịch sử chốt: xem mục cuối trang.
+-->
+<style>
+/* Giao diện POS chỉ có nền sáng nên mockup giữ một kiểu sáng; mọi màu đặt tường minh. */
+:root{--bg:#eceae6;--card:#ffffff;--ink:#1f2328;--muted:#6b7280;--line:#e5e7eb;--soft:#f6f6f4;
+ --red:#dc2626;--red-soft:#fef2f2;--orange:#ea580c;--orange-soft:#fff7ed;--amber:#92400e;--amber-soft:#fef3c7;
+ --green:#15803d;--green-soft:#f0fdf4;--blue:#1d4ed8;--blue-soft:#eff6ff;--tech:#6d28d9;--tech-soft:#f3edff;--dark:#111111;--on:#ffffff;
+ --f:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace;color-scheme:light}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--f)}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--card);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.top h1{font-size:17px;margin:0;flex:1;min-width:220px}
+.top nav{display:flex;gap:6px;flex-wrap:wrap}.top nav a{font-size:13px;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:999px;padding:4px 10px;background:var(--card)}
+.sw{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--tech);cursor:pointer}
+main{max-width:1320px;margin:0 auto;padding-inline:16px;padding-block:18px 60px}
+h2{font-size:20px;margin:34px 0 6px;text-wrap:balance}h3{font-size:16px;margin:0 0 6px}
+p.lead{margin:0 0 12px;color:var(--muted);max-width:90ch}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr))}.grid>*{min-width:0}
+.pill{display:inline-block;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap}
+.p-od{background:#fee2e2;color:#b91c1c}.p-pp{background:var(--amber-soft);color:var(--amber)}.p-cr{background:#dcfce7;color:var(--green)}
+.tech{display:none;background:var(--tech-soft);color:#4c1d95;border-left:3px solid var(--tech);border-radius:8px;padding:8px 10px;font:12.5px/1.5 var(--mono);white-space:pre-wrap;margin-top:10px}
+body.show-tech .tech{display:block}
+.decide{border:2px dashed #d97706;background:#fffbeb}
+.opt{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card);margin-top:6px;font-size:14px}.opt.rec{border:2px solid var(--green)}
+.opt b{display:block}
+.btn{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:8px 14px;cursor:pointer}
+.btn:focus-visible,button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+/* Khung thiết bị */
+.dev-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:999px;overflow:hidden;background:var(--card)}
+.seg button{font:600 13px var(--f);border:0;background:transparent;padding:8px 14px;cursor:pointer;color:var(--ink)}.seg button.on{background:var(--dark);color:var(--on)}
+.dev-wrap{overflow-x:auto;padding-bottom:6px}
+.device{margin:0 auto;background:var(--dark);border-radius:26px;padding:12px;box-shadow:0 16px 40px rgba(0,0,0,.25);width:max-content}
+.screen{position:relative;background:var(--soft);border-radius:14px;overflow:hidden;font-family:var(--f);color:var(--ink)}
+.device.tablet .screen{width:1180px;height:740px}.device.phone .screen{width:390px;height:780px}
+.sbar{height:58px;background:var(--card);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 16px}
+.back{width:42px;height:42px;border-radius:12px;background:#f3f4f6;display:grid;place-items:center;font-size:24px;border:0;cursor:pointer}
+.stitle{font-size:20px;font-weight:800}.sbar .r{margin-left:auto;font-size:13px;color:var(--muted)}
+.tools{padding:12px 16px 0;display:flex;flex-direction:column;gap:10px}
+.search{display:flex;gap:8px}.search input{flex:1;height:52px;border:2px solid var(--line);border-radius:14px;padding:0 14px;font:17px var(--f);background:var(--card);color:var(--ink);min-width:0}
+.kbd{width:52px;height:52px;border-radius:14px;border:2px solid var(--line);background:var(--card);font-size:20px;cursor:pointer}
+.chips{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chip{border:2px solid var(--line);background:var(--card);border-radius:999px;padding:9px 15px;font:700 15px var(--f);cursor:pointer;color:var(--ink)}
+.chip.on{background:var(--red);border-color:var(--red);color:var(--on)}
+.chip.sm{font-weight:600;font-size:14px}.chips .sp{flex:1}
+.body2{display:grid;grid-template-columns:400px 1fr;gap:14px;padding:12px 16px 0;height:calc(100% - 58px - 132px - 90px)}
+.col{display:flex;flex-direction:column;gap:10px;overflow:auto;min-height:0}
+.meta{font-size:13px;color:var(--muted)}
+.cust{background:var(--card);border:2px solid #ececec;border-radius:16px;padding:12px 14px;display:flex;gap:12px;align-items:center;cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%}
+.cust.on{border-color:var(--orange);background:var(--orange-soft)}
+.av{width:46px;height:46px;border-radius:50%;background:#fee2e2;color:#b91c1c;display:grid;place-items:center;font-weight:800;flex:none}
+.cname{font-size:17px;font-weight:800}.amt{font-size:19px;font-weight:800;color:var(--red);white-space:nowrap}
+.inv{background:var(--card);border:2px solid #ececec;border-radius:16px;padding:14px;display:flex;gap:12px;align-items:center;cursor:pointer;text-align:left;font:inherit;color:inherit;width:100%}
+.inv.on{border-color:var(--orange)}
+.dot{width:42px;height:42px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:22px;font-weight:800;border:3px solid #d1d5db;color:transparent}
+.inv.on .dot{background:var(--orange);border-color:var(--orange);color:var(--on)}
+.inv .no{font-size:16px;font-weight:800}.inv .sub{font-size:13px;color:var(--muted);margin:2px 0 5px}
+.right-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.foot{position:absolute;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:12px 16px;display:flex;align-items:center;gap:12px}
+.foot .t{flex:1;font-size:15px}
+.big{background:var(--red);color:var(--on);border:0;border-radius:16px;height:58px;padding:0 24px;font:800 19px var(--f);cursor:pointer;white-space:nowrap}
+.big[disabled]{background:#fca5a5;cursor:not-allowed}
+.empty{color:var(--muted);text-align:center;padding:30px 10px}
+.note{border-radius:10px;padding:9px 12px;font-size:13.5px}
+.n-warn{background:var(--amber-soft);color:var(--amber)}.n-err{background:var(--red-soft);color:#b91c1c}.n-ok{background:var(--green-soft);color:var(--green)}.n-info{background:var(--blue-soft);color:var(--blue)}
+/* máy cầm tay: hai cột thành hai màn */
+.device.phone .body2{grid-template-columns:1fr;height:calc(100% - 58px - 150px - 0px)}
+.device.phone .chips .sp,.device.phone .chips .sm{display:none}
+.device.phone[data-view="list"] .colR{display:none}.device.phone[data-view="list"] .foot{display:none}
+.device.phone[data-view="inv"] .colL,.device.phone[data-view="inv"] .tools{display:none}
+.device.phone[data-view="inv"] .body2{height:calc(100% - 58px - 100px)}
+.device.tablet .back.ph{display:none}
+/* thanh bên trái của POS (máy tính bảng / màn hình rộng) */
+.side{position:absolute;left:0;top:0;bottom:0;width:68px;background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:8px;padding-top:10px;z-index:2}
+.side .logo{width:44px;height:44px;border-radius:12px;background:var(--red);color:var(--on);display:grid;place-items:center;font-weight:800;margin-bottom:6px}
+.side .ic{position:relative;width:50px;height:50px;border-radius:12px;display:grid;place-items:center;font-size:20px;color:var(--muted);border:0;background:transparent}
+.side .ic small{position:absolute;top:52px;font-size:10px;white-space:nowrap;color:var(--muted)}
+.side .ic.on{background:#fee2e2;color:#b91c1c;outline:2px dashed var(--red);outline-offset:2px}
+.side .ic .bd{position:absolute;top:-4px;right:-6px;background:var(--red);color:var(--on);border-radius:999px;font:700 10px var(--f);padding:1px 5px}
+.side .sp{flex:1}
+.device.tablet .main{position:absolute;left:68px;right:0;top:0;bottom:0}
+.device.phone .side{display:none}.device.phone .main{position:absolute;inset:0}
+/* hộp thoại trong khung */
+.ov{position:absolute;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:5}
+.dlg{background:var(--card);border-radius:16px;width:min(980px,96%);max-height:96%;overflow:auto;box-shadow:0 20px 50px rgba(0,0,0,.3)}
+.device.phone .dlg{width:100%;height:100%;max-height:100%;border-radius:0}
+.dh{display:flex;justify-content:space-between;align-items:center;padding:14px 18px 6px}.dh b{font-size:19px}
+.x{border:0;background:transparent;font-size:24px;color:var(--muted);cursor:pointer}
+.dgrid{display:grid;grid-template-columns:1.1fr 1fr;gap:14px;padding:8px 18px 18px}.device.phone .dgrid{grid-template-columns:1fr}
+.box{border:1px solid var(--line);border-radius:12px}
+.bh{background:#f9fafb;padding:10px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:8px}
+table{width:100%;border-collapse:collapse}th{font-size:11.5px;color:var(--muted);text-align:left;padding:7px 8px;font-weight:600}td{padding:7px 8px;border-top:1px solid #f1f1f1;font-size:13.5px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.alloc{width:110px;text-align:right;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:700 13.5px var(--f)}
+.sum2{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line)}.sum2>div{padding:10px;text-align:center}
+.mops{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.mop{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 11px;font:600 13.5px var(--f);cursor:pointer;color:var(--ink)}.mop.on{border:2px solid var(--red);background:var(--red-soft)}
+.display{background:#f3f4f6;border-radius:10px;padding:10px;text-align:center;font:600 21px var(--mono);margin:8px 0}
+.keys{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.keys button{border:1px solid var(--line);background:var(--card);border-radius:10px;padding:11px 0;font:600 17px var(--f);cursor:pointer;color:var(--ink)}
+.split{display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:10px;padding:7px 10px;margin-top:6px;gap:8px}
+.split input{width:130px;text-align:right;border:1px solid var(--line);border-radius:8px;padding:6px;font:700 15px var(--mono)}
+.qr{display:flex;gap:12px;align-items:flex-start}
+.qrbox{border:1px solid var(--line);border-radius:10px;padding:6px;background:var(--card)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--blue);border-top-color:transparent;border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+@keyframes sp{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.receipt{width:290px;background:var(--card);border:1px dashed #9ca3af;padding:14px;font:12.5px/1.5 var(--mono);margin:0 auto}
+.receipt .r{display:flex;justify-content:space-between}.receipt hr{border:0;border-top:1px dashed #9ca3af;margin:6px 0}.receipt .c{text-align:center}
+.cfg td:first-child{width:36%;font-weight:600}
+.state-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 12px}
+.hist li{margin:4px 0}
+</style>
+
+</head>
+<body>
+<header class="top">
+ <h1>Mockup · Thu nợ khách hàng trên POS <span class="pill p-cr">Đã duyệt 02/10/2026</span></h1>
+ <nav><a href="#chot">Cần chốt</a><a href="#loi-vao">Lối vào</a><a href="#proto">Màn hình Công nợ</a><a href="#trang-thai">Chặn &amp; lỗi</a><a href="#phieu">Phiếu thu &amp; huỷ</a><a href="#ca">Đóng ca</a><a href="#cau-hinh">Cấu hình</a><a href="#lich-su">Lịch sử chốt</a></nav>
+ <label class="sw"><input type="checkbox" id="techT"> Chi tiết kỹ thuật</label>
+</header>
+
+<main>
+
+<section id="chot">
+ <h2>Còn cần chốt</h2>
+ <p class="lead">Mockup đang vẽ theo phương án đề xuất (viền xanh). Chốt khác thì giao diện đổi như mô tả.</p>
+ <div class="grid">
+  <div class="card" style="border:2px solid var(--green)"><h3>1. Khách có tiền dư — ĐÃ CHỐT</h3><div class="note n-ok">Hoàn tại quầy: nút "Trả lại tiền dư" — trừ nợ tại quầy trước, phần còn lại chi cho khách (tiền mặt / chuyển khoản), trừ vào tiền mặt của ca. Thử ở khách THU HUONG trong khung thiết bị.</div></div>
+  <div class="card" style="border:2px solid var(--line)"><h3>2. Huỷ phiếu thu trên POS — ĐỂ SAU</h3><div class="note n-info">Đợt này chưa làm. Kế toán huỷ từng phiếu thu ở desk như hiện nay. Chọn "huỷ cả lần thu" hay "huỷ từng phiếu" khi làm đợt sau.</div></div>
+  <div class="card" style="border:2px solid var(--green)"><h3>3. Ẩn nợ lẻ do làm tròn — ĐÃ CHỐT</h3><div class="note n-ok">Quản trị tự cài ngưỡng theo từng quầy trên POS Profile. Để trống / 0 = không ẩn (mặc định). Ví dụ đặt 1.000 ₫ thì 11 đơn nợ 0,01–25 ₫ ở Chiềng Sại không hiện.</div></div>
+  <div class="card" style="border:2px solid var(--green)"><h3>4. Lọc nhân viên bán — ĐÃ CHỐT</h3><div class="note n-ok">Quầy tắt "nhân viên bán" thì lọc theo người lập đơn.</div></div>
+  <div class="card" style="border:2px solid var(--green)"><h3>5. Hạn thanh toán — ĐÃ CHỐT A2</h3><div class="note n-ok">Mỗi quầy khai "Số ngày được nợ"; hạn TT = ngày bán + số ngày, áp cả đơn cũ. Chung với chức năng 2.</div></div>
+ </div>
+</section>
+
+<section id="loi-vao">
+ <h2>Lối vào</h2>
+ <p class="lead">Ba đường, cùng mở màn hình Công nợ / hộp thoại Thu nợ bên dưới. Chỉ hiện khi quầy bật Thu nợ và người dùng có quyền.</p>
+ <div class="grid">
+  <div class="card"><h3>1. Huy hiệu "Nợ …" trên giỏ hàng</h3><div style="background:var(--soft);border-radius:12px;padding:10px 12px;display:flex;align-items:center;gap:10px"><div class="av" style="width:36px;height:36px">09</div><div style="flex:1"><b>0975961375</b><div class="meta">+84-0975961375</div></div><button class="btn" style="background:#fef3c7;border:2px solid #f59e0b;color:#92400e;font-weight:800;border-radius:999px" data-open="c0">Nợ 241.100 ₫</button></div><p class="meta" style="margin:8px 0 0">Dùng chung với chức năng 2 (Cảnh báo công nợ): một huy hiệu duy nhất cạnh tên khách, không có nút Thu nợ riêng.<br>· Quầy <b>bật</b> cảnh báo: bấm huy hiệu → danh sách cảnh báo (chức năng 2) → <b>Thu nợ ngay</b> → hộp thoại Thu nợ.<br>· Quầy <b>tắt</b> cảnh báo nhưng bật Thu nợ: bấm huy hiệu → mở thẳng hộp thoại Thu nợ.</p><div class="tech">InvoiceCart.vue — huy hiệu do chức năng 2 (PM-FEAT-00068) vẽ; chức năng 1 cung cấp _query_customer_debts / _has_debt_access và hộp thoại DebtCollectionDialog.vue</div></div>
+  <div class="card"><h3>2. Biểu tượng Công nợ ở thanh bên trái</h3><div style="display:flex;gap:8px"><div style="width:48px;height:48px;border-radius:12px;background:#fee2e2;color:#b91c1c;display:grid;place-items:center;font-weight:800;position:relative">₫<span class="pill" style="position:absolute;top:-6px;right:-10px;background:var(--red);color:var(--on)">4</span></div><p class="meta" style="margin:0">Mục <b>Công nợ</b> cố định trên thanh bên trái, cạnh Khuyến mại / Sản phẩm / Hoá đơn. Số đỏ = số khách đang nợ tại quầy. Bấm là mở màn hình Công nợ ở vùng bên phải, thanh bên giữ nguyên (xem khung thiết bị bên dưới).</p></div><div class="tech">components/pos/ManagementSlider.vue → handleManagementMenuClick('debts')</div></div>
+  <div class="card"><h3>3. Mục "Công nợ" trong menu người dùng</h3><div style="border:1px solid var(--line);border-radius:10px;padding:6px;max-width:240px;font-size:14px"><div style="padding:6px 8px">View Shift</div><div style="padding:6px 8px">Invoice History</div><div style="padding:6px 8px;background:var(--red-soft);border-radius:8px;font-weight:700">Công nợ <span class="pill" style="background:var(--red);color:var(--on)">4</span></div><div style="padding:6px 8px">Return Invoice</div><div style="padding:6px 8px">Close Shift</div></div><p class="meta" style="margin:8px 0 0">Dùng được trên máy tính bảng / máy cầm tay (thanh bên ẩn).</p><div class="tech">POSSale.vue — menu người dùng (dòng 34–187)</div></div>
+ </div>
+</section>
+
+<section id="proto">
+ <h2>Màn hình Công nợ — một kiểu cho mọi máy</h2>
+ <p class="lead">Thao tác được: chạm khách bên trái, chạm đơn để chọn/bỏ, lọc Còn nợ / Quá hạn / Đã trả một phần, gõ tên/SĐT/mã đơn, bấm <b>Thu nợ</b>. Máy cầm tay: hai cột thành hai màn.</p>
+ <div class="dev-bar"><div class="seg" role="tablist"><button class="on" data-dev="tablet">Máy tính bảng / POS cảm ứng</button><button data-dev="phone">Máy cầm tay</button></div><span class="meta">Số liệu: công nợ thật tại POS Chiềng Sại (site pos.next), 02/10/2026.</span></div>
+ <div class="dev-wrap"><div class="device tablet" id="dev" data-view="list"><div class="screen" id="scr">
+<nav class="side" aria-label="Thanh bên POS"><div class="logo">POS</div><button class="ic" title="Khuyến mại">🏷</button><button class="ic" title="Sản phẩm">📦</button><button class="ic" title="Hoá đơn">🧾</button><button class="ic on" title="Công nợ">₫<span class="bd">4</span></button><span class="sp"></span><button class="ic" title="Cài đặt" style="margin-bottom:10px">⚙</button></nav><div class="main">
+  <div class="sbar"><button class="back ph" id="phBack" aria-label="Quay lại">‹</button><button class="back" aria-label="Đóng">‹</button><div class="stitle" id="stitle">Công nợ</div><div class="r">POS Chiềng Sại</div></div>
+  <div class="tools"><div class="search"><input id="q" placeholder="Tên, số điện thoại hoặc mã đơn" aria-label="Tìm"><button class="kbd" aria-label="Bàn phím số">⌨</button></div>
+   <div class="chips" id="chips"><button class="chip on" data-f="all">Còn nợ <span id="c-all"></span></button><button class="chip" data-f="od">Quá hạn <span id="c-od"></span></button><button class="chip" data-f="pp">Đã trả một phần <span id="c-pp"></span></button><span class="sp"></span><button class="chip sm">NV bán: Tất cả ▾</button><button class="chip sm">01/05–02/10 ▾</button><button class="chip sm">⬇ Excel</button></div></div>
+  <div class="body2"><div class="col colL" id="colL"></div><div class="col colR" id="colR"></div></div>
+  <div class="foot" id="foot"><div class="t" id="footT"></div><button class="big" id="go">Thu nợ</button></div>
+  </div><div id="ovHost"></div>
+ </div></div></div>
+ <div class="tech">Danh sách: search_debts(pos_profile, filters, start, page_length) — SI docstatus=1, is_return=0, outstanding_amount ≥ ngưỡng ẩn nợ lẻ, pos_profile = quầy, company = quầy
+Trạng thái: Còn nợ = outstanding &gt; 0 · Quá hạn = chưa trả đồng nào (outstanding = rounded_total) và due_date &lt; hôm nay · Đã trả một phần = 0 &lt; đã trả &lt; tổng
+Thu nợ: collect_debt(pos_profile, customer, allocations, payments, debt_collection_id) — mỗi hình thức 1 Payment Entry, gắn posa_pos_opening_shift
+QR SePay: tạo lần thu chờ tiền về (nội dung "TN&lt;mã&gt;"), webhook SePay nhận thêm tiền tố TN, chống trùng bằng SePay Transaction Log
+Ví: trừ số dư khả dụng (tong_tien_vi_da_tieu phải đếm cả Payment Entry hình thức ví)</div>
+</section>
+
+<section id="trang-thai">
+ <h2>Các trạng thái bị chặn</h2>
+ <p class="lead">Bấm để xem từng trạng thái ngay trong khung thiết bị phía trên.</p>
+ <div class="state-tabs">
+  <button class="btn" data-st="viewonly">Người chỉ có quyền xem</button><button class="btn" data-st="offline">Mất mạng</button><button class="btn" data-st="noshift">Chưa mở ca</button><button class="btn" data-st="cap">Vượt trần mỗi lần thu</button><button class="btn" data-st="over">Thu quá số nợ</button><button class="btn" data-st="changed">Quầy khác vừa thu</button><button class="btn" data-st="reset">↺ Về bình thường</button>
+ </div>
+ <div class="tech">_check_access(pos_profile, action): POS Profile User + role trong bảng của quầy + posa_enable_debt_collection = 1 (System Manager không được miễn)
+Mất mạng: client chặn trước khi gửi; gửi lại cùng debt_collection_id không tạo phiếu thứ hai
+Quầy khác vừa thu: SELECT … FOR UPDATE, lệch thì trả mã DEBT_CHANGED, client tự tải lại</div>
+</section>
+
+<section id="phieu">
+ <h2>Phiếu thu và huỷ</h2>
+ <div class="grid">
+  <div class="card"><h3>Phiếu thu nợ · khổ 80mm</h3><div class="receipt"><div class="c"><b>PHIẾU THU NỢ</b></div><div class="c">POS Chiềng Sại</div><div class="c">02/10/2026 09:45 · TN-8F3A2C</div><hr><div class="r"><span>Khách</span><span>0975961375</span></div><hr><div class="r"><span>ACC-SINV-2026-00101</span><span>154.900</span></div><div class="r"><span>ACC-SINV-2026-00102</span><span>86.200</span></div><hr><div class="r"><b>Tổng thu</b><b>241.100</b></div><div class="r"><span> Tiền mặt</span><span>141.100</span></div><div class="r"><span> QR SePay</span><span>100.000</span></div><hr><div class="r"><span>Nợ còn lại tại quầy</span><b>0</b></div><hr><div class="r"><span>Thu ngân</span><span>Trà Nguyễn</span></div><div class="r"><span>Ca</span><span>POSA-OS-26-0000027</span></div></div><p class="meta">Một lần thu = một tờ, dù chia nhiều hình thức. In lại được từ lịch sử thu.</p><div class="tech">Print Format "POS Debt Receipt" (Jinja), in theo posa_debt_collection_id</div></div>
+  <div class="card"><h3>Lịch sử thu &amp; huỷ — để đợt sau (bản vẽ phương án A)</h3><table><tr><th>Lần thu</th><th>Hình thức</th><th class="n">Số tiền</th><th></th></tr><tr><td>TN-8F3A2C · 02/10 09:45</td><td>Tiền mặt + QR SePay</td><td class="n"><b>241.100</b></td><td><button class="btn" style="color:#b91c1c;border-color:#b91c1c">Huỷ lần thu</button></td></tr></table>
+   <div class="note n-err" style="margin-top:10px"><b>Huỷ lần thu TN-8F3A2C?</b> Gồm 2 phiếu, tổng 241.100 ₫; 2 đơn quay lại số nợ trước khi thu. <br>Lý do huỷ (bắt buộc): <i>Thu nhầm khách</i></div>
+   <p class="meta">Chỉ role được huỷ tại quầy mới thấy nút. Ghi vết người huỷ, lý do, thời điểm.</p><div class="tech">cancel_debt_collection(pos_profile, debt_collection_id, reason) — posa_debt_cancel_roles</div></div>
+ </div>
+</section>
+
+<section id="ca">
+ <h2>Đóng ca</h2>
+ <div class="grid">
+  <div class="card"><h3>Hiện tại</h3><table><tr><th>Hình thức</th><th class="n">Dự kiến trong két</th></tr><tr><td>Tiền mặt</td><td class="n">1.250.000</td></tr><tr><td>Chuyển khoản</td><td class="n">300.000</td></tr></table><div class="note n-err" style="margin-top:8px">Đếm két 1.391.100 ₫ → báo <b>thừa 141.100 ₫</b> dù không sai: tiền thu nợ không vào ca.</div></div>
+  <div class="card"><h3>Đề xuất</h3><table><tr><th>Hình thức</th><th class="n">Dự kiến trong két</th></tr><tr><td>Tiền mặt</td><td class="n">1.250.000</td></tr><tr><td>↳ Thu nợ tiền mặt</td><td class="n">+141.100</td></tr><tr><td>Chuyển khoản</td><td class="n">300.000</td></tr><tr><td>↳ Thu nợ QR SePay</td><td class="n">+100.000</td></tr></table><div class="note n-ok" style="margin-top:8px">Đếm két 1.391.100 ₫ → <b>khớp</b>. Danh sách phiếu thu nợ kèm trong phiếu đóng ca.</div><div class="tech">pos_closing_shift.get_payments_entries: lọc posa_pos_opening_shift = ca (hoặc reference_no = ca cho dữ liệu cũ)</div></div>
+ </div>
+</section>
+
+<section id="cau-hinh">
+ <h2>Cấu hình trên POS Profile (desk)</h2>
+ <div class="card cfg"><table>
+  <tr><td>Cho phép bán chịu (bán có nợ)</td><td>Ô <b>"Allow Credit Sale"</b> có sẵn trong <b>Cài đặt POS (POS Settings) của từng quầy</b>. Không tick: đơn nào cũng phải thanh toán đủ, không có "Pay on Account", server chặn hoá đơn còn nợ. Có tick: được bán chịu. <span class="meta">(Đề xuất khoá riêng ô này để thu ngân không tự bật.)</span></td></tr>
+  <tr><td>Số ngày được nợ</td><td>30 ngày <span class="meta">(hạn TT = ngày bán + số ngày; để trống = hạn là ngày bán)</span></td></tr>
+  <tr><td>Role được trả lại tiền dư</td><td><span class="pill p-pp">Store Manager</span></td></tr>
+  <tr><td>Bật thu nợ</td><td>☑ <span class="tech" style="display:inline;padding:1px 6px">posa_enable_debt_collection</span></td></tr>
+  <tr><td>Role được thu nợ</td><td><span class="pill p-pp">POSNext Cashier</span> <span class="pill p-pp">Store Manager</span></td></tr>
+  <tr><td>Role được xem Công nợ</td><td><span class="pill p-pp">POSNext Cashier</span> <span class="pill p-pp">Store Manager</span> <span class="pill p-pp">Accounts User</span></td></tr>
+  <tr><td>Role được huỷ phiếu thu</td><td><span class="pill p-pp">Store Manager</span></td></tr>
+  <tr><td>Trần số tiền mỗi lần thu</td><td>20.000.000 ₫ <span class="meta">(0 = không giới hạn)</span></td></tr>
+  <tr><td>Ẩn nợ lẻ dưới</td><td>1.000 ₫ <span class="meta">(quản trị tự đặt theo quầy; để trống / 0 = không ẩn)</span></td></tr>
+  <tr><td>Phạm vi khách</td><td>Tất cả khách ▾ <span class="meta">(hoặc theo nhóm khách của quầy)</span></td></tr>
+  <tr><td>Hình thức dùng khi thu nợ</td><td>Theo bảng Payment Methods của quầy: Cash, Wire Transfer · QR SePay theo cấu hình SePay của quầy · Ví theo hình thức ví</td></tr>
+ </table><div class="tech">Custom Field POS Profile: posa_enable_debt_collection, posa_debt_collect_roles / posa_debt_view_roles / posa_debt_cancel_roles (Table MultiSelect → POS Profile Role), posa_debt_max_amount, posa_debt_hide_below, posa_debt_customer_scope</div></div>
+</section>
+
+<section id="lich-su">
+ <h2>Lịch sử chốt</h2>
+ <div class="card"><ul class="hist">
+  <li><b>02/10/2026 — ĐÃ DUYỆT MOCKUP</b> (anh Quân). Huỷ phiếu thu trên POS và gộp khách trùng SĐT để đợt sau; các lỗi phát hiện thêm (làm tròn, SePay, ví, "Other Discount") sửa sau, tách PM Task riêng.</li>
+  <li><b>01/10/2026</b> · Tầng 2 pos_next · chỉ đơn của chính quầy, cùng company · không trả dư · mỗi hình thức một Payment Entry, in chung một phiếu · phải được cấp quyền ở quầy kể cả System Manager · mất mạng: nút mờ, báo cần kết nối · có xuất Excel.</li>
+  <li><b>02/10/2026</b> · Trạng thái nợ: <b>Còn nợ</b> (gồm quá hạn + đã trả một phần) · <b>Quá hạn</b> = chưa trả đồng nào và đã qua hạn TT · <b>Đã trả một phần</b>. Thay quyết định "bỏ quá hạn" ngày 01/10.</li>
+  <li><b>02/10/2026</b> · <b>QR SePay và Ví làm trong đợt này</b> (thay quyết định "để đợt sau" ngày 01/10). QR chờ SePay xác nhận tiền về mới tạo phiếu thu.</li>
+  <li><b>02/10/2026</b> · Màn hình Công nợ dùng <b>một kiểu cho mọi máy</b>: kiểu A hai cột (trái khách, phải đơn), nút to cho cảm ứng; máy cầm tay tách thành hai màn. Vẫn chọn theo từng đơn và mỗi lần thu một khách như tài liệu 1.4.</li>
+  <li><b>02/10/2026</b> · <b>Thống nhất huy hiệu với chức năng 2:</b> trên giỏ chỉ có huy hiệu "Nợ …" (kiểu của chức năng 2); bỏ nút Thu nợ riêng của chức năng 1. Bấm huy hiệu → cảnh báo → Thu nợ ngay (quầy bật cảnh báo) hoặc mở thẳng hộp thoại Thu nợ (quầy tắt cảnh báo).</li>
+  <li><b>02/10/2026</b> · Hộp thoại Thu nợ: mỗi đơn là một thẻ giống màn hình Công nợ (ô chọn, hạn TT, trạng thái, còn nợ, ô "Thu lần này"), bấm <b>›</b> mở chi tiết đơn (hàng bán, đã thu, lịch sử thu) rồi "Quay lại" về đúng hộp thoại, số đã nhập giữ nguyên. Thẻ đơn ở màn hình Công nợ cũng bấm › xem chi tiết.</li>
+  <li><b>02/10/2026</b> · <b>Cấu hình "Cho phép bán chịu" theo quầy</b> thay cho "quản lý xác nhận bán chịu": không tick thì mọi đơn phải thanh toán đủ. Đã báo chức năng 2 (Claude POS1).</li>
+  <li><b>02/10/2026</b> · <b>Công nợ là một mục trên thanh bên trái</b> của POS (cạnh Khuyến mại, Sản phẩm, Hoá đơn); màn hình Công nợ mở ở vùng bên phải, thanh bên giữ nguyên. Máy cầm tay (không có thanh bên) vào qua menu người dùng.</li>
+  <li><b>02/10/2026</b> · Cờ "Cho phép bán chịu" dùng ô <b>Allow Credit Sale có sẵn trong POS Settings của từng quầy</b> (thay bản đặt trên POS Profile); server chặn hoá đơn còn nợ khi không tick. Ngưỡng ẩn nợ lẻ <b>quản trị tự cài</b> theo quầy, để trống = không ẩn.</li>
+  <li><b>02/10/2026</b> · <b>Hạn TT theo A2</b>: quầy khai "Số ngày được nợ". <b>Tiền dư hoàn tại quầy</b>: trừ nợ trước, phần còn lại trả khách; tiền dư chỉ tính từ đơn đã trả hàng, không tính điểm ví (THU HUONG: 201.824 ₫, không phải 418.432 ₫ như bản trước).</li>
+  <li><b>02/10/2026</b> · Lọc NV bán khi quầy tắt "nhân viên bán": theo người lập đơn.</li>
+  <li><b>02/10/2026</b> · Gõ SĐT ra mọi mã khách dùng số đó; thu theo từng mã. Gộp khách để đợt sau.</li>
+ </ul></div>
+</section>
+
+</main>
+
+<script>
+(function(){
+const f=n=>Number(n).toLocaleString('vi-VN');
+// Công nợ thật tại POS Chiềng Sại — site pos.next, 02/10/2026
+const C=[
+ {id:'c0',k:'09',n:'0975961375',p:'0975961375',wallet:0,inv:[{no:'ACC-SINV-2026-00101',sold:'25/07',due:'25/07',tot:154900,paid:0,out:154900,days:69,st:'od'},{no:'ACC-SINV-2026-00102',sold:'25/07',due:'25/07',tot:86200,paid:0,out:86200,days:69,st:'od'}],hidden:'1 đơn nợ lẻ 0,01 ₫'},
+ {id:'c1',k:'AL',n:'A Linh',p:'0906003728',wallet:0,inv:[{no:'ACC-SINV-2026-00045',sold:'19/05',due:'19/05',tot:459900,paid:400000,out:59900,days:136,st:'pp'},{no:'ACC-SINV-2026-00048',sold:'19/05',due:'19/05',tot:59000,paid:56191,out:2809,days:136,st:'pp'}]},
+ {id:'c2',k:'CH',n:'Chị Huế',p:'0940297480',wallet:0,inv:[{no:'ACC-SINV-2026-00046',sold:'19/05',due:'19/05',tot:117700,paid:100000,out:17700,days:136,st:'pp'}]},
+ {id:'c3',k:'TH',n:'THU HUONG',p:'0975961375',wallet:335017,credit:201824,cdocs:[['ACC-SINV-2026-00056','19/05 · đã trả hàng (phiếu trả 00057)',101500],['ACC-SINV-2026-00047','19/05 · đã trả hàng (phiếu trả 00049)',100324]],inv:[{no:'ACC-SINV-2026-00050',sold:'19/05',due:'19/05',tot:35600,paid:27736,out:7864,days:136,st:'pp'}],hidden:'6 đơn nợ lẻ 15–25 ₫'}
+];
+const DET={
+ 'ACC-SINV-2026-00101':{t:'15:44',it:[['Chả cá thát lát ốc vị sả ớt 200g',1,43241],['Chả Tôm 200G',1,59352],['Chả viên thát lát Bắp 200g',1,40833]],tax:11474,disc:0,pay:[]},
+ 'ACC-SINV-2026-00102':{t:'15:47',it:[['Hapi cá thát lát rút xương kim sa 230g',1,59352],['Tem bưu chính "Hà Nội 12 mùa hoa (Bộ 2)"',1,20500]],tax:6388,disc:0,pay:[]},
+ 'ACC-SINV-2026-00045':{t:'15:47',it:[['Khăn giấy lau mặt Paseo Ultra Soft',3,104167],['OMO Nước giặt Matic Sạch Thơm Vượt Trội 2.7kg',3,344081],['Khăn giấy lau mặt Paseo Ultra Soft (tặng)',1,0]],tax:34067,disc:24205,pay:[['19/05 15:47','Tiền mặt — thanh toán khi bán',400000]]},
+ 'ACC-SINV-2026-00048':{t:'16:16',it:[['Vải Daklak - NM',1,56190]],tax:2810,disc:0,pay:[['19/05 16:16','Tiền mặt — thanh toán khi bán',56191]]},
+ 'ACC-SINV-2026-00046':{t:'15:53',it:[['OMO Nước giặt Matic Sạch Thơm Vượt Trội 2.7kg',1,114694]],tax:8717,disc:6193,pay:[['19/05 15:53','Tiền mặt — thanh toán khi bán',100000]]},
+ 'ACC-SINV-2026-00050':{t:'16:45',it:[['Khăn giấy lau mặt Paseo Ultra Soft',1,34722],['Khăn giấy lau mặt Paseo Ultra Soft (tặng)',1,0]],tax:2639,disc:1736,pay:[['19/05 16:45','Đổi điểm — thanh toán khi bán',27736]]}};
+function detHtml(no,back){const c=C.find(x=>x.inv.some(i=>i.no===no)),i=c.inv.find(x=>x.no===no),d=DET[no];
+ return '<div class="dh"><button class="btn" data-detback>‹ Quay lại</button><button class="x" data-x aria-label="Đóng">×</button></div><div style="padding:4px 18px 18px"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><b style="font-size:19px">'+no+'</b>'+pill(i.st)+'</div><div class="meta">'+c.n+' · '+c.p+' · bán '+i.sold+'/2026 '+d.t+' · hạn TT '+i.due+' · nợ '+i.days+' ngày · lập bởi Thu Hằng · POS Chiềng Sại</div>'+
+ '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:12px 0"><div class="card" style="padding:10px;text-align:center"><div class="meta">Tổng đơn</div><b>'+f(i.tot)+' ₫</b></div><div class="card" style="padding:10px;text-align:center;background:var(--green-soft)"><div class="meta">Đã thu</div><b style="color:var(--green)">'+f(i.paid)+' ₫</b></div><div class="card" style="padding:10px;text-align:center;background:var(--red-soft)"><div class="meta">Còn nợ</div><b style="color:var(--red)">'+f(i.out)+' ₫</b></div></div>'+
+ '<b style="font-size:14px">Hàng bán</b><table><tr><th>Mặt hàng</th><th class="n">SL</th><th class="n">Thành tiền</th></tr>'+d.it.map(x=>'<tr><td>'+x[0]+'</td><td class="n">'+x[1]+'</td><td class="n">'+f(x[2])+'</td></tr>').join('')+(d.disc?'<tr><td>Chiết khấu</td><td></td><td class="n">−'+f(d.disc)+'</td></tr>':'')+'<tr><td>Thuế GTGT</td><td></td><td class="n">'+f(d.tax)+'</td></tr><tr><td><b>Tổng đơn</b></td><td></td><td class="n"><b>'+f(i.tot)+'</b></td></tr></table>'+
+ '<b style="font-size:14px;display:block;margin-top:12px">Lịch sử thu</b>'+(d.pay.length?'<table><tr><th>Thời điểm</th><th>Hình thức</th><th class="n">Số tiền</th></tr>'+d.pay.map(x=>'<tr><td>'+x[0]+'</td><td>'+x[1]+'</td><td class="n">'+f(x[2])+'</td></tr>').join('')+'</table>':'<div class="meta" style="padding:6px 0">Chưa thu đồng nào.</div>')+
+ '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn">🖨 In lại hoá đơn</button>'+(back?'<button class="big" style="height:46px" data-detback>‹ Quay lại hộp thoại thu nợ</button>':'')+'</div></div>';}
+
+const ST={od:['Quá hạn','p-od'],pp:['Đã trả một phần','p-pp']};
+const S={dev:'tablet',flt:'all',q:'',cur:'c0',sel:{},state:'',cap:20000000};
+const $=id=>document.getElementById(id);
+const pill=s=>'<span class="pill '+ST[s][1]+'">'+ST[s][0]+'</span>';
+function visInv(c){return c.inv.filter(i=>S.flt==='all'||i.st===S.flt);}
+function visCust(){const q=S.q.trim().toLowerCase();return C.filter(c=>visInv(c).length&&(!q||c.n.toLowerCase().includes(q)||c.p.includes(q)||c.inv.some(i=>i.no.toLowerCase().includes(q))));}
+function selList(){const c=C.find(x=>x.id===S.cur);return c?visInv(c).filter(i=>S.sel[i.no]):[];}
+function render(){
+ const all=C.flatMap(c=>c.inv);$('c-all').textContent=all.length;$('c-od').textContent=all.filter(i=>i.st==='od').length;$('c-pp').textContent=all.filter(i=>i.st==='pp').length;
+ document.querySelectorAll('#chips .chip[data-f]').forEach(b=>b.classList.toggle('on',b.dataset.f===S.flt));
+ const vc=visCust();if(!vc.find(c=>c.id===S.cur))S.cur=vc[0]?vc[0].id:null;
+ const tot=vc.reduce((a,c)=>a+visInv(c).reduce((x,i)=>x+i.out,0),0);
+ const off=S.state==='offline';
+ $('colL').innerHTML=(off?'<div class="note n-err">📡 Mất kết nối mạng — số liệu là lần tải lúc 09:41. Không thu nợ được cho tới khi có mạng.</div>':'')+'<div class="meta">'+vc.length+' khách · tổng nợ <b style="color:var(--red)">'+f(tot)+' ₫</b> · ẩn 11 đơn nợ lẻ dưới 1.000 ₫</div>'+(vc.length?vc.map(c=>{const v=visInv(c),t=v.reduce((a,i)=>a+i.out,0),hasOd=v.some(i=>i.st==='od'),hasPp=v.some(i=>i.st==='pp');return '<button class="cust'+(c.id===S.cur?' on':'')+'" data-c="'+c.id+'"><div class="av">'+c.k+'</div><div style="flex:1;min-width:0"><div class="cname">'+c.n+'</div><div class="meta">'+c.p+' · '+v.length+' đơn</div><div style="margin-top:5px;display:flex;gap:5px;flex-wrap:wrap">'+(hasOd?pill('od'):'')+(hasPp?pill('pp'):'')+(c.credit?'<span class="pill p-cr">Có tiền dư</span>':'')+'</div></div><div style="text-align:right"><div class="meta" style="font-size:11px">Còn nợ</div><div class="amt">'+f(t)+'</div></div></button>';}).join(''):'<div class="empty">Không có khách nào khớp bộ lọc.</div>');
+ const c=C.find(x=>x.id===S.cur);
+ if(!c){$('colR').innerHTML='<div class="empty">Chọn một khách để xem đơn nợ.</div>';}
+ else{const v=visInv(c);const view=S.state==='viewonly';
+  $('colR').innerHTML='<div class="right-head"><div style="flex:1;min-width:0"><div style="font-size:19px;font-weight:800">'+c.n+'</div><div class="meta">'+v.length+' đơn nợ tại quầy'+(c.hidden?' · ẩn '+c.hidden:'')+'</div></div>'+(view?'':'<button class="btn" id="all" style="border:2px solid var(--orange);color:var(--orange);font-weight:700">✓ Chọn tất cả</button>')+'<button class="btn">Lịch sử thu</button></div>'+
+  (c.credit?'<div class="note n-ok" style="display:flex;align-items:center;gap:10px"><span style="flex:1">Khách có tiền dư <b>'+f(c.credit)+' ₫</b> từ '+c.cdocs.length+' đơn đã trả hàng tại quầy.</span><button class="btn" data-refund style="border:2px solid var(--green);color:var(--green);font-weight:700">Trả lại tiền dư</button></div>':'')+
+  v.map(i=>'<button class="inv'+(S.sel[i.no]&&!view?' on':'')+'" data-i="'+i.no+'"'+(view?' style="cursor:default"':'')+'>'+(view?'':'<span class="dot">✓</span>')+'<div style="flex:1;min-width:0"><div class="no">'+i.no+'</div><div class="sub">Bán '+i.sold+' · Hạn TT '+i.due+' · nợ '+i.days+' ngày · NV Thu Hằng</div>'+pill(i.st)+'</div><div style="text-align:right"><div class="meta" style="font-size:11.5px">Tổng '+f(i.tot)+' · đã thu '+f(i.paid)+'</div><div class="amt" style="font-size:21px">'+f(i.out)+'</div></div><span data-det="'+i.no+'" role="button" aria-label="Xem chi tiết đơn" style="font-size:26px;color:#6b7280;background:#f3f4f6;border-radius:10px;width:36px;height:52px;display:grid;place-items:center;cursor:pointer">›</span></button>').join('');}
+ const sl=selList(),sum=sl.reduce((a,i)=>a+i.out,0);
+ const view=S.state==='viewonly';
+ $('foot').style.display=view?'none':'';
+ $('footT').innerHTML=sl.length?'Đã chọn <b>'+sl.length+' đơn</b> của '+c.n:'Chạm đơn để chọn';
+ $('go').textContent=sl.length?'Thu nợ '+f(sum)+' ₫':'Thu nợ';$('go').disabled=!sl.length||off;
+ if(view&&!document.querySelector('#colR .viewnote'))$('colR').insertAdjacentHTML('beforeend','<div class="note n-warn viewnote">Bạn chỉ có quyền xem công nợ tại quầy này — không có nút Thu nợ.</div>');
+ const dev=$('dev');dev.className='device '+S.dev;$('stitle').textContent=(S.dev==='phone'&&dev.dataset.view==='inv'&&c)?c.n:'Công nợ';
+}
+function selectCust(id){if(S.cur!==id){S.sel={};S.cur=id;const c=C.find(x=>x.id===id);visInv(c).forEach(i=>S.sel[i.no]=true);}if(S.dev==='phone')$('dev').dataset.view='inv';render();}
+$('colL').addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(b)selectCust(b.dataset.c);});
+$('colR').addEventListener('click',e=>{if(e.target.closest('[data-refund]')){refundDlg('edit');return;}const dd=e.target.closest('[data-det]');if(dd){$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:760px">'+detHtml(dd.dataset.det,0)+'</div></div>';return;}if(S.state==='viewonly')return;const b=e.target.closest('[data-i]');if(b){S.sel[b.dataset.i]=!S.sel[b.dataset.i];render();}if(e.target.id==='all'){const c=C.find(x=>x.id===S.cur);visInv(c).forEach(i=>S.sel[i.no]=true);render();}});
+document.querySelectorAll('#chips .chip[data-f]').forEach(b=>b.onclick=()=>{S.flt=b.dataset.f;S.sel={};render();});
+$('q').addEventListener('input',e=>{S.q=e.target.value;render();});
+$('phBack').onclick=()=>{$('dev').dataset.view='list';render();};
+document.querySelectorAll('[data-dev]').forEach(b=>b.onclick=()=>{S.dev=b.dataset.dev;document.querySelectorAll('[data-dev]').forEach(x=>x.classList.toggle('on',x===b));$('dev').dataset.view=S.dev==='phone'?'list':'list';closeDlg();render();});
+// ------- Hộp thoại Thu nợ -------
+let D=null;
+function refundDlg(stage){const c=C.find(x=>x.id==='c3');const debt=c.inv.reduce((a,i)=>a+i.out,0),back=c.credit-debt;
+ if(stage==='done'){$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:520px;padding:24px;text-align:center"><div style="width:54px;height:54px;border-radius:50%;background:#dcfce7;color:var(--green);display:grid;place-items:center;margin:0 auto 10px;font-size:26px">✓</div><b style="font-size:19px">Đã trả lại '+f(back)+' ₫ cho khách</b><div class="meta">THU HUONG · Tiền mặt · Ca POSA-OS-26-0000027</div><table style="margin:12px 0"><tr><td>Tiền dư từ trả hàng</td><td class="n">'+f(c.credit)+'</td></tr><tr><td>Trừ nợ ACC-SINV-2026-00050</td><td class="n">−'+f(debt)+'</td></tr><tr><td><b>Đã chi cho khách</b></td><td class="n"><b>'+f(back)+'</b></td></tr></table><div class="note n-warn">Khách hết nợ và hết tiền dư tại quầy. Tiền mặt dự kiến của ca giảm '+f(back)+' ₫.</div><div style="display:flex;gap:8px;justify-content:center;margin-top:14px"><button class="btn" data-x>Đóng</button><button class="big" style="height:46px">🖨 In phiếu chi</button></div></div></div>';return;}
+ $('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:900px"><div class="dh"><b>Trả lại tiền dư cho khách</b><button class="x" data-x aria-label="Đóng">×</button></div><div class="dgrid"><div class="box"><div class="bh"><div><b>'+c.n+'</b><div class="meta" style="font-size:12px">'+c.p+' · POS Chiềng Sại</div></div><div style="text-align:right"><div class="meta" style="font-size:11px">Tiền dư tại quầy</div><b style="color:var(--green)">₫ '+f(c.credit)+'</b></div></div><div style="padding:8px 10px"><div class="meta" style="font-weight:700;font-size:11.5px">TIỀN DƯ TỪ ĐƠN ĐÃ TRẢ HÀNG</div><table>'+c.cdocs.map(d=>'<tr><td><b>'+d[0]+'</b><div class="meta" style="font-size:11.5px">'+d[1]+'</div></td><td class="n" style="color:var(--green)">'+f(d[2])+'</td></tr>').join('')+'</table><div class="meta" style="font-weight:700;font-size:11.5px;margin-top:10px">TRỪ NỢ TRƯỚC</div><table>'+c.inv.map(i=>'<tr><td><b>'+i.no+'</b><div class="meta" style="font-size:11.5px">Hạn '+i.due+' · '+ST[i.st][0].toLowerCase()+'</div></td><td class="n" style="color:var(--red)">−'+f(i.out)+'</td></tr>').join('')+'</table><div class="note n-info" style="margin-top:8px">Không tính điểm ví: điểm tích luỹ không hoàn bằng tiền.</div></div><div class="sum2"><div style="background:var(--red-soft)"><div class="meta" style="font-size:11px">TRỪ NỢ</div><b style="color:var(--red)">₫ '+f(debt)+'</b></div><div style="background:var(--green-soft)"><div class="meta" style="font-size:11px">TRẢ LẠI KHÁCH</div><b style="color:var(--green)">₫ '+f(back)+'</b></div></div></div><div class="box" style="padding:12px"><div class="meta" style="font-weight:700;font-size:11.5px">HÌNH THỨC TRẢ</div><div class="mops"><button class="mop on">💵 Tiền mặt</button><button class="mop">🏦 Chuyển khoản</button></div><div class="display">₫ '+f(back)+'</div><div class="meta" style="font-size:12px;margin:6px 0 4px">Ghi chú (bắt buộc)</div><input style="width:100%;border:1px solid var(--line);border-radius:8px;padding:8px" value="Khách đến nhận lại tiền hàng trả"><div class="note n-warn" style="margin-top:8px">Tiền mặt trả khách sẽ trừ vào tiền mặt dự kiến của ca. Chỉ role được trả lại tiền dư tại quầy mới thấy nút này.</div><button class="big" data-refundok style="width:100%;margin-top:10px">✓ Xác nhận trả lại '+f(back)+' ₫</button></div></div></div></div>';}
+function closeDlg(){$('ovHost').innerHTML='';D=null;}
+function openDlg(){const c=C.find(x=>x.id===S.cur);const sl=selList();if(!sl.length)return;
+ if(S.state==='noshift'){$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:440px;padding:26px;text-align:center"><div style="font-size:34px">🔒</div><b style="font-size:19px">Chưa mở ca bán hàng</b><p class="meta">Thu nợ phải ghi vào ca đang mở của bạn tại POS Chiềng Sại. Mở ca rồi thực hiện lại.</p><div style="display:flex;gap:8px;justify-content:center"><button class="btn" data-x>Đóng</button><button class="big" style="height:46px">Mở ca</button></div></div></div>';return;}
+ D={c,rows:sl.map(i=>({...i,pay:i.out})),amt:sl.reduce((a,i)=>a+i.out,0),mops:['cash'],split:{},phase:'edit'};
+ if(S.state==='over')D.amt+=58900; if(S.state==='changed'){D.rows[0].gone=true;D.rows[0].pay=0;D.amt=D.rows.reduce((a,r)=>a+(r.gone?0:r.out),0);}
+ alloc();drawDlg();}
+function alloc(){let left=D.amt;D.rows.forEach(r=>{if(r.gone){r.pay=0;return;}const a=Math.min(r.out,left);r.pay=a;left-=a;});}
+const MOPS=[['cash','💵 Tiền mặt'],['bank','🏦 Chuyển khoản'],['qr','📱 QR SePay'],['wallet','👛 Ví khách hàng']];
+function errs(){const e=[];const due=D.rows.reduce((a,r)=>a+(r.gone?0:r.out),0);
+ if(S.state==='changed')e.push('Đơn '+D.rows[0].no+' vừa được thu ở quầy khác, số nợ đã thay đổi. Hệ thống đã tải lại — kiểm tra rồi xác nhận lại.');
+ if(D.amt>due)e.push('Số tiền thu '+f(D.amt)+' ₫ lớn hơn tổng nợ các đơn đã chọn ('+f(due)+' ₫). Phần dư trả lại khách.');
+ if(D.amt<=0)e.push('Nhập số tiền thu.');
+ const cap=S.state==='cap'?200000:S.cap; if(D.amt>cap)e.push('Quầy POS Chiềng Sại chỉ thu tối đa '+f(cap)+' ₫ mỗi lần.');
+ if(D.mops.includes('wallet')){const need=D.mops.length>1?(D.split.wallet||0):D.amt;if(need>D.c.wallet)e.push('Ví khả dụng '+f(D.c.wallet)+' ₫ không đủ — chọn hình thức khác hoặc chia thêm.');}
+ if(D.mops.length>1){const s=D.mops.reduce((a,m)=>a+(D.split[m]||0),0);if(s!==D.amt)e.push('Tổng các hình thức '+f(s)+' ₫ phải bằng số thu '+f(D.amt)+' ₫.');}
+ if(S.state==='offline')e.push('Mất kết nối mạng — không thu được lúc này.');
+ return e;}
+function qrSvg(){let s='<svg viewBox="0 0 29 29" width="150" height="150" shape-rendering="crispEdges" aria-label="Mã QR minh hoạ"><rect width="29" height="29" fill="#fff"/>';let x=11;for(let i=0;i<29;i++)for(let j=0;j<29;j++){x=(x*1103515245+12345)&0x7fffffff;const fz=(a,b)=>a>=0&&a<7&&b>=0&&b<7;const F=fz(i,j)||fz(i,j-22)||fz(i-22,j);if(F){const ii=i>21?i-22:i,jj=j>21?j-22:j;if(ii==0||ii==6||jj==0||jj==6||(ii>1&&ii<5&&jj>1&&jj<5))s+='<rect x="'+j+'" y="'+i+'" width="1" height="1" fill="#111"/>';}else if((x>>9)&1)s+='<rect x="'+j+'" y="'+i+'" width="1" height="1" fill="#111"/>';}return s+'</svg>';}
+function drawDlg(){const c=D.c,E=errs();
+ if(D.det){$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:760px">'+detHtml(D.det,1)+'</div></div>';return;}
+ if(D.phase==='qr'){$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:640px"><div class="dh"><b>Chờ tiền về · QR SePay</b><button class="x" data-x>×</button></div><div style="padding:6px 18px 18px"><div class="qr"><div class="qrbox">'+qrSvg()+'</div><div style="font-size:14px;line-height:1.8"><div>Ngân hàng: <b>MBBank</b> · TK •••• 2468</div><div>Số tiền: <b style="color:var(--red)">'+f(D.mops.length>1?D.split.qr:D.amt)+' ₫</b></div><div>Nội dung: <b style="font-family:var(--mono)">TN8F3A2C</b></div><div style="color:var(--blue);font-weight:600"><span class="spin"></span> Đang chờ tiền về…</div><div class="meta">Tự hoàn tất khi SePay báo đúng số tiền + nội dung. Chưa tạo phiếu thu.</div></div></div><div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap"><button class="btn" data-back>Đổi phương thức</button><button class="btn">🖨 In QR cho khách</button><button class="btn" data-x style="color:#b91c1c;border-color:#b91c1c">Huỷ thao tác</button><button class="btn" data-sim style="margin-left:auto;border-style:dashed">(mô phỏng) Tiền đã về</button></div></div></div></div>';return;}
+ if(D.phase==='done'){const rem=c.inv.reduce((a,i)=>a+i.out,0)-D.amt;$('ovHost').innerHTML='<div class="ov"><div class="dlg" style="max-width:520px;padding:24px;text-align:center"><div style="width:54px;height:54px;border-radius:50%;background:#dcfce7;color:var(--green);display:grid;place-items:center;margin:0 auto 10px;font-size:26px">✓</div><b style="font-size:19px">Đã thu nợ '+f(D.amt)+' ₫</b><div class="meta">'+c.n+' · '+D.mops.map(m=>MOPS.find(x=>x[0]===m)[1].slice(3)).join(' + ')+' · Ca POSA-OS-26-0000027</div><table style="margin:12px 0"><tr><th>Đơn</th><th class="n">Đã thu</th><th class="n">Còn nợ</th></tr>'+D.rows.filter(r=>!r.gone).map(r=>'<tr><td>'+r.no+'</td><td class="n">'+f(r.pay)+'</td><td class="n">'+f(r.out-r.pay)+'</td></tr>').join('')+'</table><div class="note n-warn"><b>Khách còn nợ tại quầy: '+f(Math.max(rem,0))+' ₫</b></div><div style="display:flex;gap:8px;justify-content:center;margin-top:14px"><button class="btn" data-x>Đóng</button><button class="big" style="height:46px">🖨 In phiếu thu</button></div></div></div>';return;}
+ const rows=D.rows.map((r,k)=>{const on=!r.gone&&r.pay>0;return '<div class="inv'+(on?' on':'')+'" style="cursor:default;margin:8px 8px 0;padding:10px 12px;'+(r.gone?'opacity:.45':'')+'"><button class="dot" data-tg="'+k+'" aria-label="Chọn đơn" style="border-style:solid;cursor:pointer">✓</button><div style="flex:1;min-width:0"><div class="no" style="font-size:15px">'+r.no+'</div><div class="sub">'+(r.gone?'vừa được thu ở quầy khác':'Bán '+r.sold+' · Hạn TT '+r.due+' · nợ '+r.days+' ngày')+'</div>'+pill(r.st)+'</div><div style="text-align:right"><div class="meta" style="font-size:11.5px">Còn nợ '+f(r.gone?0:r.out)+'</div><div class="meta" style="font-size:11px;margin-top:4px">Thu lần này</div><input class="alloc" data-k="'+k+'" value="'+f(r.pay)+'" '+(r.gone?'disabled':'')+'></div><button data-det="'+r.no+'" aria-label="Xem chi tiết đơn" style="border:0;background:#f3f4f6;border-radius:10px;width:36px;height:52px;font-size:24px;color:#6b7280;cursor:pointer">›</button></div>';}).join('');
+ const right=D.mops.length>1?'<div class="meta">Số tiền từng hình thức (tổng = số thu)</div>'+D.mops.map(m=>'<div class="split"><span>'+MOPS.find(x=>x[0]===m)[1]+'</span><input data-sp="'+m+'" value="'+f(D.split[m]||0)+'"></div>').join(''):
+  '<div class="display">₫ '+f(D.amt)+'</div><div class="keys">'+['7','8','9','4','5','6','1','2','3','00','0','C'].map(k=>'<button data-key="'+k+'">'+k+'</button>').join('')+'</div>';
+ const walletInfo=D.mops.includes('wallet')?'<div class="note '+(c.wallet>0?'n-ok':'n-err')+'" style="margin-top:8px">Số dư ví khả dụng: <b>'+f(c.wallet)+' ₫</b>'+(c.wallet>0?' · sau khi trừ '+f(Math.max(c.wallet-(D.mops.length>1?(D.split.wallet||0):D.amt),0))+' ₫':'')+'</div>':'';
+ const qrInfo=D.mops.includes('qr')?'<div class="note n-info" style="margin-top:8px">QR SePay: bấm xác nhận sẽ hiện mã QR, chờ tiền về mới tạo phiếu thu.</div>':'';
+ const rem=D.c.inv.reduce((a,i)=>a+i.out,0)-D.amt;
+ $('ovHost').innerHTML='<div class="ov"><div class="dlg"><div class="dh"><b>Thu nợ khách hàng</b><button class="x" data-x aria-label="Đóng">×</button></div><div class="dgrid"><div class="box" style="display:flex;flex-direction:column"><div class="bh"><div><b>'+c.n+'</b><div class="meta" style="font-size:12px">'+c.p+' · POS Chiềng Sại</div></div><div style="text-align:right"><div class="meta" style="font-size:11px">Tổng nợ tại quầy</div><b style="color:var(--red)">₫ '+f(c.inv.reduce((a,i)=>a+i.out,0))+'</b></div></div>'+rows+''+(c.credit?'<div class="note n-ok" style="margin:8px">Khách có tiền dư '+f(c.credit)+' ₫ — dùng nút "Trả lại tiền dư" ở màn hình Công nợ (trừ nợ trước, phần còn lại trả khách).</div>':'')+E.map(e=>'<div class="note n-err" style="margin:8px 8px 0">⚠ '+e+'</div>').join('')+'<div class="sum2" style="margin-top:auto;padding-top:8px"><div style="background:var(--red-soft)"><div class="meta" style="font-size:11px">THU LẦN NÀY</div><b style="color:var(--red)">₫ '+f(D.amt)+'</b></div><div style="background:var(--orange-soft)"><div class="meta" style="font-size:11px">NỢ CÒN LẠI</div><b style="color:var(--orange)">₫ '+f(Math.max(rem,0))+'</b></div></div></div>'+
+ '<div class="box" style="padding:12px"><div class="meta" style="font-weight:700;font-size:11.5px">PHƯƠNG THỨC THANH TOÁN · chạm thêm để chia nhiều hình thức</div><div class="mops">'+MOPS.map(m=>'<button class="mop'+(D.mops.includes(m[0])?' on':'')+'" data-m="'+m[0]+'">'+m[1]+'</button>').join('')+'</div>'+right+walletInfo+qrInfo+'<button class="big" id="ok" style="width:100%;margin-top:10px" '+(E.length?'disabled':'')+'>'+(D.mops.includes('qr')?'Hiện mã QR':'✓ Xác nhận thu nợ')+'</button></div></div></div></div>';}
+$('go').onclick=openDlg;
+document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>{selectCust(b.dataset.open);document.getElementById('proto').scrollIntoView({behavior:'smooth'});setTimeout(openDlg,300);});
+$('ovHost').addEventListener('click',e=>{const t=e.target;
+ if(t.closest('[data-x]')){closeDlg();return;}
+ if(t.closest('[data-refundok]')){refundDlg('done');return;}
+ if(!D&&t.closest('[data-detback]')){closeDlg();return;}
+ if(!D)return;
+ if(t.closest('[data-back]')){D.phase='edit';drawDlg();return;}
+ if(t.closest('[data-det]')){D.det=t.closest('[data-det]').dataset.det;drawDlg();return;}
+ if(t.closest('[data-detback]')){D.det=null;drawDlg();return;}
+ const tg=t.closest('[data-tg]');if(tg){const r=D.rows[+tg.dataset.tg];if(!r.gone){r.pay=r.pay>0?0:r.out;D.amt=D.rows.reduce((a,x)=>a+x.pay,0);}drawDlg();return;}
+ if(t.closest('[data-sim]')){D.phase='done';drawDlg();return;}
+ const m=t.closest('[data-m]');if(m){const k=m.dataset.m;if(D.mops.includes(k)){if(D.mops.length>1)D.mops=D.mops.filter(x=>x!==k);}else D.mops.push(k);D.split={};if(D.mops.length>1){D.split[D.mops[0]]=D.amt;D.mops.slice(1).forEach(x=>D.split[x]=0);}drawDlg();return;}
+ const key=t.closest('[data-key]');if(key){const k=key.dataset.key;let s=String(D.amt);if(k==='C')s='0';else s=(s==='0'?'':s)+k;D.amt=Number(s)||0;alloc();drawDlg();return;}
+ if(t.id==='ok'){if(D.mops.includes('qr'))D.phase='qr';else D.phase='done';drawDlg();}
+});
+$('ovHost').addEventListener('change',e=>{if(!D)return;const t=e.target;const v=Number(String(t.value).replace(/[^\d]/g,''))||0;
+ if(t.dataset.k!==undefined){D.rows[+t.dataset.k].pay=v;D.amt=D.rows.reduce((a,r)=>a+r.pay,0);drawDlg();}
+ if(t.dataset.sp){D.split[t.dataset.sp]=v;drawDlg();}});
+// trạng thái
+document.querySelectorAll('[data-st]').forEach(b=>b.onclick=()=>{S.state=b.dataset.st==='reset'?'':b.dataset.st;closeDlg();
+ if(['noshift','cap','over','changed'].includes(S.state)){S.cur='c0';S.sel={};C[0].inv.forEach(i=>S.sel[i.no]=true);if(S.dev==='phone')$('dev').dataset.view='inv';render();openDlg();}else render();
+ document.getElementById('proto').scrollIntoView({behavior:'smooth'});});
+$('techT').addEventListener('change',e=>document.body.classList.toggle('show-tech',e.target.checked));
+C[0].inv.forEach(i=>S.sel[i.no]=true);render();
+})();
+</script>
+
+</body>
+</html>

@@ -223,7 +223,7 @@
 
 				<!-- Icon-Only Management Slider - Always Visible -->
 				<div class="flex-1 flex overflow-hidden">
-					<ManagementSlider @menu-clicked="handleManagementMenuClick" />
+					<ManagementSlider :show-debts="debtCollectionStore.canView" :debtor-count="debtCollectionStore.debtorCount" :show-day-report="dayReportStore.canView" @menu-clicked="handleManagementMenuClick" />
 
 					<!-- Main Content Container -->
 					<div
@@ -398,6 +398,7 @@
 								@proceed-to-payment="handleProceedToPayment"
 								@clear-cart="handleClearCart"
 								@save-draft="handleSaveDraft"
+								@hold-order="handleHoldOrder"
 								@apply-coupon="uiStore.showCouponDialog = true"
 								@show-offers="uiStore.showOffersDialog = true"
 								@remove-offer="
@@ -507,6 +508,30 @@
 				v-model="uiStore.showCustomerDialog"
 				:pos-profile="shiftStore.profileName"
 				@customer-selected="handleCustomerSelected"
+			/>
+
+			<!-- Cảnh báo công nợ khi chọn khách (PM-FEAT-00068) -->
+			<DebtWarningDialog
+				@change-customer="handleDebtWarningChangeCustomer"
+				@collect="handleDebtWarningCollect"
+			/>
+
+			<!-- Công nợ & Thu nợ (PM-FEAT-00066) -->
+			<DebtScreen v-if="uiStore.showDebtScreen" @close="uiStore.showDebtScreen = false" />
+			<DayReport v-if="showDayReport" @close="showDayReport = false" />
+			<!-- Giữ hàng cho khách đến nhận (PM-FEAT-00070) -->
+			<HoldOrderDialog
+				v-if="showHoldOrderDialog"
+				:items="cartStore.invoiceItems"
+				:customer="cartStore.customer"
+				@created="handleHoldCreated"
+				@close="showHoldOrderDialog = false"
+			/>
+			<DebtCollectionDialog
+				v-if="uiStore.debtCollection"
+				:customer="uiStore.debtCollection.customer"
+				:invoices="uiStore.debtCollection.invoices || []"
+				@close="uiStore.debtCollection = null"
 			/>
 
 			<!-- Shift Opening Dialog -->
@@ -727,6 +752,8 @@
 				@load-draft="handleLoadDraftFromManagement"
 				@delete-draft="handleDeleteDraft"
 				@refresh-history="loadInvoiceHistoryData"
+				:cart-busy="!cartStore.isEmpty"
+				@pickup-hold="handlePickupHold"
 			/>
 
 			<!-- Invoice Detail Dialog -->
@@ -1054,6 +1081,12 @@ import BatchSerialDialog from "@/components/sale/BatchSerialDialog.vue";
 import CouponDialog from "@/components/sale/CouponDialog.vue";
 import CreateCustomerDialog from "@/components/sale/CreateCustomerDialog.vue";
 import CustomerDialog from "@/components/sale/CustomerDialog.vue";
+import DebtWarningDialog from "@/components/debt/DebtWarningDialog.vue";
+import DebtCollectionDialog from "@/components/debt/DebtCollectionDialog.vue";
+import HoldOrderDialog from "@/components/hold/HoldOrderDialog.vue";
+import DebtScreen from "@/components/debt/DebtScreen.vue";
+import DayReport from "@/components/reports/DayReport.vue";
+import { useDayReportStore } from "@/stores/dayReport";
 import DraftInvoicesDialog from "@/components/sale/DraftInvoicesDialog.vue";
 import InvoiceCart from "@/components/sale/InvoiceCart.vue";
 import InvoiceTabsBar from "@/components/sale/InvoiceTabsBar.vue";
@@ -1104,6 +1137,8 @@ import { usePOSSettingsStore } from "@/stores/posSettings";
 import { usePOSShiftStore } from "@/stores/posShift";
 import { usePOSSyncStore } from "@/stores/posSync";
 import { usePOSUIStore } from "@/stores/posUI";
+import { useDebtWarningStore } from "@/stores/debtWarning";
+import { useDebtCollectionStore } from "@/stores/debtCollection";
 import { logger } from "@/utils/logger";
 
 // Initialize stores
@@ -1112,6 +1147,10 @@ const invoiceTabsStore = useInvoiceTabsStore();
 const shiftStore = usePOSShiftStore();
 const uiStore = usePOSUIStore();
 const offlineStore = usePOSSyncStore();
+const debtWarningStore = useDebtWarningStore();
+const debtCollectionStore = useDebtCollectionStore();
+const dayReportStore = useDayReportStore();
+const showDayReport = ref(false);
 const draftsStore = usePOSDraftsStore();
 const posSettingsStore = usePOSSettingsStore();
 const itemStore = useItemSearchStore();
@@ -1244,6 +1283,7 @@ const showStockLookup = ref(false);
 
 // Invoice Management dialog
 const showInvoiceManagement = ref(false);
+const showHoldOrderDialog = ref(false);
 
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
@@ -2261,11 +2301,13 @@ function handleRemarksUpdate(value) {
 	cartStore.remarks = value || "";
 }
 
-function handleCustomerSelected(selectedCustomer) {
+function handleCustomerSelected(selectedCustomer, meta = {}) {
 	if (selectedCustomer) {
 		cartStore.setCustomer(selectedCustomer);
 		uiStore.showCustomerDialog = false;
 		showSuccess(__("{0} selected", [selectedCustomer.customer_name]));
+		// Thu ngân chủ động chọn khách → bật cảnh báo công nợ; POS tự gán lại khách cũ thì không
+		debtWarningStore.check(selectedCustomer, { openDialog: !meta.restored });
 
 		const tab = invoiceTabsStore.activeTab;
 		if (tab?.pendingPaymentAfterCustomer) {
@@ -2275,6 +2317,20 @@ function handleCustomerSelected(selectedCustomer) {
 	} else {
 		cartStore.setCustomer(null);
 	}
+}
+
+// Nút "Đổi khách hàng" trên cảnh báo công nợ: bỏ khách, giữ giỏ, đưa con trỏ về ô tìm khách
+async function handleDebtWarningChangeCustomer() {
+	debtWarningStore.clear();
+	cartStore.setCustomer(null);
+	await nextTick();
+	document.getElementById("cart-customer-search")?.focus();
+}
+
+// Nút "Thu nợ ngay": mở hộp thoại Thu nợ của chức năng 1 (PM-FEAT-00066) với các đơn chọn sẵn.
+// Thu xong, chức năng 1 đặt uiStore.debtCollectedAt → store cảnh báo tự làm mới
+function handleDebtWarningCollect() {
+	debtWarningStore.startCollect();
 }
 
 function handleCreateCustomer(searchValue) {
@@ -2806,6 +2862,54 @@ function logoutWithCloseShift() {
 	}
 	earlyCloseConfirmFromLogoutFlow.value = false;
 	uiStore.showCloseShiftDialog = true;
+}
+
+/** Giữ hàng: bắt buộc khách có tên (không dùng khách lẻ mặc định của quầy) */
+function handleHoldOrder() {
+	const customer = cartStore.customer;
+	const name = customer?.name || customer;
+	if (!name || name === shiftStore.profileCustomer) {
+		showWarning(__("Hold orders need a named customer. Select or create the customer first."));
+		return;
+	}
+	showHoldOrderDialog.value = true;
+}
+
+function handleHoldCreated() {
+	cartStore.clearCart();
+	previousCartHash = "";
+}
+
+/** Khách đến lấy: server đã nhả giữ, nạp hàng của đơn vào giỏ để Checkout như bán thường */
+async function handlePickupHold(res) {
+	const missing = [];
+	for (const line of res?.lines || []) {
+		const item = await itemStore.getItem(line.item_code);
+		if (!item) {
+			missing.push(line.item_code);
+			continue;
+		}
+		const uom = line.stock_uom || item.stock_uom || item.uom;
+		const rate = item.uom_prices?.[uom] ?? item.rate;
+		try {
+			await cartStore.addItem(
+				{ ...item, uom, rate, price_list_rate: rate },
+				line.qty,
+				true,
+				shiftStore.currentProfile,
+			);
+		} catch (error) {
+			missing.push(line.item_code);
+			log.error("Không nạp được hàng của đơn giữ vào giỏ", error);
+		}
+	}
+	if (res?.customer) cartStore.setCustomer(res.customer);
+	previousCartHash = computeCartHash();
+	if (missing.length) {
+		showWarning(__("Could not add {0} to the cart. Add them manually.", [missing.join(", ")]));
+	} else {
+		showSuccess(__("{0} moved to the cart. Check out to take payment.", [res?.name]));
+	}
 }
 
 async function handleSaveDraft() {
@@ -3341,6 +3445,10 @@ function handleManagementMenuClick(menuItem) {
 		// Load drafts data
 		draftsStore.loadDrafts();
 		showInvoiceManagement.value = true;
+	} else if (menuItem === "debts") {
+		uiStore.showDebtScreen = true;
+	} else if (menuItem === "day-report") {
+		showDayReport.value = true;
 	} else if (menuItem === "products") {
 		// Open Stock Lookup dialog in search mode
 		showStockLookup.value = true;

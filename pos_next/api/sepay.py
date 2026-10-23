@@ -228,6 +228,13 @@ def receive_webhook():
 		frappe.response["http_status_code"] = 405
 		return {"success": False, "message": "Method Not Allowed"}
 
+	# Xác thực API key (SePay gửi header "Authorization: Apikey <key>"). Site đã khai
+	# sepay_webhook_api_key trong site_config thì mọi webhook phải khớp khoá.
+	authorized = _webhook_authorized()
+	if authorized is False:
+		frappe.response["http_status_code"] = 401
+		return {"success": False, "message": "Unauthorized"}
+
 	try:
 		raw = frappe.request.get_data(as_text=True)
 		data = json.loads(raw) if raw else {}
@@ -247,6 +254,37 @@ def receive_webhook():
 	# Deduplication: check if we already processed this SePay transaction
 	if sepay_id and _is_sepay_transaction_processed(sepay_id):
 		_return_webhook_success()
+
+	# Thu nợ tại quầy: mã "TN..." (cấu trúc mã thanh toán TN trên SePay)
+	from pos_next.api.debt_collection import find_debt_qr_code, process_debt_qr_payment
+
+	# Hàm _return_webhook_success() không dừng hàm, nên tự chặn tiền ra và webhook gửi lại
+	debt_code = find_debt_qr_code(data.get("code")) or find_debt_qr_code(content)
+	if debt_code and not authorized:
+		# Thu nợ tạo phiếu thu thật: bắt buộc site khai API key
+		frappe.log_error(f"SePay debt QR {debt_code}: site chưa khai sepay_webhook_api_key", "SePay Webhook")
+		_return_webhook_success()
+		return
+	if debt_code and (data.get("transferType") != "in" or (sepay_id and _is_sepay_transaction_processed(sepay_id))):
+		_return_webhook_success()
+		return
+	if debt_code:
+		status, message, debt_collection_id = process_debt_qr_payment(debt_code, amount)
+		if status != "Processed":
+			frappe.log_error(f"SePay debt QR {debt_code}: {message}", "SePay Webhook")
+		_log_sepay_transaction(
+			sepay_id=sepay_id,
+			invoice_name=None,
+			amount=amount,
+			reference_code=reference_code,
+			data=data,
+			status=status,
+			message=message,
+			debt_collection_id=debt_collection_id,
+			payment_code=debt_code,
+		)
+		_return_webhook_success()
+		return
 
 	# Extract order/invoice ID from content (e.g. DH123 -> 123, DH-SINV-00001 -> SINV-00001)
 	order_id = _extract_order_id(content)
@@ -290,6 +328,18 @@ def receive_webhook():
 		)
 
 	_return_webhook_success()
+
+
+def _webhook_authorized():
+	"""None = site chưa khai khoá; True/False = header khớp / không khớp."""
+	import hmac
+
+	key = frappe.conf.get("sepay_webhook_api_key")
+	if not key:
+		return None
+	header = (frappe.get_request_header("Authorization") or "").strip()
+	given = header[len("Apikey "):].strip() if header.lower().startswith("apikey ") else ""
+	return bool(given) and hmac.compare_digest(given, str(key))
 
 
 def _return_webhook_success():
@@ -523,16 +573,32 @@ def _add_sepay_payment_direct(doc, amount, mode_of_payment, reference_no, transa
 	frappe.db.commit()
 
 
-def _log_sepay_transaction(sepay_id, invoice_name, amount, reference_code, data):
-	"""Log SePay transaction for deduplication. Uses Error Log if no custom doctype."""
+def _log_sepay_transaction(
+	sepay_id,
+	invoice_name,
+	amount,
+	reference_code,
+	data,
+	status="Processed",
+	message=None,
+	debt_collection_id=None,
+	payment_code=None,
+):
+	"""Ghi giao dịch SePay: chống xử lý trùng khi SePay gửi lại webhook, và để kế toán
+	theo dõi giao dịch không khớp (Unmatched)."""
 	if sepay_id and frappe.db.table_exists("SePay Transaction Log"):
 		try:
 			frappe.get_doc({
 				"doctype": "SePay Transaction Log",
 				"sepay_transaction_id": str(sepay_id),
+				"status": status,
 				"sales_invoice": invoice_name,
+				"debt_collection_id": debt_collection_id,
+				"payment_code": payment_code or (data or {}).get("code"),
 				"amount": amount,
 				"reference_code": reference_code,
+				"content": (data or {}).get("content"),
+				"message": message,
 				"raw_data": json.dumps(data) if data else "",
 			}).insert(ignore_permissions=True)
 			frappe.db.commit()

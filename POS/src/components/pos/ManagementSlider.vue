@@ -88,6 +88,48 @@
 			</div>
 		</button>
 
+		<!-- Công nợ (Thu nợ khách hàng) -->
+		<button
+			v-if="showDebts"
+			@click="handleMenuClick('debts')"
+			:class="[
+				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
+				activeMenu === 'debts'
+					? 'bg-red-100 text-red-600'
+					: 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+			]"
+			:title="__('Customer Debts')"
+		>
+			<FeatherIcon name="credit-card" class="w-5 h-5" />
+			<span
+				v-if="debtorCount > 0"
+				class="absolute -top-1 -end-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold leading-[18px] text-center"
+			>
+				{{ debtorCount > 99 ? "99+" : debtorCount }}
+			</span>
+			<div class="absolute start-full ms-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+				{{ __('Customer Debts') }}
+			</div>
+		</button>
+
+		<!-- Báo cáo kết ngày -->
+		<button
+			v-if="showDayReport"
+			@click="handleMenuClick('day-report')"
+			:class="[
+				'w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group',
+				activeMenu === 'day-report'
+					? 'bg-red-100 text-red-600'
+					: 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+			]"
+			:title="__('Day Report')"
+		>
+			<FeatherIcon name="bar-chart-2" class="w-5 h-5" />
+			<div class="absolute start-full ms-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
+				{{ __('Day Report') }}
+			</div>
+		</button>
+
 		<!-- Divider -->
 		<div class="w-8 border-t border-gray-200 my-2"></div>
 
@@ -116,6 +158,13 @@ import { ref } from "vue"
 
 // Temporarily hide Dashboard and Reports in sidebar (set to false to show again)
 const HIDE_DASHBOARD_AND_REPORTS = true
+
+defineProps({
+	showDebts: { type: Boolean, default: false },
+	/** Số khách đang nợ tại quầy */
+	debtorCount: { type: Number, default: 0 },
+	showDayReport: { type: Boolean, default: false },
+})
 
 const emit = defineEmits(["menu-clicked"])
 

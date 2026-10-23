@@ -1949,6 +1949,10 @@ const isExactAmountValid = computed(() => {
 	return totalPaid.value <= roundCurrency(props.grandTotal)
 })
 
+// Mức lệch làm tròn server cho qua (CREDIT_SALE_TOLERANCE trong api/debt_collection.py)
+const PARTIAL_MIN_PAID = 10
+const canPayPartially = computed(() => props.allowPartialPayment || props.allowCreditSale)
+
 const canComplete = computed(() => {
 	// Check sales person validation first (mandatory when enabled)
 	if (!isSalesPersonValid.value) {
@@ -1960,9 +1964,11 @@ const canComplete = computed(() => {
 		return false
 	}
 
-	// If partial payment is allowed, can complete with any amount > 0
-	if (props.allowPartialPayment) {
-		return totalPaid.value > 0 && paymentEntries.value.length > 0
+	// Trả một phần: khớp server — cần "thanh toán một phần" hoặc "bán chịu",
+	// hoá đơn bán phải trả > 10 (mức lệch làm tròn), trả ít hơn coi như chưa trả
+	if (canPayPartially.value) {
+		const minPaid = isSalesOrder.value ? 0 : PARTIAL_MIN_PAID
+		if (totalPaid.value > minPaid && paymentEntries.value.length > 0) return true
 	}
 
 	// If write-off is applied and covers the remaining amount, can complete
@@ -1988,7 +1994,7 @@ const paymentButtonText = computed(() => {
 	) {
 		return __("Complete Payment")
 	}
-	if (props.allowPartialPayment && totalPaid.value > 0) {
+	if (canPayPartially.value && totalPaid.value > 0) {
 		return __("Partial Payment")
 	}
 	return __("Complete Payment")

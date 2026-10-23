@@ -1708,6 +1708,13 @@ def get_stock_quantities(item_codes, warehouse):
 		if not warehouses:
 			return []
 
+		# Giữ hàng (PM-FEAT-00070): nhả đơn giữ quá hạn trước khi đọc, trả thêm phần đang giữ
+		from pos_next.api.hold_orders import release_expired_holds, stock_reservation_enabled
+
+		with_reserved_stock = bool(stock_reservation_enabled())
+		if with_reserved_stock:
+			release_expired_holds(normalized_codes, warehouses)
+
 		# Batch query for stock quantities across all relevant warehouses using Query Builder
 		Bin = DocType("Bin")
 		stock_rows = (
@@ -1715,7 +1722,8 @@ def get_stock_quantities(item_codes, warehouse):
 			.select(
 				Bin.item_code,
 				fn.Coalesce(fn.Sum(Bin.actual_qty), 0).as_("actual_qty"),
-				fn.Coalesce(fn.Sum(Bin.reserved_qty), 0).as_("reserved_qty")
+				fn.Coalesce(fn.Sum(Bin.reserved_qty), 0).as_("reserved_qty"),
+				fn.Coalesce(fn.Sum(Bin.reserved_stock), 0).as_("reserved_stock"),
 			)
 			.where(Bin.item_code.isin(normalized_codes))
 			.where(Bin.warehouse.isin(warehouses))
@@ -1743,16 +1751,18 @@ def get_stock_quantities(item_codes, warehouse):
 				actual_qty = flt(row["actual_qty"]) if row else 0.0
 				reserved_qty = flt(row["reserved_qty"]) if row else 0.0
 
-			result.append(
-				{
-					"item_code": item_code,
-					"warehouse": warehouse,
-					"actual_qty": actual_qty,
-					"stock_qty": actual_qty,  # Alias for frontend convenience
-					"reserved_qty": reserved_qty,
-					"available_qty": actual_qty - reserved_qty,
-				}
-			)
+			row_data = {
+				"item_code": item_code,
+				"warehouse": warehouse,
+				"actual_qty": actual_qty,
+				"stock_qty": actual_qty,  # Alias for frontend convenience
+				"reserved_qty": reserved_qty,
+				"available_qty": actual_qty - reserved_qty,
+			}
+			if with_reserved_stock:
+				row = item_stock_map.get(item_code)
+				row_data["reserved_stock"] = flt(row["reserved_stock"]) if row else 0.0
+			result.append(row_data)
 
 		return result
 

@@ -1,0 +1,496 @@
+<title>Giữ hàng POS bấm thử</title>
+<style>
+/* Tái tạo màn POS Next (quầy Chiềng Sại) — một giao diện sáng cố định như POS thật; cột: thanh icon | lưới hàng | giỏ */
+:root{color-scheme:light;
+ --bg:#f3f4f6;--card:#ffffff;--ink:#111827;--muted:#6b7280;--line:#e5e7eb;--soft:#f9fafb;
+ --brand:#c4161c;--brand-soft:#fdecec;--hold:#047857;--hold-soft:#d1fae5;--amber:#b45309;--amber-soft:#fef3c7;
+ --blue:#1d4ed8;--blue-soft:#dbeafe;--red:#b91c1c;--red-soft:#fef2f2;--draft:#c2410c;--draft-soft:#fff7ed;
+ --f:system-ui,-apple-system,"Segoe UI",Inter,sans-serif;--mono:ui-monospace,Menlo,Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 var(--f)}
+button{font:inherit;cursor:pointer;color:inherit}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--hold);outline-offset:2px}
+.top{height:56px;background:var(--card);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding-inline:12px}
+.logo{width:36px;height:36px;border-radius:10px;background:var(--brand);display:grid;place-items:center;color:#fff}
+.brand b{display:block;font-size:14px}.brand span{color:var(--muted);font-size:12px}
+.pill{border-radius:8px;padding:5px 10px;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.pill.clock{background:var(--brand-soft);color:var(--brand)} .pill.shift{background:#fef9c3;color:#854d0e}
+.top .sp{flex:1}
+.net{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+.net.on{color:var(--brand)} .net.off{color:#fff;background:var(--red);border-radius:8px;padding:5px 10px}
+.av{width:32px;height:32px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px}
+.app{display:grid;grid-template-columns:52px minmax(0,1fr) minmax(0,1fr);height:calc(100% - 56px);min-height:620px}
+html,body{height:100%}
+.rail{background:var(--card);border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:12px}
+.rail button{width:38px;height:38px;border-radius:10px;border:0;background:none;color:var(--muted);display:grid;place-items:center;position:relative}
+.rail button:hover{background:var(--soft)} .rail button.on{background:var(--hold-soft);color:var(--hold)}
+.rail .dot{position:absolute;top:2px;right:2px;min-width:16px;height:16px;border-radius:8px;background:var(--hold);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px}
+.items{display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--line);background:var(--card)}
+.tabs{display:flex;gap:6px;padding:10px 12px 0}
+.tab{background:var(--brand);color:#fff;border-radius:8px;padding:5px 12px;font-weight:600;font-size:12px;border:0}
+.cats{display:flex;gap:6px;padding:10px 12px;overflow-x:auto}
+.cat{border:1px solid var(--line);border-radius:8px;padding:5px 12px;background:var(--card);white-space:nowrap;font-size:12px}
+.cat.on{border-color:var(--brand);color:var(--brand);background:var(--brand-soft);font-weight:600}
+.search{margin:0 12px 10px;display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:var(--soft)}
+.search input{border:0;background:none;flex:1;font:inherit;outline:none;min-width:0}
+.grid{flex:1;overflow:auto;padding:4px 12px 12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:12px;align-content:start}
+.it{position:relative;border:1px solid var(--line);border-radius:10px;padding:8px;background:var(--card);text-align:left}
+.it:hover{border-color:#93c5fd;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.ph{aspect-ratio:1;background:#eef0f3;border-radius:8px;display:grid;place-items:center;color:#c3c8d0;margin-bottom:6px}
+.it .nm{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .pr{font-size:11px;color:var(--brand);font-weight:700}.it .pr span{color:var(--muted);font-weight:400}
+.badge{position:absolute;top:-7px;right:-7px;background:#22a06b;color:#fff;font-weight:700;font-size:11px;border-radius:6px;padding:2px 7px;box-shadow:0 2px 4px rgba(0,0,0,.15);font-variant-numeric:tabular-nums}
+.badge.zero{background:#6b7280}
+.heldchip{position:absolute;top:16px;right:-7px;background:var(--amber-soft);color:#92400e;border:1px solid #fcd34d;font-weight:700;font-size:10px;border-radius:6px;padding:1px 6px}
+.cart{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.chd{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-weight:700;font-size:12px;background:var(--card);border-bottom:1px solid var(--line)}
+.chd button{border:0;background:none;color:var(--brand);font-weight:700}
+.cust{position:relative;margin:10px 14px 6px}
+.cbox{display:flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:8px 10px}
+.cbox input{border:0;flex:1;font:inherit;outline:none;min-width:0;background:none}
+.cbox .ci{width:26px;height:26px;border-radius:50%;background:var(--brand);color:#fff;display:grid;place-items:center;font-size:12px}
+.cbox .x{border:0;background:none;color:var(--brand);font-size:16px}
+.cdrop{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.12);z-index:20;max-height:260px;overflow:auto}
+.cdrop button{display:flex;gap:10px;align-items:center;width:100%;border:0;background:none;padding:8px 12px;text-align:left}
+.cdrop button:hover{background:var(--soft)} .cdrop small{color:var(--muted);display:block}
+.lines{flex:1;overflow:auto;padding:4px 14px;display:flex;flex-direction:column;gap:6px}
+.ln{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:10px;align-items:center}
+.ln .nm{font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ln .cd{font-size:11px;color:var(--muted)}
+.qty{display:flex;align-items:center;border:1px solid var(--line);border-radius:8px}
+.qty button{border:0;background:none;width:26px;height:26px}
+.qty input{width:42px;border:0;text-align:center;font:inherit;font-weight:700;outline:none}
+.ln .amt{font-weight:700;color:var(--brand);font-variant-numeric:tabular-nums;font-size:12px;min-width:84px;text-align:right}
+.ln .rm{border:0;background:none;color:var(--muted);font-size:15px}
+.empty{flex:1;display:grid;place-items:center;text-align:center;color:var(--muted)}
+.empty b{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}
+.foot{background:var(--card);border-top:1px solid var(--line);padding:10px 14px}
+.gt{display:flex;justify-content:space-between;align-items:center;background:var(--brand-soft);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-weight:700}
+.gt b{color:var(--brand);font-size:18px;font-variant-numeric:tabular-nums}
+.acts{display:flex;gap:8px;position:relative}
+.acts>button{flex:1;border:0;border-radius:10px;padding:10px 8px;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;gap:6px}
+.b-co{background:var(--brand);color:#fff}
+.b-hold{background:var(--hold);color:#fff}
+.b-draft{background:var(--draft-soft);color:var(--draft)}
+.acts>button[disabled]{background:#d1d5db;color:#fff;cursor:not-allowed}
+.hmenu{position:absolute;right:0;bottom:calc(100% + 8px);width:min(360px,100%);background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.18);padding:6px;z-index:30}
+.hmenu button{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;border:0;background:none;border-radius:8px;padding:9px 10px}
+.hmenu button:hover{background:var(--soft)} .hmenu b{display:block} .hmenu small{color:var(--muted)}
+/* modal */
+.ov{position:fixed;inset:0;background:rgba(17,24,39,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px}
+.dlg{background:var(--card);border-radius:16px;box-shadow:0 25px 50px -12px rgba(0,0,0,.35);width:min(1040px,100%);max-height:calc(100vh - 32px);display:flex;flex-direction:column;overflow:hidden}
+.dlg.sm{width:min(560px,100%)} .dlg.md{width:min(880px,100%)}
+.dh{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.dh h2{font-size:17px;margin:0;flex:1;text-wrap:balance}
+.dh .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--hold-soft);color:var(--hold);font-weight:800}
+.dh .ic.r{background:var(--red-soft);color:var(--red)} .dh .ic.a{background:var(--amber-soft);color:var(--amber)}
+.xbtn{width:32px;height:32px;border-radius:8px;border:0;background:var(--soft);color:var(--muted);font-size:15px}
+.db{overflow:auto;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.split{display:grid;grid-template-columns:320px minmax(0,1fr);gap:0;overflow:auto}
+.split>.l{padding:16px 20px;background:var(--soft);border-right:1px solid var(--line);display:flex;flex-direction:column;gap:12px}
+.split>.r{padding:16px 20px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.lb{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px}
+.fx{border:1px solid #d1d5db;border-radius:10px;padding:8px 12px;background:var(--card);display:flex;align-items:center;gap:8px}
+.fx small{color:var(--muted)}
+select.fx{width:100%;font:inherit;appearance:auto}
+textarea.fx{width:100%;font:inherit;resize:vertical;min-height:58px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid #d1d5db;border-radius:999px;padding:5px 12px;background:var(--card);font-size:13px}
+.chip.on{background:var(--hold);border-color:var(--hold);color:#fff;font-weight:600}
+.chip.on.r{background:var(--red);border-color:var(--red)}
+.chip[disabled]{opacity:.4;cursor:not-allowed}
+.hint{font-size:12px;color:var(--hold);background:var(--hold-soft);border-radius:8px;padding:6px 10px}
+.warn{border:1px solid #fecaca;background:var(--red-soft);color:#991b1b;border-radius:10px;padding:10px 12px}
+.warn.a{border-color:#fde68a;background:#fffbeb;color:#92400e}
+.warn.g{border-color:var(--line);background:var(--soft);color:#374151}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-size:12px;color:var(--muted);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);background:var(--soft);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+td small{display:block;color:var(--muted);font-size:11px}
+tr.short td{background:#fff7f7} tr.soon td{background:#fffbeb}
+.ok{color:var(--hold);background:var(--hold-soft);border-radius:6px;padding:2px 8px;font-weight:700;font-size:12px;white-space:nowrap}
+.bad{color:var(--red);background:var(--red-soft);border-radius:6px;padding:2px 8px;font-weight:700;font-size:12px;white-space:nowrap}
+.mini{border:1px solid #d1d5db;background:var(--card);border-radius:8px;padding:4px 9px;font-size:12px;font-weight:600;margin:2px 0 2px 4px;white-space:nowrap}
+.mini.r{border-color:#fca5a5;color:var(--red)} .mini.g{border-color:#6ee7b7;color:var(--hold)}
+.mini[disabled]{opacity:.45;cursor:not-allowed}
+.st{font-size:12px;font-weight:700;border-radius:6px;padding:3px 8px;white-space:nowrap}
+.st.giu{color:var(--hold);background:var(--hold-soft)} .st.soon{color:var(--amber);background:var(--amber-soft)}
+.st.lay{color:var(--blue);background:var(--blue-soft)} .st.het{color:#4b5563;background:#f3f4f6} .st.huy{color:var(--red);background:#fee2e2}
+.df{display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--line);flex-wrap:wrap}
+.df .sp{flex:1}
+.btn{border-radius:10px;padding:10px 16px;font-weight:700;border:1px solid #d1d5db;background:var(--card)}
+.btn.p{background:var(--hold);border-color:var(--hold);color:#fff;min-width:200px}
+.btn.r{background:var(--red);border-color:var(--red);color:#fff}
+.btn.a{background:var(--amber);border-color:var(--amber);color:#fff}
+.btn[disabled]{background:#d1d5db;border-color:#d1d5db;color:#fff;cursor:not-allowed}
+.chk{display:flex;align-items:center;gap:8px}
+.note{font-size:12px;color:var(--muted)}
+.big{font-size:24px;font-weight:800;color:var(--hold);letter-spacing:.02em}
+.kv{border:1px solid var(--line);border-radius:12px}
+.kv div{display:flex;justify-content:space-between;gap:12px;padding:9px 14px;border-bottom:1px solid #f1f5f9}.kv div:last-child{border-bottom:0}
+.kv span{color:var(--muted)}
+/* panel đơn chờ lấy */
+.panel{position:fixed;inset:12px 24px;background:var(--card);border-radius:14px;box-shadow:0 25px 50px -12px rgba(0,0,0,.35);z-index:60;display:flex;flex-direction:column;overflow:hidden}
+.pbg{position:fixed;inset:0;background:rgba(17,24,39,.4);z-index:55}
+.ph2{display:flex;align-items:center;gap:12px;padding:14px 20px}
+.ph2 b{font-size:16px;display:block}.ph2 small{color:var(--muted)}
+.ptabs{display:flex;gap:4px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--soft);overflow-x:auto}
+.ptab{border:0;background:none;padding:10px 14px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;white-space:nowrap;display:flex;gap:6px;align-items:center}
+.ptab.on{color:var(--hold);border-color:var(--hold)}
+.ptab .c{background:#e5e7eb;border-radius:999px;padding:0 7px;font-size:11px}.ptab.on .c{background:var(--hold-soft)}
+.pbody{flex:1;overflow:auto;padding:16px 20px;background:var(--soft);display:flex;flex-direction:column;gap:12px}
+.prow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.prow .sp{flex:1}
+.prow input{border:1px solid #d1d5db;border-radius:10px;padding:8px 12px;font:inherit;width:min(320px,100%);background:var(--card)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.cardx{border-radius:12px;padding:12px 16px;border:1px solid var(--line);background:var(--card)}
+.cardx small{font-weight:600;color:var(--muted)} .cardx b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.cardx.g{background:#ecfdf5;border-color:#a7f3d0}.cardx.g small{color:var(--hold)}
+.cardx.a{background:#fffbeb;border-color:#fde68a}.cardx.a small{color:var(--amber)}
+.tablebox{background:var(--card);border:1px solid var(--line);border-radius:12px;overflow-x:auto}
+.tablebox table{min-width:900px}
+.offbar{background:var(--red-soft);color:#991b1b;border:1px solid #fecaca;border-radius:10px;padding:8px 12px}
+/* phiếu */
+.slip{background:#fff;color:#111;width:300px;max-width:100%;margin:0 auto;padding:16px 14px;font:12px/1.5 var(--mono);box-shadow:0 0 0 1px var(--line)}
+.slip .c{text-align:center}.slip hr{border:0;border-top:1px dashed #000;margin:8px 0}
+.slip .r{display:flex;justify-content:space-between;gap:8px}
+/* bảng điều khiển mockup */
+.ctl{position:fixed;left:12px;bottom:12px;z-index:200;width:300px;max-width:calc(100% - 24px);background:#1f2937;color:#f9fafb;border-radius:14px;box-shadow:0 12px 30px rgba(0,0,0,.35);font-size:12px}
+.ctl summary{list-style:none;padding:10px 14px;font-weight:700;cursor:pointer;display:flex;justify-content:space-between}
+.ctl summary::-webkit-details-marker{display:none}
+.ctl .in{padding:0 14px 12px;display:flex;flex-direction:column;gap:9px}
+.ctl .lbl{color:#9ca3af;margin-bottom:3px}
+.seg{display:flex;background:#374151;border-radius:8px;padding:2px;gap:2px}
+.seg button{flex:1;border:0;background:none;color:#d1d5db;border-radius:6px;padding:5px 4px;font-size:12px}
+.seg button.on{background:#f9fafb;color:#111827;font-weight:700}
+.ctl .row2{display:flex;gap:6px;flex-wrap:wrap}
+.ctl .row2 button{border:0;border-radius:8px;padding:6px 9px;background:#374151;color:#f9fafb;font-size:12px}
+.ctl .row2 button:hover{background:#4b5563}
+.ctl .clk{font-variant-numeric:tabular-nums;color:#fcd34d}
+.ctl .num{display:flex;gap:6px;align-items:center}.ctl .num input{width:54px;border:0;border-radius:6px;padding:4px 6px;font:inherit}
+.toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);z-index:300;background:#111827;color:#fff;border-radius:10px;padding:10px 16px;font-weight:600;box-shadow:0 10px 25px rgba(0,0,0,.25);max-width:calc(100% - 32px)}
+@media (max-width:900px){
+ .app{grid-template-columns:minmax(0,1fr);height:auto}
+ .rail{flex-direction:row;justify-content:center;padding:6px;border-right:0;border-bottom:1px solid var(--line)}
+ .items{border-right:0}.grid{max-height:420px}
+ .split{grid-template-columns:minmax(0,1fr)}.split>.l{border-right:0;border-bottom:1px solid var(--line)}
+ .panel{inset:8px}.top .pill.shift{display:none}
+ .ln{grid-template-columns:minmax(0,1fr) auto;}
+}
+@media (prefers-reduced-motion:no-preference){.toast{animation:tin .18s ease-out}@keyframes tin{from{opacity:0;transform:translate(-50%,-6px)}}}
+</style>
+
+<header class="top">
+ <div class="logo"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
+ <div class="brand"><b>MBW Next POS</b><span>POS Chiềng Sại</span></div>
+ <span class="pill clock" id="clock">--:--:--</span>
+ <span class="pill shift">Đang mở ca · Thu ngân TT</span>
+ <span class="sp"></span>
+ <span class="net on" id="net">● Online</span>
+ <span class="av">TT</span>
+</header>
+
+<div class="app">
+ <nav class="rail" id="rail"></nav>
+ <section class="items">
+  <div class="tabs"><button class="tab" type="button">Hóa đơn 1</button></div>
+  <div class="cats"><span class="cat on">All Items</span><span class="cat">Công cụ dụng cụ</span><span class="cat">Hàng hóa</span><span class="cat">Nguyên vật liệu</span><span class="cat">Products</span></div>
+  <label class="search"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="iq" placeholder="Tìm theo mã, tên hàng hoặc quét mã vạch"></label>
+  <div class="grid" id="grid"></div>
+ </section>
+ <section class="cart" id="cart"></section>
+</div>
+
+<div id="panel"></div>
+<div id="modal"></div>
+<div id="toast"></div>
+
+<details class="ctl" id="ctl" open>
+ <summary><span>⚙ Điều khiển mockup</span><span class="clk" id="ctlclk"></span></summary>
+ <div class="in" id="ctlin"></div>
+</details>
+
+<script>
+(function(){
+const H=3600e3, M=60e3;
+const ITEMS=[
+ {code:'146047',name:'Chả cá thát lát ốc vị sả ớt 200g',uom:'Gói',price:43240.74,actual:258},
+ {code:'146048',name:'Chả Tôm 200G',uom:'Gói',price:59351.85,actual:97},
+ {code:'146049',name:'Chả viên thát lát 200g',uom:'Gói',price:40833.33,actual:97},
+ {code:'330112',name:'Cốc nhựa sọc 330ml',uom:'Cái',price:2682,actual:98},
+ {code:'335047',name:'COLGATE BCĐR 360 charcoal spiral twin',uom:'ZBO',price:78703.70,actual:100},
+ {code:'335031',name:'COLGATE BCĐR Slim Soft',uom:'TUÝ',price:44444.44,actual:100},
+ {code:'335032',name:'COLGATE BCĐR Zig Zag',uom:'Cái',price:47222.22,actual:100},
+ {code:'335033',name:'COLGATE BCĐR Extra Clean',uom:'Cái',price:37037.04,actual:97},
+ {code:'335061',name:'COLGATE KĐR MaxFresh 180g',uom:'TUÝ',price:52777.78,actual:98},
+ {code:'335062',name:'COLGATE KĐR Muối 180g',uom:'TUÝ',price:52777.78,actual:99},
+ {code:'335063',name:'COLGATE KĐR trà xanh 180g',uom:'TUÝ',price:54537.04,actual:99},
+ {code:'221001',name:'Hạt nêm Knorr 400g',uom:'Gói',price:38500,actual:3}
+];
+const CUSTS=[
+ {name:'C HUỆ',phone:'0938064272'},{name:'A Linh',phone:'0912448210'},{name:'Chị Huế',phone:'0977305118'},
+ {name:'Đặng Quốc Thịnh',phone:'0905771338'},{name:'0975961375',phone:'0975961375'},{name:'Anh Tùng',phone:'0986120553'}
+];
+let S;
+function seed(){
+ const t=Date.now();
+ S={items:ITEMS.map(i=>({...i})),custs:CUSTS.map(c=>({...c})),cart:[],cust:null,custQ:'',custOpen:false,iq:'',
+  offset:0,role:'cashier',online:true,allowNeg:false,naming:'A',defH:24,maxH:72,panel:false,filter:'all',pq:'',seq:13,menu:false,modal:null,
+  holds:[
+   {id:'SAL-ORD-2026-00012',cust:'Anh Tùng',phone:'0986120553',lines:[{code:'146048',qty:5,del:0}],created:t-3*H,until:t+5*H+20*M,status:'giu',note:'Lấy sau giờ làm',by:'Thu ngân Lan',log:[[t-3*H,'Thu ngân Lan tạo đơn giữ, giữ 8 giờ']]},
+   {id:'SAL-ORD-2026-00011',cust:'A Linh',phone:'0912448210',lines:[{code:'146049',qty:10,del:0}],created:t-23*H-24*M,until:t+36*M,status:'giu',note:'Gọi lại trước khi hết hạn',by:'Thu ngân TT',log:[[t-23*H-24*M,'Thu ngân TT tạo đơn giữ, giữ 24 giờ']]},
+   {id:'SAL-ORD-2026-00010',cust:'0975961375',phone:'0975961375',lines:[{code:'335061',qty:6,del:6}],created:t-50*H,until:t-26*H,status:'lay',note:'',by:'Thu ngân TT',log:[[t-50*H,'Thu ngân TT tạo đơn giữ'],[t-27*H,'Giao đủ ở hệ thống lõi (phiếu giao DN-2026-00031)']]},
+   {id:'SAL-ORD-2026-00009',cust:'Đặng Quốc Thịnh',phone:'0905771338',lines:[{code:'330112',qty:50,del:0}],created:t-72*H,until:t-48*H,status:'het',note:'',by:'Thu ngân Lan',log:[[t-72*H,'Thu ngân Lan tạo đơn giữ'],[t-48*H,'Hết hạn, hệ thống tự nhả giữ']]},
+   {id:'SAL-ORD-2026-00008',cust:'Chị Huế',phone:'0977305118',lines:[{code:'146047',qty:3,del:0}],created:t-76*H,until:t-52*H,status:'huy',note:'',reason:'Khách đổi cửa hàng nhận',by:'Thu ngân TT',log:[[t-76*H,'Thu ngân TT tạo đơn giữ'],[t-74*H,'Quản lý CH huỷ giữ: Khách đổi cửa hàng nhận']]}
+  ]};
+}
+const now=()=>Date.now()+S.offset;
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money=n=>'₫ '+n.toLocaleString('vi-VN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const vnd=n=>Math.round(n).toLocaleString('vi-VN')+' ₫';
+const item=c=>S.items.find(i=>i.code===c);
+const pad=n=>String(n).padStart(2,'0');
+const DOW=['CN','T2','T3','T4','T5','T6','T7'];
+function fmtT(ms){const d=new Date(ms),n=new Date(now());const same=d.toDateString()===n.toDateString();const tm=new Date(n);tm.setDate(n.getDate()+1);
+ const hm=pad(d.getHours())+':'+pad(d.getMinutes());if(same)return hm+' hôm nay';if(d.toDateString()===tm.toDateString())return hm+' mai '+DOW[d.getDay()]+' '+pad(d.getDate())+'/'+pad(d.getMonth()+1);
+ return hm+' '+DOW[d.getDay()]+' '+pad(d.getDate())+'/'+pad(d.getMonth()+1);}
+function left(ms){let r=ms-now();if(r<=0)return 'đã quá hạn';const h=Math.floor(r/H),m=Math.floor((r%H)/M);return 'còn '+(h?h+' giờ ':'')+m+' phút';}
+const heldLine=l=>l.qty-l.del;
+const live=h=>h.status==='giu'&&h.until>now();
+function held(code,ex){return S.holds.filter(h=>live(h)&&h.id!==ex).reduce((s,h)=>s+h.lines.filter(l=>l.code===code).reduce((a,l)=>a+heldLine(l),0),0);}
+const holdsOf=code=>S.holds.filter(h=>live(h)&&h.lines.some(l=>l.code===code&&heldLine(l)>0));
+const sellable=code=>item(code).actual-held(code);
+const inCart=code=>(S.cart.find(l=>l.code===code)||{qty:0}).qty;
+const can=a=>({create:S.role!=='none',manage:S.role==='manager'})[a];
+function toast(t){const el=$('#toast');el.innerHTML='<div class="toast">'+esc(t)+'</div>';clearTimeout(toast.t);toast.t=setTimeout(()=>el.innerHTML='',3200);}
+function sweep(){let ch=false;S.holds.forEach(h=>{if(h.status==='giu'&&h.until<=now()){h.status='het';h.log.push([h.until,'Hết hạn, hệ thống tự nhả giữ']);ch=true;toast(h.id+' hết hạn — đã trả hàng về số bán được');}});return ch;}
+
+/* ---------- render ---------- */
+const ICON={tag:'<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>',box:'<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/>',doc:'<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7 19.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.9H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>'};
+const svg=(k,s=18)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON[k]}</svg>`;
+function renderRail(){const n=S.holds.filter(live).length;
+ $('#rail').innerHTML=`<button type="button" title="Khuyến mại">${svg('tag')}</button><button type="button" title="Hàng hoá">${svg('box')}</button>
+ <button type="button" data-act="openPanel" class="${S.panel?'on':''}" title="Quản lý hoá đơn · Đơn chờ lấy">${svg('doc')}${can('create')&&n?`<span class="dot">${n}</span>`:''}</button><button type="button" title="Cài đặt">${svg('gear')}</button>`;}
+function renderGrid(){const q=S.iq.trim().toLowerCase();
+ $('#grid').innerHTML=S.items.filter(i=>!q||i.name.toLowerCase().includes(q)||i.code.includes(q)).map(i=>{const h=held(i.code),d=i.actual-h-inCart(i.code);
+  return `<button type="button" class="it" data-act="add" data-code="${i.code}" title="Tồn ${i.actual} · đang giữ ${h} · trong giỏ ${inCart(i.code)}"><span class="badge ${d<=0?'zero':''}">${d}</span>${h?`<span class="heldchip">Giữ ${h}</span>`:''}<div class="ph"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></div><div class="nm">${esc(i.name)}</div><div class="pr">${money(i.price)}<span>/ ${i.uom}</span></div></button>`}).join('');}
+function custBox(){
+ if(S.cust)return `<div class="cbox"><span class="ci">👤</span><b style="flex:1">${esc(S.cust.name)} <small style="color:var(--muted);font-weight:400">${S.cust.phone}</small></b><button type="button" class="x" data-act="custClear" aria-label="Bỏ chọn khách">✕</button></div>`;
+ const q=S.custQ.trim().toLowerCase();const list=S.custs.filter(c=>!q||c.name.toLowerCase().includes(q)||c.phone.includes(q));
+ return `<div class="cbox"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input id="cq" placeholder="Tìm hoặc thêm khách (tên, SĐT)" value="${esc(S.custQ)}" autocomplete="off"></div>
+ ${S.custOpen?`<div class="cdrop">${list.map(c=>`<button type="button" data-act="custPick" data-phone="${c.phone}"><span class="ci" style="width:24px;height:24px;border-radius:50%;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-size:11px;font-weight:700">${esc(c.name.slice(0,2).toUpperCase())}</span><span>${esc(c.name)}<small>${c.phone}</small></span></button>`).join('')}
+ <button type="button" data-act="custNew"><span style="color:var(--brand);font-weight:700">＋ Tạo khách mới${q?': '+esc(S.custQ):''}</span></button></div>`:''}`;}
+function renderCart(){
+ const tq=S.cart.reduce((s,l)=>s+l.qty,0),gt=S.cart.reduce((s,l)=>s+l.qty*item(l.code).price,0);
+ const holdBtn=can('create')?(S.naming==='A'?`<button type="button" class="b-hold" data-act="holdStart" ${S.online?'':'disabled title="Mất kết nối mạng — giữ hàng cần kiểm tồn trực tiếp trên hệ thống"'}>${svg('box',15)} Giữ hàng</button>`:''):'';
+ const draftBtn=S.naming==='A'||!can('create')?`<button type="button" class="b-draft" data-act="draft">Lưu nháp</button>`:`<button type="button" class="b-draft" data-act="holdMenu">Hold ▾</button>`;
+ $('#cart').innerHTML=`<div class="chd"><span>Tổng số lượng: ${tq}</span><button type="button" data-act="clearCart">🗑 Clear</button></div>
+ <div class="cust">${custBox()}</div>
+ ${S.cart.length?`<div class="lines">${S.cart.map(l=>{const i=item(l.code);return `<div class="ln"><div style="min-width:0"><div class="nm">${esc(i.name)}</div><div class="cd">${i.code} · ${i.uom}</div></div>
+  <div class="qty"><button type="button" data-act="dec" data-code="${l.code}" aria-label="Giảm">−</button><input data-qty="${l.code}" value="${l.qty}" inputmode="numeric" aria-label="Số lượng"><button type="button" data-act="inc" data-code="${l.code}" aria-label="Tăng">+</button></div>
+  <div class="amt">${money(l.qty*i.price)}</div><button type="button" class="rm" data-act="rm" data-code="${l.code}" aria-label="Bỏ dòng">✕</button></div>`}).join('')}</div>`
+ :`<div class="empty"><div><b>Giỏ hàng trống</b>Chọn khách và bấm vào hàng bên trái để thêm</div></div>`}
+ <div class="foot"><div class="gt"><span>Grand Total</span><b>${money(gt)}</b></div>
+ <div class="acts"><button type="button" class="b-co" data-act="checkout" ${S.cart.length?'':'disabled'}>Checkout</button>${holdBtn}${draftBtn}
+ ${S.menu?`<div class="hmenu"><button type="button" data-act="draft"><span>📝</span><span><b style="color:var(--draft)">Lưu nháp trên máy</b><small>Như Hold hiện nay · không giữ tồn, chỉ máy này thấy</small></span></button>
+  <button type="button" data-act="holdStart" ${S.online?'':'disabled'}><span>📦</span><span><b style="color:var(--hold)">Giữ hàng cho khách đến nhận</b><small>${S.online?'Trừ tồn trên mọi quầy · có hạn giữ · cần chọn khách':'Mất mạng — không giữ được'}</small></span></button></div>`:''}
+ </div></div>`;}
+function renderNet(){const n=$('#net');n.className='net '+(S.online?'on':'off');n.textContent=S.online?'● Online':'⚠ Mất mạng';}
+function renderCtl(){
+ const seg=(k,opts)=>`<div class="seg">${opts.map(([v,t])=>`<button type="button" data-act="set" data-k="${k}" data-v="${v}" class="${String(S[k])===String(v)?'on':''}">${t}</button>`).join('')}</div>`;
+ $('#ctlin').innerHTML=`<div><div class="lbl">Vai trò người đang đăng nhập</div>${seg('role',[['cashier','Thu ngân'],['manager','Quản lý CH'],['none','Không có quyền']])}</div>
+ <div><div class="lbl">Mạng</div>${seg('online',[['true','Online'],['false','Mất mạng']])}</div>
+ <div><div class="lbl">Tên nút (chốt 4.1)</div>${seg('naming',[['A','A · 3 nút'],['B','B · Hold có menu']])}</div>
+ <div class="num"><span class="lbl" style="margin:0">Hạn giữ mặc định</span><input id="defH" type="number" min="1" value="${S.defH}"><span class="lbl" style="margin:0">tối đa</span><input id="maxH" type="number" min="1" value="${S.maxH}"></div>
+ <div><div class="lbl">Tua thời gian (job hết hạn)</div><div class="row2"><button type="button" data-act="tt" data-h="1">+1 giờ</button><button type="button" data-act="tt" data-h="12">+12 giờ</button><button type="button" data-act="tt" data-h="24">+24 giờ</button></div></div>
+ <div><div class="lbl">Mô phỏng</div><div class="row2"><button type="button" data-act="otherHold">Quầy khác giữ 20 Chả Tôm</button><button type="button" data-act="reset">Đặt lại dữ liệu</button></div></div>
+ <div class="lbl" style="margin:0">Bảng này chỉ để thử phương án, không thuộc POS. Dữ liệu là ví dụ, tải lại trang là về ban đầu.</div>`;}
+function renderPanel(){
+ if(!S.panel){$('#panel').innerHTML='';return;}
+ const L=S.holds.slice().sort((a,b)=>b.created-a.created);
+ const isSoon=h=>live(h)&&h.until-now()<H;
+ const cnt={all:L.length,giu:L.filter(live).length,lay:L.filter(h=>h.status==='lay').length,het:L.filter(h=>h.status==='het').length,huy:L.filter(h=>h.status==='huy').length};
+ const q=S.pq.trim().toLowerCase();
+ const rows=L.filter(h=>S.filter==='all'||(S.filter==='giu'?live(h):h.status===S.filter)).filter(h=>!q||h.cust.toLowerCase().includes(q)||h.phone.includes(q)||h.id.toLowerCase().includes(q));
+ const tot=L.filter(live).reduce((s,h)=>s+h.lines.reduce((a,l)=>a+heldLine(l)*item(l.code).price,0),0);
+ const chip=(k,t)=>`<button type="button" class="chip ${S.filter===k?'on':''}" data-act="pf" data-v="${k}">${t} (${cnt[k]})</button>`;
+ const stTag=h=>isSoon(h)?'<span class="st soon">Sắp hết hạn</span>':`<span class="st ${h.status}">${{giu:'Đang giữ',lay:'Đã lấy',het:'Hết hạn',huy:'Đã hủy'}[h.status]}</span>`;
+ const remain=h=>h.status==='giu'?`<span data-until="${h.until}">${left(h.until)}</span>`:h.status==='lay'?'đã giao đủ':h.status==='het'?'đã nhả giữ':esc(h.reason||'');
+ const goods=h=>h.lines.length===1?esc(item(h.lines[0].code).name)+' ×'+h.lines[0].qty:h.lines.length+' mặt hàng · '+h.lines.reduce((s,l)=>s+l.qty,0)+' đơn vị';
+ const dis=S.online?'':'disabled';
+ $('#panel').innerHTML=`<div class="pbg" data-act="closePanel"></div><div class="panel" role="dialog" aria-label="Quản lý hoá đơn">
+ <div class="ph2"><span style="width:34px;height:34px;border-radius:10px;background:var(--soft);display:grid;place-items:center">${svg('doc')}</span><div style="flex:1"><b>Invoice Management</b><small>Manage all your invoices in one place</small></div><button type="button" class="btn" data-act="refresh">↻ Refresh</button><button type="button" class="xbtn" data-act="closePanel" aria-label="Đóng">✕</button></div>
+ <div class="ptabs"><button type="button" class="ptab">Unpaid <span class="c">17</span></button><button type="button" class="ptab">Invoice History <span class="c">38</span></button><button type="button" class="ptab">Drafts</button>
+ ${can('create')?`<button type="button" class="ptab on">${svg('box',14)} Đơn chờ lấy <span class="c">${cnt.giu}</span></button>`:''}<button type="button" class="ptab">Returns <span class="c">3</span></button></div>
+ <div class="pbody">
+ ${!can('create')?'<div class="offbar">Tài khoản này không thuộc role được tạo và xem đơn giữ của POS Chiềng Sại nên không thấy tab Đơn chờ lấy.</div>':`
+ ${S.online?'':'<div class="offbar">⚠ Mất kết nối mạng — đang hiện số liệu lần tải gần nhất. Gia hạn / huỷ giữ cần có mạng.</div>'}
+ <div class="prow">${chip('all','Tất cả')}${chip('giu','Đang giữ')}${chip('lay','Đã lấy')}${chip('het','Hết hạn')}${chip('huy','Đã hủy')}<span class="sp"></span><input id="pq" placeholder="🔍 Tên khách, SĐT hoặc mã đơn giữ" value="${esc(S.pq)}"></div>
+ <div class="cards"><div class="cardx g"><small>Đang giữ tại POS Chiềng Sại</small><b>${cnt.giu} đơn · ${vnd(tot)}</b></div><div class="cardx a"><small>Hết hạn trong 1 giờ tới</small><b>${L.filter(isSoon).length} đơn</b></div><div class="cardx"><small>Hạn giữ quầy này</small><b style="font-size:15px;margin-top:4px">Mặc định ${S.defH} giờ · tối đa ${S.maxH} giờ</b></div></div>
+ <div class="tablebox"><table><tr><th>Mã đơn giữ</th><th>Khách</th><th>Hàng giữ</th><th class="n">Giá trị</th><th>Giữ đến</th><th>Còn lại</th><th>Trạng thái</th><th></th></tr>
+ ${rows.length?rows.map(h=>`<tr class="${isSoon(h)?'soon':''}"><td><b>${h.id}</b></td><td><b>${esc(h.cust)}</b><small>${h.phone}</small></td><td>${goods(h)}${h.note?`<small>${esc(h.note)}</small>`:''}</td><td class="n">${vnd(h.lines.reduce((s,l)=>s+l.qty*item(l.code).price,0))}</td><td>${fmtT(h.until)}</td><td style="${isSoon(h)?'color:var(--amber);font-weight:700':''}">${remain(h)}</td><td>${stTag(h)}</td>
+ <td style="white-space:nowrap"><button type="button" class="mini" data-act="detail" data-id="${h.id}">Chi tiết</button>${live(h)?`<button type="button" class="mini g" style="background:var(--hold);color:#fff;border-color:var(--hold)" data-act="pickup" data-id="${h.id}" ${dis}>Khách đến lấy</button>`:''}${live(h)&&can('manage')?`<button type="button" class="mini g" data-act="extend" data-id="${h.id}" ${dis}>Gia hạn</button><button type="button" class="mini r" data-act="cancel" data-id="${h.id}" ${dis}>Huỷ giữ</button>`:live(h)?'':`<button type="button" class="mini" data-act="slip" data-id="${h.id}">In phiếu</button>`}</td></tr>`).join(''):'<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">Không có đơn giữ nào khớp bộ lọc</td></tr>'}
+ </table></div>
+ <div class="note">Mới nhất trước · đơn còn dưới 1 giờ tô vàng · ${can('manage')?'Bạn đang là Quản lý CH: gia hạn và huỷ được.':'Thu ngân chỉ xem; gia hạn / huỷ cần role Quản lý CH (đổi ở bảng điều khiển).'} Đã lấy chỉ để xem, giao hàng làm ở hệ thống lõi.</div>`}
+ </div></div>`;}
+
+/* ---------- modals ---------- */
+function holdDialog(){const D=S.modal;const lines=D.lines.map(l=>{const i=item(l.code),hd=held(l.code),av=i.actual-hd,short=l.qty>av;return{...l,i,hd,av,short}});
+ const anyShort=lines.some(l=>l.short);const until=now()+D.hours*H;const tot=lines.reduce((s,l)=>s+l.qty*l.i.price,0);
+ const hrs=[4,8,24,48,72].filter(h=>h<=S.maxH);if(!hrs.includes(S.defH))hrs.push(S.defH);hrs.sort((a,b)=>a-b);
+ const sh=lines.filter(l=>l.short);
+ return `<div class="dlg"><div class="dh"><span class="ic">${svg('box')}</span><h2>Giữ hàng cho khách đến nhận</h2><span class="note">Hoá đơn 1 · ${lines.length} dòng hàng</span><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div>
+ <div class="split"><div class="l">
+  <div><div class="lb">Khách hàng *</div><div class="fx"><b>${esc(S.cust.name)}</b><small>${S.cust.phone}</small></div></div>
+  <div><label class="lb" for="store">Cửa hàng nhận *</label><select class="fx" id="store"><option>POS Chiềng Sại — Kho POS BĐX Chiềng Sại - BĐTSL</option></select><div class="note" style="margin-top:4px">Chi Nhánh Sơn La hiện chỉ có 1 quầy POS.</div></div>
+  <div><div class="lb">Hạn giữ</div><div class="chips">${hrs.map(h=>`<button type="button" class="chip ${D.hours===h?'on':''}" data-act="hours" data-h="${h}">${h} giờ</button>`).join('')}</div>
+  <div class="hint" style="margin-top:8px">Giữ đến <b>${fmtT(until)}</b> · tối đa ${S.maxH} giờ</div></div>
+  <div><label class="lb" for="hnote">Ghi chú (giờ hẹn, người nhận)</label><textarea class="fx" id="hnote" placeholder="VD: Chiều mai 17h chồng chị qua lấy">${esc(D.note)}</textarea></div>
+ </div><div class="r">
+  ${anyShort?`<div class="warn"><b>${sh.length} dòng không đủ hàng để giữ.</b> ${sh.map(l=>`${esc(l.i.name)} cần ${l.qty} ${l.i.uom}, kho còn ${l.i.actual}${l.hd?` nhưng ${l.hd} đang giữ cho ${holdsOf(l.code).map(h=>h.id).join(', ')}`:''} → chỉ giữ được <b>${Math.max(l.av,0)}</b>.`).join(' ')} Giảm số lượng hoặc bỏ dòng để giữ phần còn lại.</div>`:''}
+  <div class="tw"><table><tr><th>Mặt hàng</th><th class="n">SL giữ</th><th class="n">Tồn kho</th><th class="n">Đang giữ đơn khác</th><th class="n">Khả dụng</th><th></th></tr>
+  ${lines.map(l=>`<tr class="${l.short?'short':''}"><td><b>${esc(l.i.name)}</b><small>${l.code}</small></td><td class="n"><b>${l.qty}</b> ${l.i.uom}</td><td class="n">${l.i.actual}</td><td class="n" style="color:var(--amber)">${l.hd}</td><td class="n"><b>${l.av}</b></td>
+  <td>${l.short?`<span class="bad">Thiếu ${l.qty-Math.max(l.av,0)}</span><div>${l.av>0?`<button type="button" class="mini r" data-act="reduce" data-code="${l.code}">Giảm về ${l.av}</button>`:''}<button type="button" class="mini" data-act="drop" data-code="${l.code}">Bỏ dòng</button></div>`:'<span class="ok">✓ Đủ</span>'}</td></tr>`).join('')}</table></div>
+  <div class="fx" style="justify-content:space-between;background:var(--soft);border-color:var(--line)"><span>Giá trị tạm tính (chưa thu tiền)</span><b>${vnd(tot)}</b></div>
+  <div class="note">Giữ hàng <b>không</b> tạo hoá đơn, không thu tiền, không xuất kho. Hàng giữ bị trừ khỏi số bán được trên mọi quầy và cả desk, tới khi giao, huỷ, khách đến lấy hoặc hết hạn. Desk ERPNext cũng bị chặn bán vào phần này.</div>
+ </div></div>
+ <div class="df"><label class="chk"><input type="checkbox" id="hprint" ${D.print?'checked':''}> In phiếu giữ hàng cho khách</label><span class="sp"></span><button type="button" class="btn" data-act="close">Huỷ</button><button type="button" class="btn p" data-act="holdConfirm" ${anyShort||!lines.length?'disabled':''}>Xác nhận giữ hàng</button></div></div>`;}
+function successDialog(h){return `<div class="dlg sm"><div class="db" style="text-align:center;align-items:center;padding-top:26px">
+ <div style="width:60px;height:60px;border-radius:50%;background:var(--hold-soft);color:var(--hold);display:grid;place-items:center;font-size:30px">✓</div>
+ <div style="font-size:19px;font-weight:700">Đã giữ hàng cho ${esc(h.cust)}</div><div class="big">${h.id}</div><div class="note">Đọc mã này cho khách khi gọi điện xác nhận</div></div>
+ <div class="db" style="padding-top:0"><div class="kv"><div><span>Cửa hàng nhận</span><b>POS Chiềng Sại</b></div><div><span>Giữ đến</span><b>${fmtT(h.until)}</b></div><div><span>Hàng giữ</span><b>${h.lines.length} dòng · ${h.lines.reduce((s,l)=>s+l.qty,0)} đơn vị</b></div>${h.note?`<div><span>Ghi chú</span><span style="color:var(--ink)">${esc(h.note)}</span></div>`:''}</div>
+ <div class="note">${S.modal.printed?'Đã gửi lệnh in phiếu giữ. ':''}Giỏ hàng đã làm trống. Xem lại đơn ở <b>Đơn chờ lấy</b>.</div></div>
+ <div class="df" style="border-top:0"><button type="button" class="btn" style="flex:1" data-act="slip" data-id="${h.id}">🖨 ${S.modal.printed?'Xem / in lại phiếu':'In phiếu giữ'}</button><button type="button" class="btn p" style="flex:1;min-width:0" data-act="close">Xong</button></div></div>`;}
+function slipDialog(h){return `<div class="dlg sm"><div class="dh"><h2>Phiếu giữ hàng · khổ 80mm</h2><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div><div class="db" style="background:var(--soft)"><div class="slip">
+ <div class="c"><b>BĐX CHIỀNG SẠI</b><br>Chi Nhánh Sơn La</div><div class="c" style="font-weight:800;font-size:15px;margin-top:8px">PHIẾU GIỮ HÀNG</div><div class="c" style="font-size:11px">(không phải hoá đơn, chưa thu tiền)</div><hr>
+ <div>Mã đơn : <b>${h.id}</b></div><div>Khách  : ${esc(h.cust)} - ${h.phone}</div><div>Nhận tại: POS Chiềng Sại</div><div>Giữ đến: <b>${fmtT(h.until)}</b></div><div>Lập bởi: ${esc(h.by)}</div><hr>
+ ${h.lines.map(l=>`<div class="r"><span>${esc(item(l.code).name)}</span><span>${l.qty} ${item(l.code).uom}</span></div>`).join('')}<hr>
+ <div class="r"><span>Tạm tính</span><b>${vnd(h.lines.reduce((s,l)=>s+l.qty*item(l.code).price,0))}</b></div><div style="font-size:11px">Giá thanh toán tính tại thời điểm nhận hàng.</div><hr>
+ ${h.note?`<div>Ghi chú: ${esc(h.note)}</div>`:''}<div style="font-size:11px;margin-top:6px">Quá hạn giữ, hàng tự trả về kệ. Vui lòng mang phiếu hoặc đọc mã đơn khi đến nhận.</div>
+ <div class="c" style="margin-top:8px;letter-spacing:2px">║│║║│║│║║│║│║║│</div><div class="c" style="font-size:11px">${h.id}</div></div></div>
+ <div class="df"><span class="note">Mockup: không gửi lệnh in thật.</span><span class="sp"></span><button type="button" class="btn" data-act="close">Đóng</button></div></div>`;}
+function detailDialog(h){const isLive=live(h);
+ return `<div class="dlg md"><div class="dh"><span class="ic">${svg('box')}</span><h2>${h.id} · ${esc(h.cust)}</h2>${isLive?`<span class="st ${h.until-now()<H?'soon':'giu'}">${left(h.until)}</span>`:`<span class="st ${h.status}">${{lay:'Đã lấy',het:'Hết hạn',huy:'Đã hủy',giu:'Đang giữ'}[h.status]}</span>`}<button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div>
+ <div class="db"><div class="tw"><table><tr><th>Mặt hàng</th><th class="n">SL giữ</th><th class="n">Đã giao</th><th class="n">Còn giữ</th></tr>${h.lines.map(l=>`<tr><td><b>${esc(item(l.code).name)}</b><small>${l.code}</small></td><td class="n">${l.qty} ${item(l.code).uom}</td><td class="n">${l.del}</td><td class="n"><b>${h.status==='giu'?heldLine(l):0}</b></td></tr>`).join('')}</table></div>
+ <div class="kv"><div><span>Khách</span><b>${esc(h.cust)} · ${h.phone}</b></div><div><span>Giữ đến</span><b>${fmtT(h.until)}</b></div><div><span>Gia hạn tối đa tới</span><b>${fmtT(h.created+S.maxH*H)}</b></div>${h.note?`<div><span>Ghi chú</span><span>${esc(h.note)}</span></div>`:''}</div>
+ <div><div class="lb">Lịch sử</div><div style="line-height:1.9">${h.log.map(([t,x])=>`• ${pad(new Date(t).getHours())}:${pad(new Date(t).getMinutes())} ${pad(new Date(t).getDate())}/${pad(new Date(t).getMonth()+1)} — ${esc(x)}`).join('<br>')}</div></div>
+ ${isLive?`<div class="warn g"><b>Mô phỏng hệ thống lõi:</b> kho lập phiếu giao (Delivery Note) từ đơn này ở desk. Lấy một lần là hết: giao thiếu thì phần còn lại trả về kệ. <button type="button" class="mini" data-act="deliver" data-id="${h.id}" data-part="1">Giao một phần</button><button type="button" class="mini" data-act="deliver" data-id="${h.id}">Giao đủ</button></div>`:''}
+ </div><div class="df"><button type="button" class="btn" data-act="slip" data-id="${h.id}">🖨 In lại phiếu giữ</button>${isLive?`<button type="button" class="btn" style="color:var(--hold);border-color:#6ee7b7" data-act="pickup" data-id="${h.id}" ${S.online?'':'disabled'}>Khách đến lấy…</button>`:''}<span class="sp"></span>
+ ${isLive&&can('manage')?`<button type="button" class="btn" style="color:var(--red);border-color:#fca5a5" data-act="cancel" data-id="${h.id}" ${S.online?'':'disabled'}>Huỷ giữ…</button><button type="button" class="btn p" data-act="extend" data-id="${h.id}" ${S.online?'':'disabled'}>Gia hạn…</button>`:isLive?'<span class="note">Gia hạn / huỷ cần role Quản lý CH</span>':''}</div></div>`;}
+function extendDialog(h){const D=S.modal;const max=h.created+S.maxH*H;const opts=[4,24,48];const nu=h.until+D.add*H;const over=nu>max;
+ return `<div class="dlg sm"><div class="dh"><span class="ic">⏱</span><h2>Gia hạn ${h.id}</h2><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div><div class="db">
+ <div>${esc(h.cust)} · ${h.lines.map(l=>esc(item(l.code).name)+' ×'+l.qty).join(', ')}</div>
+ <div class="kv"><div><span>Đang giữ đến</span><b>${fmtT(h.until)}</b></div><div><span>Không quá (tạo + ${S.maxH} giờ)</span><b>${fmtT(max)}</b></div></div>
+ <div><div class="lb">Gia hạn thêm</div><div class="chips">${opts.map(o=>`<button type="button" class="chip ${D.add===o?'on':''}" data-act="add_h" data-h="${o}" ${h.until+o*H>max?'disabled title="Vượt hạn giữ tối đa"':''}>+${o} giờ</button>`).join('')}<button type="button" class="chip ${D.add===-1?'on':''}" data-act="add_h" data-h="-1" ${h.until>=max?'disabled':''}>Đến mức tối đa</button></div></div>
+ ${D.add?(over?'<div class="warn">Vượt hạn giữ tối đa của quầy.</div>':`<div class="hint">Giữ mới đến <b>${fmtT(D.add===-1?max:nu)}</b></div>`):'<div class="note">Chọn thời gian gia hạn.</div>'}
+ <div><label class="lb" for="xr">Lý do (không bắt buộc)</label><textarea class="fx" id="xr" style="min-height:44px">${esc(D.reason)}</textarea></div></div>
+ <div class="df"><span class="sp"></span><button type="button" class="btn" data-act="close">Đóng</button><button type="button" class="btn p" data-act="extendOk" data-id="${h.id}" ${!D.add||over?'disabled':''}>Xác nhận gia hạn</button></div></div>`;}
+function cancelDialog(h){const D=S.modal;const R=['Khách không lấy nữa','Khách đổi cửa hàng nhận','Nhập sai','Khác'];
+ return `<div class="dlg sm"><div class="dh"><span class="ic r">✕</span><h2>Huỷ giữ ${h.id}</h2><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div><div class="db">
+ <div>${esc(h.cust)} · ${h.lines.map(l=>esc(item(l.code).name)+' ×'+heldLine(l)).join(', ')} · giữ đến ${fmtT(h.until)}</div>
+ <div><div class="lb">Lý do huỷ *</div><div class="chips">${R.map(r=>`<button type="button" class="chip r ${D.r===r?'on':''}" data-act="reason" data-v="${r}">${r}</button>`).join('')}</div></div>
+ <textarea class="fx" id="cr" placeholder="${D.r==='Khác'?'Ghi rõ lý do (bắt buộc)':'Ghi thêm (không bắt buộc)'}" style="min-height:44px">${esc(D.txt)}</textarea>
+ <div class="warn g">${h.lines.map(l=>heldLine(l)+' '+item(l.code).uom+' '+esc(item(l.code).name)).join(', ')} trả lại số bán được ngay trên mọi quầy dùng kho Chiềng Sại. Đơn chuyển <b>Đã hủy</b>, không mở lại được.</div></div>
+ <div class="df"><span class="sp"></span><button type="button" class="btn" data-act="close">Đóng</button><button type="button" class="btn r" data-act="cancelOk" data-id="${h.id}" ${!D.r||(D.r==='Khác'&&!D.txt.trim())?'disabled':''}>Huỷ giữ hàng</button></div></div>`;}
+function pickupDialog(h){return `<div class="dlg sm"><div class="dh"><span class="ic">${svg('box')}</span><h2>Khách đến lấy ${h.id}</h2><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div><div class="db">
+ <div><b>${esc(h.cust)}</b> · ${h.phone}</div>
+ <div class="tw"><table><tr><th>Mặt hàng</th><th class="n">SL</th></tr>${h.lines.filter(l=>heldLine(l)>0).map(l=>`<tr><td>${esc(item(l.code).name)}</td><td class="n">${heldLine(l)} ${item(l.code).uom}</td></tr>`).join('')}</table></div>
+ <div class="warn g">Đơn giữ kết thúc ngay (Đã lấy), hàng được đưa vào giỏ để thanh toán như bán thường. <b>Không hoàn tác được</b>: khách không lấy dòng nào thì xoá dòng đó trong giỏ, hàng đã về kệ.</div>
+ ${S.cart.length?'<div class="warn">Giỏ hiện tại đang có hàng — Lưu nháp hoặc Clear giỏ trước.</div>':''}</div>
+ <div class="df"><span class="sp"></span><button type="button" class="btn" data-act="close">Đóng</button><button type="button" class="btn p" data-act="pickupOk" data-id="${h.id}" ${S.cart.length?'disabled':''}>Đưa vào giỏ</button></div></div>`;}
+function conflictDialog(){const D=S.modal;const i=item(D.code),hd=held(D.code),sel=i.actual-hd,ok=Math.max(sel,0);const block=true;const hs=holdsOf(D.code);
+ return `<div class="dlg sm"><div class="dh"><span class="ic ${block?'r':'a'}">${block?'⛔':'!'}</span><h2>${block?'Không đủ hàng để bán':'Hàng đang được giữ cho khách khác'}</h2><button type="button" class="xbtn" data-act="close" aria-label="Đóng">✕</button></div><div class="db">
+ <div><b>${esc(i.name)}</b>: giỏ hàng đang bán <b>${D.qty} ${i.uom}</b>.</div>
+ <div class="tw"><table><tr><td>Tồn kho Chiềng Sại</td><td class="n">${i.actual}</td></tr>${hs.map(h=>`<tr><td style="color:var(--amber)">Đang giữ cho <b>${h.id}</b> · ${esc(h.cust)} · đến ${fmtT(h.until)}</td><td class="n" style="color:var(--amber)">− ${h.lines.filter(l=>l.code===D.code).reduce((a,l)=>a+heldLine(l),0)}</td></tr>`).join('')}<tr><td><b>Còn bán được</b></td><td class="n"><b>${sel}</b></td></tr></table></div>
+ ${block?`<div class="warn">Giảm còn ${ok}, hoặc nhờ quản lý huỷ / rút bớt đơn giữ trước khi bán.</div>`:`<div class="warn a">Quầy này cho bán vượt tồn. Nếu vẫn bán ${D.qty}, đơn giữ sẽ thiếu ${Math.min(D.qty-sel,hd)} ${i.uom} khi khách đến lấy.</div>`}</div>
+ <div class="df"><span class="sp"></span>${block?`<button type="button" class="btn" data-act="close">Đóng</button>${ok?`<button type="button" class="btn p" data-act="setQty" data-code="${D.code}" data-q="${ok}">Giảm còn ${ok}</button>`:''}`:`${ok?`<button type="button" class="btn" data-act="setQty" data-code="${D.code}" data-q="${ok}">Giảm còn ${ok}</button>`:''}<button type="button" class="btn a" data-act="sellAnyway">Vẫn bán ${D.qty}</button>`}</div></div>`;}
+function renderModal(){const m=S.modal;if(!m){$('#modal').innerHTML='';return;}
+ const h=m.id&&S.holds.find(x=>x.id===m.id);
+ const html={hold:holdDialog,success:()=>successDialog(h),slip:()=>slipDialog(h),detail:()=>detailDialog(h),extend:()=>extendDialog(h),cancel:()=>cancelDialog(h),conflict:conflictDialog,pickup:()=>pickupDialog(h)}[m.type]();
+ $('#modal').innerHTML=`<div class="ov" data-act="ovClose"><div style="display:contents">${html}</div></div>`;}
+function render(){renderRail();renderGrid();renderCart();renderNet();renderCtl();renderPanel();renderModal();}
+
+/* ---------- actions ---------- */
+function addToCart(code,n=1){const l=S.cart.find(x=>x.code===code);if(l)l.qty+=n;else S.cart.push({code,qty:n});}
+function finalizeSale(){S.cart.forEach(l=>{item(l.code).actual-=l.qty;});const n=S.cart.length;S.cart=[];S.cust=null;S.modal=null;toast('Đã bán '+n+' dòng (mô phỏng, không có thanh toán thật) — tồn kho đã trừ');}
+const A={
+ add:d=>{addToCart(d.code);S.menu=false;},
+ inc:d=>addToCart(d.code),
+ dec:d=>{const l=S.cart.find(x=>x.code===d.code);l.qty--;if(l.qty<=0)S.cart=S.cart.filter(x=>x!==l);},
+ rm:d=>{S.cart=S.cart.filter(x=>x.code!==d.code);},
+ clearCart:()=>{S.cart=[];S.menu=false;},
+ custPick:d=>{S.cust=S.custs.find(c=>c.phone===d.phone);S.custOpen=false;S.custQ='';},
+ custNew:()=>{const v=S.custQ.trim();const isPhone=/^\d{9,11}$/.test(v);const c={name:isPhone?'Khách '+v.slice(-4):(v||'Khách mới'),phone:isPhone?v:'09xxxxxxxx'};S.custs.unshift(c);S.cust=c;S.custOpen=false;S.custQ='';toast('Đã tạo nhanh khách mới (form tạo khách sẵn có của POS)');},
+ custClear:()=>{S.cust=null;},
+ draft:()=>{if(!S.cart.length){toast('Giỏ trống, chưa có gì để lưu nháp');S.menu=false;return;}S.cart=[];S.cust=null;S.menu=false;toast('Đã lưu nháp trên máy này — không giữ tồn, quầy khác không thấy');},
+ holdMenu:()=>{S.menu=!S.menu;},
+ holdStart:()=>{S.menu=false;if(!S.online){toast('Mất kết nối mạng — giữ hàng cần kiểm tồn trực tiếp');return;}
+  if(!S.cart.length){toast('Thêm hàng vào giỏ trước khi giữ');return;}
+  if(!S.cust){S.custOpen=true;toast('Đơn giữ bắt buộc có khách — chọn hoặc tạo khách');setTimeout(()=>{const i=$('#cq');i&&i.focus();},0);return;}
+  S.modal={type:'hold',hours:Math.min(S.defH,S.maxH),note:'',print:true,lines:S.cart.map(l=>({...l}))};},
+ hours:d=>{S.modal.hours=+d.h;},
+ reduce:d=>{const l=S.modal.lines.find(x=>x.code===d.code);l.qty=sellable(d.code);},
+ drop:d=>{S.modal.lines=S.modal.lines.filter(x=>x.code!==d.code);if(!S.modal.lines.length){S.modal=null;toast('Đã bỏ hết dòng, không tạo đơn giữ');}},
+ holdConfirm:()=>{const D=S.modal;if(D.lines.some(l=>l.qty>sellable(l.code))){toast('Tồn vừa thay đổi — kiểm lại các dòng thiếu');return;}
+  const t=now();const h={id:'SAL-ORD-2026-'+String(S.seq++).padStart(5,'0'),cust:S.cust.name,phone:S.cust.phone,lines:D.lines.map(l=>({code:l.code,qty:l.qty,del:0})),created:t,until:t+D.hours*H,status:'giu',note:D.note.trim(),by:'Thu ngân TT',log:[[t,'Thu ngân TT tạo đơn giữ tại POS Chiềng Sại, giữ '+D.hours+' giờ']]};
+  if(h.note)h.log.push([t,'Ghi chú: “'+h.note+'”']);
+  S.holds.push(h);S.cart=[];S.cust=null;S.modal={type:'success',id:h.id,printed:D.print};},
+ slip:d=>{S.modal={type:'slip',id:d.id};},
+ close:()=>{S.modal=null;},
+ ovClose:(d,e)=>{if(e.target.classList.contains('ov'))S.modal=null;},
+ openPanel:()=>{S.panel=true;},
+ closePanel:()=>{S.panel=false;},
+ refresh:()=>{if(!S.online){toast('Mất mạng — chưa tải lại được');return;}sweep();toast('Đã tải lại danh sách đơn giữ');},
+ pf:d=>{S.filter=d.v;},
+ detail:d=>{S.modal={type:'detail',id:d.id};},
+ extend:d=>{const h=S.holds.find(x=>x.id===d.id);if(!live(h)){toast('Đơn đã đổi trạng thái — đã tải lại');S.modal=null;return;}S.modal={type:'extend',id:d.id,add:0,reason:''};},
+ add_h:d=>{S.modal.add=+d.h;},
+ extendOk:d=>{const h=S.holds.find(x=>x.id===d.id),D=S.modal,max=h.created+S.maxH*H;const nu=D.add===-1?max:h.until+D.add*H;if(nu>max)return;h.until=nu;h.log.push([now(),(S.role==='manager'?'Quản lý CH':'Thu ngân')+' gia hạn đến '+fmtT(nu)+(D.reason.trim()?': '+D.reason.trim():'')]);S.modal={type:'detail',id:h.id};toast('Đã gia hạn '+h.id+' đến '+fmtT(nu));},
+ cancel:d=>{const h=S.holds.find(x=>x.id===d.id);if(!live(h)){toast('Đơn đã đổi trạng thái — đã tải lại');S.modal=null;return;}S.modal={type:'cancel',id:d.id,r:'',txt:''};},
+ reason:d=>{S.modal.r=d.v;},
+ cancelOk:d=>{const h=S.holds.find(x=>x.id===d.id),D=S.modal;const why=D.r==='Khác'?D.txt.trim():D.r+(D.txt.trim()?' — '+D.txt.trim():'');h.status='huy';h.reason=why;h.log.push([now(),'Quản lý CH huỷ giữ: '+why]);S.modal=null;toast('Đã huỷ '+h.id+' — hàng trả về số bán được');},
+ deliver:d=>{const h=S.holds.find(x=>x.id===d.id);if(d.part){const l=h.lines.find(l=>heldLine(l)>1)||h.lines.find(l=>heldLine(l)>0);const n=Math.max(1,Math.floor(heldLine(l)/2));l.del+=n;item(l.code).actual-=n;const back=h.lines.reduce((s,x)=>s+heldLine(x),0);h.lines.forEach(x=>x.qty=x.del);h.status='lay';h.log.push([now(),'Giao một phần ở hệ thống lõi: '+n+' '+item(l.code).uom+' '+item(l.code).name+' — đơn kết thúc, '+back+' đơn vị chưa lấy trả về kệ']);toast(h.id+' giao thiếu → Đã lấy, '+back+' đơn vị trả về kệ ngay');}
+  else{h.lines.forEach(l=>{const n=heldLine(l);l.del+=n;item(l.code).actual-=n;});h.status='lay';h.log.push([now(),'Giao đủ ở hệ thống lõi (phiếu giao DN-2026-000'+(40+S.seq)+')']);toast(h.id+' đã giao đủ → Đã lấy');}},
+ pickup:d=>{const h=S.holds.find(x=>x.id===d.id);if(!live(h)){toast('Đơn đã đổi trạng thái — đã tải lại');S.modal=null;return;}S.modal={type:'pickup',id:d.id};},
+ pickupOk:d=>{const h=S.holds.find(x=>x.id===d.id);if(S.cart.length){toast('Giỏ đang có hàng — Lưu nháp hoặc Clear trước khi lấy đơn giữ');return;}
+  S.cart=h.lines.filter(l=>heldLine(l)>0).map(l=>({code:l.code,qty:heldLine(l)}));h.lines.forEach(l=>l.del=l.qty);h.status='lay';h.log.push([now(),'Khách đến lấy tại POS — nhả giữ, đưa hàng vào giỏ để thanh toán']);
+  let c=S.custs.find(x=>x.phone===h.phone);if(!c){c={name:h.cust,phone:h.phone};S.custs.push(c);}S.cust=c;S.modal=null;S.panel=false;toast(h.id+' → Đã lấy. Hàng đã vào giỏ, bấm Checkout để thu tiền');},
+ checkout:()=>{S.menu=false;for(const l of S.cart){const sel=sellable(l.code);if(l.qty>sel){S.modal={type:'conflict',code:l.code,qty:l.qty};return;}}finalizeSale();},
+ setQty:d=>{const l=S.cart.find(x=>x.code===d.code);l.qty=+d.q;S.modal=null;},
+ sellAnyway:()=>finalizeSale(),
+ set:d=>{const v=d.v==='true'?true:d.v==='false'?false:d.v;S[d.k]=v;S.menu=false;if(d.k==='role'&&v==='none'&&S.modal&&['extend','cancel','hold'].includes(S.modal.type))S.modal=null;},
+ tt:d=>{S.offset+=d.h*H;sweep();toast('Đã tua thêm '+d.h+' giờ');},
+ otherHold:()=>{const c='146048',n=Math.min(20,sellable(c)-inCart(c));if(n<=0){toast('Chả Tôm đã hết số bán được');return;}const t=now();S.holds.push({id:'SAL-ORD-2026-'+String(S.seq++).padStart(5,'0'),cust:'Anh Bình',phone:'0915226019',lines:[{code:c,qty:n,del:0}],created:t,until:t+8*H,status:'giu',note:'Quầy khác tạo',by:'Thu ngân Lan',log:[[t,'Thu ngân Lan (máy quầy 2) tạo đơn giữ, giữ 8 giờ']]});toast('Quầy 2 vừa giữ '+n+' gói Chả Tôm — số trên lưới cập nhật ngay');},
+ reset:()=>{seed();toast('Đã đặt lại dữ liệu ví dụ');}
+};
+document.addEventListener('click',e=>{const el=e.target.closest('[data-act]');
+ if(!el){if(S.custOpen&&!e.target.closest('.cust')){S.custOpen=false;renderCart();}if(S.menu&&!e.target.closest('.acts')){S.menu=false;renderCart();}return;}
+ if(el.disabled)return;if(el.dataset.act==='ovClose'&&!e.target.classList.contains('ov'))return;const f=A[el.dataset.act];if(!f)return;f(el.dataset,e);render();});
+document.addEventListener('input',e=>{const t=e.target;
+ if(t.id==='iq'){S.iq=t.value;renderGrid();}
+ else if(t.id==='cq'){S.custQ=t.value;S.custOpen=true;const p=t.selectionStart;renderCart();const n=$('#cq');n.focus();n.setSelectionRange(p,p);}
+ else if(t.id==='hnote'){S.modal.note=t.value;}
+ else if(t.id==='hprint'){S.modal.print=t.checked;}
+ else if(t.id==='xr'){S.modal.reason=t.value;}
+ else if(t.id==='cr'){S.modal.txt=t.value;const b=document.querySelector('[data-act="cancelOk"]');if(b)b.disabled=!S.modal.r||(S.modal.r==='Khác'&&!t.value.trim());}
+ else if(t.id==='pq'){S.pq=t.value;const p=t.selectionStart;renderPanel();const n=$('#pq');n.focus();n.setSelectionRange(p,p);}
+});
+document.addEventListener('change',e=>{const t=e.target;
+ if(t.dataset.qty){const v=Math.max(0,parseInt(t.value)||0);const l=S.cart.find(x=>x.code===t.dataset.qty);if(v===0)S.cart=S.cart.filter(x=>x!==l);else l.qty=v;render();}
+ if(t.id==='defH'||t.id==='maxH'){S.defH=Math.max(1,parseInt($('#defH').value)||24);S.maxH=Math.max(S.defH,parseInt($('#maxH').value)||72);render();}
+});
+document.addEventListener('focusin',e=>{if(e.target.id==='cq'&&!S.custOpen){S.custOpen=true;renderCart();const n=$('#cq');n.focus();}});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(S.modal)S.modal=null;else if(S.panel)S.panel=false;else{S.custOpen=false;S.menu=false;}render();}});
+function tick(){const d=new Date(now());const s=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());$('#clock').textContent=s;
+ $('#ctlclk').textContent=(S.offset?'⏩ ':'')+pad(d.getDate())+'/'+pad(d.getMonth()+1)+' '+s.slice(0,5);
+ document.querySelectorAll('[data-until]').forEach(el=>el.textContent=left(+el.dataset.until));
+ if(sweep())render();}
+seed();
+// bắt đầu ở trạng thái đang làm việc: đã chọn C HUỆ, giỏ có 3 món như ví dụ trong spec
+S.cust=S.custs[0];S.cart=[{code:'146047',qty:2},{code:'146048',qty:1},{code:'335047',qty:1}];
+render();tick();setInterval(tick,1000);
+if(window.matchMedia('(max-width:900px)').matches)$('#ctl').open=false;
+})();
+</script>

@@ -1601,7 +1601,10 @@ watch(normalizedSearchTerm, (searchTerm) => {
 })
 
 function syncRefundPaymentAmount() {
-	if (!returnModal.visible || !showDialog.value || isOriginalCreditSale.value) return
+	// Chỉ xét returnModal: mở từ Lịch sử hoá đơn (preselectedInvoice) thì showDialog
+	// bị tắt ngay từ đầu, nếu xét cả nó thì ô tiền hoàn đứng yên ở tiền cả đơn và
+	// trả một phần không bấm được Tạo phiếu trả (PM-TASK-00377).
+	if (!returnModal.visible || isOriginalCreditSale.value) return
 	if (refundPayments.value.length !== 1) return
 	const amount = effectiveRefundAmount.value
 	if (amount <= 0) return

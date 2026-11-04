@@ -52,6 +52,7 @@ doctype_js = {
 	"Material Request": "controllers/js/material_request.js",
 	"Loyalty Program": "public/js/loyalty_program.js",
 	"Mode of Payment": "public/js/mode_of_payment.js",
+	"Sales Invoice": "public/js/sales_invoice_doi_hang.js",
 }
 doctype_list_js = {
 	"Sales Invoice": "public/js/sales_invoice_list.js",
@@ -234,7 +235,11 @@ doc_events = {
 			"pos_next.api.sales_invoice_hooks.validate",
 			"pos_next.api.wallet.validate_wallet_payment"
 		],
-		"before_cancel": "pos_next.api.sales_invoice_hooks.before_cancel",
+		"before_cancel": [
+			# Chặn trước: chứng từ đổi hàng phải huỷ cả bộ (PM-FEAT-00044)
+			"pos_next.api.exchange_ha_vang.chan_huy_le",
+			"pos_next.api.sales_invoice_hooks.before_cancel",
+		],
 		"on_submit": [
 			"pos_next.realtime_events.emit_stock_update_event",
 			"pos_next.api.wallet.process_loyalty_to_wallet"

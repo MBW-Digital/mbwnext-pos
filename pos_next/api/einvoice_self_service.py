@@ -65,7 +65,10 @@ def ensure_self_service_einvoice_token(sales_invoice_name: str) -> None:
 		},
 		update_modified=False,
 	)
-	frappe.db.commit()
+	# Đổi hàng tạo phiếu trả + HĐ mới trong MỘT transaction (pos_next.api.exchange_ha_vang).
+	# Commit ở đây sẽ chốt phiếu trả trước khi HĐ mới kịp lưu: HĐ mới lỗi thì phiếu trả vẫn còn.
+	if not frappe.flags.get("pos_next_dang_doi_hang"):
+		frappe.db.commit()
 
 
 def _invoice_names_from_token(token: str) -> Optional[str]:

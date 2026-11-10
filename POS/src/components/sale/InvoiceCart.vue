@@ -759,6 +759,35 @@
 						}}</span>
 					</button>
 
+					<!-- Exchange Items (PM-FEAT-00044) -->
+					<button
+						type="button"
+						@click="$emit('show-exchange')"
+						class="flex flex-col items-center justify-center p-3 sm:p-4 bg-white border border-gray-200 rounded-lg hover:border-purple-300 hover:bg-purple-50 active:bg-purple-100 transition-colors shadow-sm hover:shadow touch-manipulation group"
+						:title="__('Exchange items from a previous invoice')"
+					>
+						<div
+							class="w-9 h-9 sm:w-10 sm:h-10 bg-purple-50 rounded-full flex items-center justify-center mb-2 group-hover:bg-purple-100 transition-colors"
+						>
+							<svg
+								class="w-5 h-5 text-purple-600"
+								fill="none"
+								stroke="currentColor"
+								viewBox="0 0 24 24"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+								/>
+							</svg>
+						</div>
+						<span class="text-[11px] sm:text-xs font-semibold text-gray-700">{{
+							__("Exchange Items")
+						}}</span>
+					</button>
+
 					<!-- Close Shift -->
 					<button
 						type="button"
@@ -1521,6 +1550,7 @@ const emit = defineEmits([
 	"show-drafts", // () - Show draft/held orders
 	"show-history", // () - Show invoice history
 	"show-return", // () - Open return invoice dialog
+	"show-exchange", // () - Open exchange dialog (PM-FEAT-00044)
 	"close-shift", // () - Close current shift
 	"add-cold-storage-fee-line", // (count: number) - Add dịch vụ làm nóng/lạnh với số lượng count
 	"remove-cold-storage-fee-line", // (count: number) - Giảm bớt dịch vụ làm nóng/lạnh

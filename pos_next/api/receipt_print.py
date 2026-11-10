@@ -477,8 +477,19 @@ def ha_vang_receipt_meta_for_jinja(doc):
 
 	pos_logo_url = attach_image_src_for_print(profile.get("custom_pos_logo"))
 
+	# HĐ mới của lần đổi hàng: in kèm món khách mang trả (PM-FEAT-00044, anh Thắng 09/11)
+	exchange_return = None
+	if cint(inv.get("posa_is_exchange")) and not cint(inv.get("is_return")):
+		try:
+			from pos_next.api.exchange_ha_vang import chung_tu_ben_kia
+
+			exchange_return = chung_tu_ben_kia(doc.name)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "ha_vang_receipt_meta: exchange_return")
+
 	return frappe._dict(
 		**base,
+		exchange_return=exchange_return,
 		pos_logo_url=pos_logo_url,
 		shop_code=profile.get("custom_shop_code") or "",
 		store_display_name=profile.get("custom_store_name_2") or base.get("receipt_branch_label") or "",

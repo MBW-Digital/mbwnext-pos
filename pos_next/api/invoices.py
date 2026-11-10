@@ -1037,6 +1037,14 @@ def update_invoice(data):
         # Populate missing fields (company, currency, accounts, etc.)
         invoice_doc.set_missing_values()
 
+        # set_missing_values() chép ignore_pricing_rule từ POS Profile, đè giá trị bên gọi
+        # gửi lên. Đổi hàng (pos_next.api.exchange_ha_vang) phải tắt KM tự áp: món mới
+        # hưởng cách giảm của món trả lúc mua, không phải KM hôm nay (đo: món 8.990.000
+        # giảm 30% theo món trả bị ERPNext giảm thêm 10% → thu thiếu 629.300). Chỉ khi
+        # bên gọi CHỦ ĐỘNG gửi 1 mới giữ lại.
+        if cint(data.get("ignore_pricing_rule")):
+            invoice_doc.ignore_pricing_rule = 1
+
         # Dựng bảng `taxes` TRƯỚC khi tính tổng. ERPNext bỏ qua bước này khi
         # is_pos=1, nên chỗ duy nhất dựng nó là apply_selling_item_tax_templates()
         # — mà hàm đó chạy ở doc_event `before_validate`, tức MÃI SAU lời gọi

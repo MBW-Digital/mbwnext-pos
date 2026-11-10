@@ -144,6 +144,25 @@
 						<span>{{ __("Return Invoice") }}</span>
 					</button>
 					<button
+						@click="uiStore.showExchangeDialog = true"
+						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-purple-50 flex items-center gap-3 transition-colors"
+					>
+						<svg
+							class="w-5 h-5 text-purple-600"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="2"
+								d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"
+							/>
+						</svg>
+						<span>{{ __("Exchange Items") }}</span>
+					</button>
+					<button
 						@click="uiStore.showKeyboardShortcutsDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3 transition-colors"
 					>
@@ -411,6 +430,7 @@
 								@show-drafts="uiStore.showDraftDialog = true"
 								@show-history="uiStore.showHistoryDialog = true"
 								@show-return="uiStore.showReturnDialog = true"
+								@show-exchange="uiStore.showExchangeDialog = true"
 								@close-shift="handleCloseShift()"
 								@add-cold-storage-fee-line="handleAddColdStorageFeeLine"
 								@remove-cold-storage-fee-line="handleRemoveColdStorageFeeLine"
@@ -565,6 +585,14 @@
 				:pos-opening-shift="shiftStore.currentShift?.name"
 				:currency="shiftStore.profileCurrency"
 				@return-created="handleReturnCreated"
+			/>
+
+			<!-- Đổi hàng tại quầy — Hạ Vàng (PM-FEAT-00044) -->
+			<ExchangeHaVangDialog
+				v-model="uiStore.showExchangeDialog"
+				:pos-profile="shiftStore.profileName"
+				:pos-opening-shift="shiftStore.currentShift?.name"
+				:currency="shiftStore.profileCurrency"
 			/>
 
 			<!-- Coupon Dialog -->
@@ -1040,6 +1068,7 @@ import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
 import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
+import ExchangeHaVangDialog from "@/components/sale/ExchangeHaVangDialog.vue";
 import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";

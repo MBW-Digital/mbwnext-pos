@@ -158,6 +158,25 @@
 </div>
 {%- endfor -%}
 
+{#- HĐ mới của lần đổi hàng: in kèm món khách mang trả (PM-FEAT-00044) -#}
+{%- if R.exchange_return and R.exchange_return["items"] -%}
+<div class="divider"></div>
+<div class="section-title">HÀNG KHÁCH TRẢ (ĐỔI HÀNG)</div>
+<div class="item-sub">Phiếu trả: {{ R.exchange_return.name }}{% if R.exchange_return.return_against %} · HĐ gốc: {{ R.exchange_return.return_against }}{% endif %}</div>
+{%- for item in R.exchange_return["items"] -%}
+{%- set item_disc_pct = item_discount_percent_for_receipt(item) -%}
+<div class="item-name lr">
+	<span class="name">{{ item.item_name }}{% if item.qty != 1 %} × {{ item.qty|int }}{% endif %}</span>
+	<span class="disc">{% if item_disc_pct and item_disc_pct > 0 %}-{{ "%.2f"|format(item_disc_pct) }}%{% endif %}</span>
+</div>
+<div class="item-sub lr">
+	<span>{{ item.barcode }}</span>
+	<span>{{ fmt(item_gross_amount_for_receipt(item), 0) }}</span>
+</div>
+{%- endfor -%}
+<div class="totals"><div class="lr bold"><span>Giá trị hàng trả:</span><span>{{ fmt(R.exchange_return.grand_total, 0) }}</span></div></div>
+{%- endif -%}
+
 <div class="divider"></div>
 
 <div class="totals">

@@ -200,7 +200,7 @@
 				<!-- ============ Bước 3: chọn món mới ============ -->
 				<template v-if="step === 2 && inv">
 					<p class="text-xs text-gray-600">
-						{{ __("Each returned item is exchanged for one new item. The new item gets the same discount as the returned item at purchase, not today's promotions. Extra items are sold as a normal sale afterwards.") }}
+						{{ __("Each returned item can be exchanged for one or more new items. Pick the discount of each new item: by default it gets the same discount as the returned item at purchase, not today's promotions.") }}
 					</p>
 					<div v-for="l in chosenLines" :key="l.name" class="border border-gray-200 rounded-lg p-3 flex flex-col gap-2">
 						<div class="flex flex-wrap items-center justify-between gap-2">
@@ -208,57 +208,67 @@
 								<b>{{ l.item_name }}</b> × {{ chosen[l.name].qty }}</p>
 							<DiscountPill :d="l.discount_at_sale" />
 						</div>
+						<p v-if="l.discount_at_sale.type === 'unknown'" class="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg p-2">
+							{{ __("Cannot tell how the returned item was discounted ({0}). The customer got {1} off per unit. Enter the discount for each new item; it is recorded on the new invoice with your name.", [l.discount_at_sale.label, money(l.discount_at_sale.value)]) }}
+						</p>
 						<div class="flex gap-2">
-							<input v-model="pairs[l.name].search" type="text"
-								:placeholder="__('Scan or search the new item')"
+							<input :value="pairs[l.name].search" type="text"
+								:placeholder="__('Scan or search a new item to add')"
 								class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+								@input="onItemInput(l.name, $event)"
 								@keydown.enter.prevent="findItems(l.name)" />
 							<Button :loading="pairs[l.name].loading" @click="findItems(l.name)">{{ __("Find") }}</Button>
 						</div>
 						<div v-if="pairs[l.name].results.length" class="border border-gray-100 rounded-lg divide-y divide-gray-100 max-h-48 overflow-y-auto">
 							<button v-for="it in pairs[l.name].results" :key="it.item_code" type="button"
-								:disabled="it.actual_qty < chosen[l.name].qty"
+								:disabled="it.actual_qty < 1"
 								:class="['w-full flex items-center justify-between gap-2 px-3 py-2 text-start text-sm',
-									it.actual_qty < chosen[l.name].qty ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50',
-									pairs[l.name].item && pairs[l.name].item.item_code === it.item_code ? 'bg-blue-50' : '']"
-								@click="pickItem(l.name, it)">
+									it.actual_qty < 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-50']"
+								@click="addItem(l.name, it)">
 								<span class="min-w-0">
 									<span class="block font-medium text-gray-900 truncate">{{ it.item_name }}</span>
 									<span class="block text-xs text-gray-500">{{ it.item_code }} · {{ __("In stock: {0}", [it.actual_qty]) }}</span>
 								</span>
-								<span class="whitespace-nowrap font-semibold">{{ money(it.price_list_rate) }}</span>
+								<span class="whitespace-nowrap font-semibold">+ {{ money(it.price_list_rate) }}</span>
 							</button>
 						</div>
 						<p v-else-if="pairs[l.name].searched" class="text-xs text-gray-500">{{ __("No matching item in stock at this store") }}</p>
 
-						<div v-if="pairs[l.name].item" class="text-sm bg-gray-50 rounded-lg p-2 flex flex-wrap justify-between gap-2">
-							<span><span class="text-gray-500">{{ __("New:") }}</span> <b>{{ pairs[l.name].item.item_name }}</b>
-								({{ pairs[l.name].item.item_code }})</span>
-							<span>{{ money(pairs[l.name].item.price_list_rate) }}</span>
-						</div>
-
-						<!-- Không xác định được cách giảm lúc mua: thu ngân nhập tay -->
-						<div v-if="l.discount_at_sale.type === 'unknown'" class="bg-amber-50 border border-amber-200 rounded-lg p-3 flex flex-col gap-2">
-							<p class="text-sm font-semibold text-amber-900">{{ __("Cannot tell how the returned item was discounted") }}</p>
-							<p class="text-xs text-amber-900">
-								{{ __("{0}. The customer got {1} off per unit. Enter the discount for the new item; it is recorded on the new invoice with your name.", [l.discount_at_sale.label, money(l.discount_at_sale.value)]) }}
-							</p>
-							<div class="flex flex-wrap gap-2 items-end">
+						<!-- Các món mới đã chọn, mỗi món một ô khuyến mại (anh Hưng chốt 08/11) -->
+						<div v-if="pairs[l.name].items.length" class="border border-gray-200 rounded-lg divide-y divide-gray-100">
+							<div v-for="(m, i) in pairs[l.name].items" :key="m.item_code + '-' + i"
+								class="p-2 flex flex-wrap items-end gap-x-3 gap-y-2 text-sm">
+								<div class="min-w-0 flex-1 basis-48">
+									<p class="font-medium text-gray-900 truncate">{{ m.item_name }}</p>
+									<p class="text-xs text-gray-500">{{ m.item_code }} · {{ __("List price {0}", [money(m.price_list_rate)]) }}</p>
+								</div>
 								<label class="text-xs text-gray-700 flex flex-col gap-1">
-									{{ __("Discount type") }}
-									<select v-model="pairs[l.name].manual_type" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-										<option value="amt">{{ __("Amount off") }}</option>
-										<option value="pct">{{ __("Percent off") }}</option>
+									{{ __("Qty") }}
+									<input v-model.number="m.qty" type="number" min="1" :max="m.actual_qty" step="1"
+										class="border border-gray-300 rounded px-2 py-1.5 text-sm w-16 text-end" />
+								</label>
+								<label class="text-xs text-gray-700 flex flex-col gap-1">
+									{{ __("Promotion") }}
+									<select v-model="m.discount_mode" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+										<option v-if="l.discount_at_sale.type !== 'unknown'" value="old">{{ __("Same as returned item ({0})", [discountText(l.discount_at_sale)]) }}</option>
+										<option value="pct">{{ __("Enter percent") }}</option>
+										<option value="amt">{{ __("Enter amount") }}</option>
+										<option value="none">{{ __("No discount") }}</option>
 									</select>
 								</label>
-								<label class="text-xs text-gray-700 flex flex-col gap-1">
-									{{ pairs[l.name].manual_type === "pct" ? __("Percent") : __("Amount per unit") }}
-									<input v-model.number="pairs[l.name].manual_value" type="number" min="0"
-										:max="pairs[l.name].manual_type === 'pct' ? 100 : undefined"
-										class="border border-gray-300 rounded px-2 py-1.5 text-sm w-36 text-end" />
+								<label v-if="m.discount_mode === 'pct' || m.discount_mode === 'amt'" class="text-xs text-gray-700 flex flex-col gap-1">
+									{{ m.discount_mode === "pct" ? __("Percent") : __("Amount per unit") }}
+									<input v-model.number="m.discount_value" type="number" min="0"
+										:max="m.discount_mode === 'pct' ? 100 : undefined"
+										class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32 text-end" />
 								</label>
+								<button type="button" class="text-gray-400 hover:text-red-600 px-1 py-1.5" :aria-label="__('Remove')"
+									@click="pairs[l.name].items.splice(i, 1)">
+									<FeatherIcon name="x" class="w-4 h-4" />
+								</button>
 							</div>
 						</div>
+						<p v-else class="text-xs text-gray-500">{{ __("No new item yet. Search above to add one or more items.") }}</p>
 					</div>
 				</template>
 
@@ -275,14 +285,16 @@
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-gray-100">
-								<tr v-for="x in preview.lines" :key="x.sales_invoice_item">
-									<td class="p-2"><b>{{ x.item_name }}</b> × {{ x.qty }}<br />
-										<span class="text-xs text-gray-500">{{ money(x.returned_rate) }}</span></td>
-									<td class="p-2"><b>{{ x.new_item_name }}</b><br />
-										<span class="text-xs text-gray-500">{{ __("List price {0}", [money(x.new_price_list_rate)]) }}</span></td>
-									<td class="p-2"><DiscountPill :d="x.discount_applied" /></td>
-									<td class="p-2 text-end whitespace-nowrap font-semibold">{{ money(x.new_rate * x.qty) }}</td>
-								</tr>
+								<template v-for="x in preview.lines" :key="x.sales_invoice_item">
+									<tr v-for="(m, i) in x.new_items" :key="x.sales_invoice_item + '-' + i">
+										<td v-if="i === 0" :rowspan="x.new_items.length" class="p-2 align-top"><b>{{ x.item_name }}</b> × {{ x.qty }}<br />
+											<span class="text-xs text-gray-500">{{ money(x.returned_rate) }}</span></td>
+										<td class="p-2"><b>{{ m.item_name }}</b> × {{ m.qty }}<br />
+											<span class="text-xs text-gray-500">{{ __("List price {0}", [money(m.price_list_rate)]) }}</span></td>
+										<td class="p-2"><DiscountPill :d="m.discount_applied" /></td>
+										<td class="p-2 text-end whitespace-nowrap font-semibold">{{ money(m.rate * m.qty) }}</td>
+									</tr>
+								</template>
 							</tbody>
 						</table>
 					</div>
@@ -394,7 +406,8 @@
 
 <script setup>
 /**
- * Đổi hàng tại quầy — Hạ Vàng (PM-FEAT-00044). Mockup đã duyệt: PM-DOC-01123 bản 2.
+ * Đổi hàng tại quầy — Hạ Vàng (PM-FEAT-00044). Mockup đã duyệt: PM-DOC-01123 bản 2;
+ * từ 08/11 một món trả đổi được nhiều món mới, mỗi món mới một ô khuyến mại.
  * Mọi số tiền do máy chủ tính (pos_next.api.exchange_ha_vang); màn hình chỉ hiển thị
  * và gửi lại số chênh đã hiện để máy chủ dừng nếu giá thay đổi giữa chừng.
  */
@@ -514,11 +527,8 @@ const canNext = computed(() => {
 	if (step.value === 1) return chosenLines.value.length > 0 && !!reason.value
 	if (step.value === 2)
 		return chosenLines.value.every((l) => {
-			const p = pairs[l.name]
-			if (!p?.item) return false
-			if (l.discount_at_sale.type !== "unknown") return true
-			const v = Number(p.manual_value)
-			return p.manual_value !== "" && v >= 0 && (p.manual_type !== "pct" || v <= 100)
+			const items = pairs[l.name]?.items || []
+			return items.length > 0 && items.every((m) => newItemValid(m, l))
 		})
 	return false
 })
@@ -628,40 +638,80 @@ function stopPolling() {
 
 // ---------------- Bước 3 ----------------
 function ensurePair(name) {
-	if (!pairs[name]) {
-		const l = inv.value.lines.find((x) => x.name === name)
-		const unk = l.discount_at_sale.type === "unknown"
-		pairs[name] = {
-			search: "",
-			results: [],
-			searched: false,
-			loading: false,
-			item: null,
-			manual_type: "amt",
-			// Gợi ý sẵn đúng số tiền khách đã được giảm trên món trả
-			manual_value: unk ? Math.round(l.discount_at_sale.value) : "",
-		}
-	}
+	if (!pairs[name]) pairs[name] = { search: "", results: [], searched: false, loading: false, items: [] }
 	return pairs[name]
+}
+function discountText(d) {
+	if (d.type === "pct") return __("{0}% off", [Number(d.value).toLocaleString("vi-VN", { maximumFractionDigits: 2 })])
+	if (d.type === "amt") return __("{0} off", [money(d.value)])
+	return __("No discount")
+}
+function newItemValid(m, l) {
+	const qty = Number(m.qty)
+	if (!Number.isInteger(qty) || qty < 1 || qty > m.actual_qty) return false
+	if (m.discount_mode === "old") return l.discount_at_sale.type !== "unknown"
+	if (m.discount_mode === "none") return true
+	const v = Number(m.discount_value)
+	return m.discount_value !== "" && m.discount_value != null && v >= 0 && (m.discount_mode !== "pct" || v <= 100)
+}
+// Tìm ngay khi gõ, như ô tìm hàng ngoài màn hình bán (PM-FEAT-00044, anh Thắng 05/11
+// gõ "dép" mà không ra gì). Đọc thẳng giá trị ô thay vì v-model: v-model bỏ qua chữ
+// đang soạn dở của bộ gõ (compositionstart → compositionend), nên với bộ gõ tiếng Việt
+// kiểu soạn chữ, ô hiện "dép" mà search có thể vẫn rỗng và bấm Tìm không làm gì.
+const itemTimers = {}
+function onItemInput(name, e) {
+	const p = pairs[name]
+	p.search = e.target.value
+	p.searched = false
+	clearTimeout(itemTimers[name])
+	if (p.search.trim().length < 2) {
+		p.results = []
+		return
+	}
+	itemTimers[name] = setTimeout(() => findItems(name), SEARCH_DEBOUNCE_MS)
 }
 async function findItems(name) {
 	const p = pairs[name]
-	if (!p.search || p.search.trim().length < 2) return
+	clearTimeout(itemTimers[name])
+	const search = (p.search || "").trim()
+	if (search.length < 2) return
 	p.loading = true
 	errorText.value = ""
 	try {
-		p.results = await call(API + "search_new_items", { pos_profile: props.posProfile, search: p.search })
+		const results = await call(API + "search_new_items", { pos_profile: props.posProfile, search })
+		// Gõ tiếp trong lúc chờ thì bỏ kết quả cũ, đợi lượt tìm mới
+		if ((p.search || "").trim() !== search) return
+		p.results = results
 		p.searched = true
-		// Quét đúng mã vạch ra một món còn hàng thì chọn luôn
-		if (p.results.length === 1 && p.results[0].actual_qty >= chosen[name].qty) pickItem(name, p.results[0])
+		// Quét đúng mã vạch ra một món còn hàng thì thêm luôn
+		if (p.results.length === 1 && p.results[0].actual_qty >= 1) addItem(name, p.results[0])
 	} catch (e) {
 		showErr(e)
 	} finally {
 		p.loading = false
 	}
 }
-function pickItem(name, it) {
-	pairs[name].item = it
+// Một món trả đổi được nhiều món mới (chốt 08/11). Thêm xong thì xoá ô tìm để quét
+// tiếp món sau; chọn lại món đã có thì tăng số lượng.
+function addItem(name, it) {
+	const p = pairs[name]
+	const l = inv.value.lines.find((x) => x.name === name)
+	const daCo = p.items.find((m) => m.item_code === it.item_code)
+	if (daCo) {
+		if (daCo.qty < it.actual_qty) daCo.qty += 1
+	} else {
+		const unk = l.discount_at_sale.type === "unknown"
+		p.items.push({
+			...it,
+			qty: p.items.length ? 1 : Math.min(chosen[name].qty, it.actual_qty),
+			discount_mode: unk ? "amt" : "old",
+			// Món trả không rõ cách giảm: gợi ý sẵn đúng số tiền khách đã được giảm
+			discount_value: unk ? Math.round(l.discount_at_sale.value) : "",
+		})
+	}
+	p.search = ""
+	p.results = []
+	p.searched = false
 }
 
 function payload(extra = {}) {
@@ -672,17 +722,16 @@ function payload(extra = {}) {
 		return_reason: reason.value,
 		note: note.value,
 		approval: inv.value.is_late ? approval.value?.name : null,
-		pairs: chosenLines.value.map((l) => {
-			const p = pairs[l.name]
-			const unk = l.discount_at_sale.type === "unknown"
-			return {
-				sales_invoice_item: l.name,
-				qty: chosen[l.name].qty,
-				new_item_code: p.item.item_code,
-				manual_type: unk ? p.manual_type : null,
-				manual_value: unk ? Number(p.manual_value) : null,
-			}
-		}),
+		pairs: chosenLines.value.map((l) => ({
+			sales_invoice_item: l.name,
+			qty: chosen[l.name].qty,
+			new_items: pairs[l.name].items.map((m) => ({
+				item_code: m.item_code,
+				qty: Number(m.qty),
+				discount_mode: m.discount_mode,
+				discount_value: m.discount_mode === "pct" || m.discount_mode === "amt" ? Number(m.discount_value) : null,
+			})),
+		})),
 		...extra,
 	}
 }
@@ -783,12 +832,16 @@ watch(showDialog, async (open) => {
 		stopPolling()
 	}
 })
-// Đổi lựa chọn món trả thì số tiền xem trước không còn đúng
+// Đổi lựa chọn món trả / món mới thì số tiền xem trước không còn đúng
 watch(
-	() => JSON.stringify(chosen),
+	() => JSON.stringify(chosen) + JSON.stringify(Object.values(pairs).map((p) => p.items)),
 	() => {
 		preview.value = null
 	},
 )
-onUnmounted(stopPolling)
+onUnmounted(() => {
+	stopPolling()
+	clearTimeout(searchTimer)
+	Object.values(itemTimers).forEach(clearTimeout)
+})
 </script>

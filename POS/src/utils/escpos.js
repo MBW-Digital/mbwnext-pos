@@ -370,6 +370,27 @@ export function buildReceiptESCPOS(invoiceData, options = {}) {
 		}
 	}
 
+	// ── Hàng khách trả của lần đổi hàng (PM-FEAT-00044) ─────────
+	const ex = invoiceData.exchange_return
+	if (ex && ex.items && ex.items.length) {
+		b.divider('-')
+		b.boldOn().line('HÀNG KHÁCH TRẢ (ĐỔI HÀNG)').boldOff()
+		b.line(`Phiếu trả: ${ex.name}`.substring(0, b.charsPerLine))
+		if (ex.return_against) b.line(`HĐ gốc: ${ex.return_against}`.substring(0, b.charsPerLine))
+		for (const item of ex.items) {
+			const rate    = item.price_list_rate || item.rate || 0
+			const discAmt = Number.parseFloat(item.discount_amount || 0) * (item.qty || 1)
+			b.line((item.item_name || item.item_code || '').substring(0, b.charsPerLine - 2))
+			if (b.charsPerLine >= 48) {
+				b.line(formatReceiptItemLine(rate, item.qty || 1, discAmt, item.amount || 0, itemWidths))
+			} else {
+				b.twoCol(` ${fmtQty(item.qty || 1)}×${fmtAmt(rate)}`, fmtAmt(item.amount || 0))
+				if (discAmt > 0) b.twoCol('  KM:', fmtAmt(discAmt))
+			}
+		}
+		b.boldOn().twoCol('Giá trị hàng trả:', fmtAmt(ex.grand_total)).boldOff()
+	}
+
 	b.divider('-')
 
 	// ── Totals ───────────────────────────────────────────────────
@@ -722,6 +743,21 @@ export async function buildReceiptBitmap(invoiceData, options = {}) {
 		b.text(name + (item.is_free_item ? ' (MIỄN PHÍ)' : ''))
 		b.itemCols(fmtAmt(rate), fmtQty(qty), fmtAmt(disc), fmtAmt(sub))
 		if (item.serial_no) b.text(`  S/N: ${item.serial_no.replace(/\n/g, ', ')}`)
+	}
+	// Hàng khách trả của lần đổi hàng (PM-FEAT-00044)
+	const exBmp = invoiceData.exchange_return
+	if (exBmp && exBmp.items && exBmp.items.length) {
+		b.divider()
+		b.text('HÀNG KHÁCH TRẢ (ĐỔI HÀNG)', { bold: true })
+		b.text(`Phiếu trả: ${exBmp.name}${exBmp.return_against ? ` · HĐ gốc: ${exBmp.return_against}` : ''}`)
+		for (const item of exBmp.items) {
+			const qty  = item.qty || 1
+			const rate = item.price_list_rate || item.rate || 0
+			const disc = Number.parseFloat(item.discount_amount || 0) * qty
+			b.text(item.item_name || item.item_code || '')
+			b.itemCols(fmtAmt(rate), fmtQty(qty), fmtAmt(disc), fmtAmt(item.amount || 0))
+		}
+		b.twoCol('Giá trị hàng trả:', fmtAmt(exBmp.grand_total))
 	}
 	b.divider()
 

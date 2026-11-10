@@ -554,6 +554,28 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 							invoiceData.outstanding_amount > 0 &&
 							invoiceData.outstanding_amount < invoiceData.grand_total)
 
+					// Hàng khách trả của lần đổi hàng (PM-FEAT-00044)
+					const ex = invoiceData.exchange_return
+					const exchangeReturnHtml =
+						ex && ex.items && ex.items.length
+							? `<div style="border-top:1px dashed #000;margin:8px 0;"></div>
+				<div style="font-weight:bold;font-size:11px;">HÀNG KHÁCH TRẢ (ĐỔI HÀNG)</div>
+				<div style="font-size:10px;margin-bottom:4px;">Phiếu trả: ${ex.name}${ex.return_against ? ` · HĐ gốc: ${ex.return_against}` : ""}</div>
+				<table style="width:100%;font-size:10px;border-collapse:collapse;"><tbody>${ex.items
+					.map((item) => {
+						const qty = item.qty || 1
+						return `<tr><td colspan="4" style="font-weight:bold;padding-top:4px;">${item.item_name || item.item_code || ""}</td></tr>
+						<tr>
+							<td style="padding:1px 4px 1px 0;white-space:nowrap;">${formatVN(item.price_list_rate || item.rate || 0, 0)}</td>
+							<td style="text-align:right;padding:1px 6px;white-space:nowrap;">${Number(qty).toLocaleString("vi-VN", { maximumFractionDigits: 0 })}</td>
+							<td style="text-align:right;padding:1px 6px;white-space:nowrap;">${formatVN(Number.parseFloat(item.discount_amount || 0) * qty, 0)}</td>
+							<td style="text-align:right;padding:1px 0 1px 6px;white-space:nowrap;">${formatVN(item.amount || 0, 0)}</td>
+						</tr>`
+					})
+					.join("")}</tbody></table>
+				<div style="display:flex;justify-content:space-between;margin:4px 0;font-size:11px;font-weight:bold;"><span>Giá trị hàng trả</span><span>${formatVN(ex.grand_total || 0, 0)}</span></div>`
+							: ""
+
 					const itemsRows = (invoiceData.items || [])
 						.map((item) => {
 							const qty = item.quantity || item.qty || 1
@@ -613,6 +635,7 @@ export async function printInvoiceCustom(invoiceData, options = {}) {
 					</thead>
 					<tbody>${itemsRows}</tbody>
 				</table>
+				${exchangeReturnHtml}
 				<div style="border-top:1px dashed #000;margin:8px 0;"></div>
 				<div style="font-size:11px;">
 					<div style="display:flex;justify-content:space-between;margin:3px 0;"><span>Tổng cộng</span><span>${formatVN(grossTotal, 0)}</span></div>

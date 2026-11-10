@@ -10,14 +10,19 @@ có module riêng, chỉ dùng lại phần khung giao dịch.
 
 Luật tiền đã chốt (anh Thắng, anh Hưng, chị Tường Vân):
 
-- Mỗi món trả đổi lấy đúng MỘT món mới (cặp đổi). Khách lấy thêm món thì bán riêng
-  bằng đơn thường, theo giá và KM đang chạy.
-- Món mới hưởng **cách giảm của món trả lúc mua**: giảm % thì giảm đúng %, giảm số tiền
-  thì giảm đúng số tiền (không quy ra %). KM đang chạy hôm nay KHÔNG áp cho món mới.
+- Một món trả đổi được NHIỀU món mới (anh Hưng, anh Thắng chốt 08/11; trước đó là 1
+  đổi 1). Tiền so tổng giá trị các món mới với giá trị món trả.
+- Mỗi món mới có ô khuyến mại riêng, thu ngân chọn (chốt 08/11):
+  · "Theo KM cũ" (mặc định) = **cách giảm của món trả lúc mua**: giảm % thì giảm đúng
+    %, giảm số tiền thì giảm đúng số tiền / đơn vị (không quy ra %). "KM cũ" là KM của
+    món khách mang trả, KHÔNG phải KM món mới từng có: gần như toàn bộ Pricing Rule đã
+    tắt/hết hạn và không lưu lịch sử mức giảm.
+  · Nhập % / nhập số tiền giảm, hoặc Không giảm.
+  KM đang chạy hôm nay KHÔNG áp cho món mới.
 - KM tổng hoá đơn: phần KM đã phân bổ cho món trả đi theo sang hoá đơn mới, giữ
   nguyên số tiền (không tính lại mốc).
 - Hệ thống không xác định được món trả được giảm theo cách nào (giá sửa tay, KM đã
-  xoá…) thì thu ngân nhập tay cách giảm cho món mới.
+  xoá…) thì không có "Theo KM cũ": thu ngân phải nhập tay hoặc chọn Không giảm.
 - Đổi sang hàng rẻ hơn: KHÔNG trả tiền thừa. Phần thừa ghi TK 711, không tách thuế.
 - Chỉ xuất âm món đổi, các món khác giữ nguyên trên hoá đơn cũ (cách A).
 - Mỗi hoá đơn đổi một lần, đúng cửa hàng đã bán, bắt buộc có mạng.
@@ -51,6 +56,8 @@ DOCTYPE = "Sales Invoice"
 SAI_SO = 1.0
 SO_NGAY_MAC_DINH = 15
 CACH_GIAM_HOP_LE = ("pct", "amt")
+# Ô khuyến mại của từng món mới: theo KM món trả, nhập %, nhập tiền, không giảm
+KM_MON_MOI = ("old", "pct", "amt", "none")
 
 
 # ---------------------------------------------------------------------------
@@ -325,10 +332,39 @@ def _duyet_hop_le(original, pos_profile, approval):
 	return yc.name
 
 
+def _cach_giam_mon_moi(cach_goc, km, gia_tri, ten_mon_tra):
+	"""Cách giảm cho một món mới theo lựa chọn ở ô khuyến mại `km`."""
+	km = km or "old"
+	if km not in KM_MON_MOI:
+		frappe.throw(_("Invalid discount option for the new item replacing {0}.").format(ten_mon_tra))
+	if km == "old":
+		if cach_goc["type"] == "unknown":
+			frappe.throw(_("Enter the discount for the new item replacing {0}.").format(ten_mon_tra))
+		return cach_goc
+	if km == "none":
+		return {"type": "none", "value": 0, "label": _("No discount")}
+	if flt(gia_tri) < 0:
+		frappe.throw(_("Enter the discount for the new item replacing {0}.").format(ten_mon_tra))
+	if km == "pct" and flt(gia_tri) > 100:
+		frappe.throw(_("Discount cannot exceed 100%."))
+	return {"type": km, "value": flt(gia_tri), "label": _("Entered by cashier")}
+
+
+def _mon_moi_cua_cap(x):
+	"""Danh sách món mới của một món trả. Nhận cả dạng cũ một món (`new_item_code`)."""
+	if x.get("new_items"):
+		return [frappe._dict(m) for m in x.new_items]
+	if x.get("new_item_code"):
+		km = x.manual_type if x.manual_type in CACH_GIAM_HOP_LE else "old"
+		return [frappe._dict(item_code=x.new_item_code, qty=x.qty, discount_mode=km, discount_value=x.manual_value)]
+	return []
+
+
 def _lap_ke_hoach(original, p):
 	"""Tính toàn bộ số tiền của một lần đổi. Dùng chung cho xem trước và lưu thật.
 
-	p.pairs: [{sales_invoice_item, qty, new_item_code, manual_type, manual_value}]
+	p.pairs: [{sales_invoice_item, qty,
+	           new_items: [{item_code, qty, discount_mode: old|pct|amt|none, discount_value}]}]
 	"""
 	ho_so = _ho_so(p.pos_profile)
 	han = _han_doi(original.posting_date, p.pos_profile)
@@ -354,37 +390,34 @@ def _lap_ke_hoach(original, p):
 			frappe.throw(_("Invalid quantity to exchange for {0}.").format(goc.item_name))
 		if cint(goc.is_free_item):
 			frappe.throw(_("{0} is a free item and cannot be exchanged.").format(goc.item_name))
-		if not x.new_item_code:
+		ds_moi = _mon_moi_cua_cap(x)
+		if not ds_moi:
 			frappe.throw(_("Pick the new item for {0}.").format(goc.item_name))
 
 		cach_goc = cach_giam_luc_mua(goc)
-		cach = cach_goc
-		if cach_goc["type"] == "unknown":
-			if x.manual_type not in CACH_GIAM_HOP_LE or flt(x.manual_value) < 0:
-				frappe.throw(_("Enter the discount for the new item replacing {0}.").format(goc.item_name))
-			if x.manual_type == "pct" and flt(x.manual_value) > 100:
-				frappe.throw(_("Discount cannot exceed 100%."))
-			cach = {"type": x.manual_type, "value": flt(x.manual_value), "label": _("Entered by cashier")}
-
-		moi = _mon_moi(x.new_item_code, ho_so, original.customer)
-		giam_dv = _giam_cho_mon_moi(cach, moi.price_list_rate)
-		rate_moi = flt(round(moi.price_list_rate - giam_dv))
+		mon = []
+		for m in ds_moi:
+			sl = flt(m.qty) or 1
+			if sl <= 0 or sl != int(sl):
+				frappe.throw(_("Invalid quantity for the new item replacing {0}.").format(goc.item_name))
+			cach = _cach_giam_mon_moi(cach_goc, m.discount_mode, m.discount_value, goc.item_name)
+			moi = _mon_moi(m.item_code, ho_so, original.customer)
+			giam_dv = _giam_cho_mon_moi(cach, moi.price_list_rate)
+			mon.append(
+				frappe._dict(
+					moi=moi,
+					qty=sl,
+					km=m.discount_mode or "old",
+					cach=cach,
+					rate_moi=flt(round(moi.price_list_rate - giam_dv)),
+				)
+			)
 		# Phần KM tổng đơn đã phân bổ cho số lượng trả của dòng này
 		phan_ck = flt(ck_tong * flt(goc.rate) * qty / tong_dong_goc) if ck_tong and tong_dong_goc else 0.0
-		cap.append(
-			frappe._dict(
-				goc=goc,
-				qty=qty,
-				cach_goc=cach_goc,
-				cach=cach,
-				moi=moi,
-				rate_moi=rate_moi,
-				phan_ck=phan_ck,
-			)
-		)
+		cap.append(frappe._dict(goc=goc, qty=qty, cach_goc=cach_goc, mon=mon, phan_ck=phan_ck))
 
 	ck_chuyen = flt(round(sum(c.phan_ck for c in cap)))
-	gia_tri_moi = sum(c.rate_moi * c.qty for c in cap)
+	gia_tri_moi = sum(m.rate_moi * m.qty for c in cap for m in c.mon)
 	# KM không quy ra tiền: phần KM mang sang không vượt giá trị hàng mới.
 	ck_moi = min(ck_chuyen, gia_tri_moi)
 
@@ -434,30 +467,32 @@ def _lap_ke_hoach(original, p):
 
 	ghi_chu_tay = [
 		_("{0}: discount {1} entered by {2}").format(
-			c.moi.name,
-			f"{flt(c.cach['value'])}%" if c.cach["type"] == "pct" else frappe.format_value(c.cach["value"], {"fieldtype": "Currency"}),
+			m.moi.name,
+			f"{flt(m.cach['value'])}%" if m.cach["type"] == "pct" else frappe.format_value(m.cach["value"], {"fieldtype": "Currency"}),
 			frappe.utils.get_fullname(frappe.session.user),
 		)
 		for c in cap
-		if c.cach_goc["type"] == "unknown"
+		for m in c.mon
+		if m.km != "old"
 	]
 	moi = dict(
 		chung,
 		remarks="\n".join([_("Exchange for {0}").format(original.name), *ghi_chu_tay]),
 		items=[
 			{
-				"item_code": c.moi.name,
-				"item_name": c.moi.item_name,
-				"qty": c.qty,
-				"uom": c.moi.stock_uom,
+				"item_code": m.moi.name,
+				"item_name": m.moi.item_name,
+				"qty": m.qty,
+				"uom": m.moi.stock_uom,
 				"conversion_factor": 1,
 				"warehouse": ho_so.warehouse,
-				"price_list_rate": c.moi.price_list_rate,
-				"rate": c.rate_moi,
-				"discount_percentage": flt(c.cach["value"]) if c.cach["type"] == "pct" else 0,
-				"discount_amount": flt(c.moi.price_list_rate - c.rate_moi),
+				"price_list_rate": m.moi.price_list_rate,
+				"rate": m.rate_moi,
+				"discount_percentage": flt(m.cach["value"]) if m.cach["type"] == "pct" else 0,
+				"discount_amount": flt(m.moi.price_list_rate - m.rate_moi),
 			}
 			for c in cap
+			for m in c.mon
 		],
 	)
 	if ck_moi:
@@ -500,13 +535,20 @@ def _tom_tat(plan):
 				"returned_rate": flt(c.goc.rate),
 				"returned_price_list_rate": flt(c.goc.price_list_rate),
 				"discount_at_sale": c.cach_goc,
-				"discount_applied": c.cach,
 				"promotion_share": flt(c.phan_ck),
-				"new_item_code": c.moi.name,
-				"new_item_name": c.moi.item_name,
-				"new_price_list_rate": c.moi.price_list_rate,
-				"new_rate": c.rate_moi,
-				"new_actual_qty": c.moi.actual_qty,
+				"new_items": [
+					{
+						"item_code": m.moi.name,
+						"item_name": m.moi.item_name,
+						"qty": m.qty,
+						"discount_mode": m.km,
+						"discount_applied": m.cach,
+						"price_list_rate": m.moi.price_list_rate,
+						"rate": m.rate_moi,
+						"actual_qty": m.moi.actual_qty,
+					}
+					for m in c.mon
+				],
 			}
 			for c in plan.cap
 		],
@@ -769,6 +811,59 @@ def get_invoice(invoice_name, pos_profile):
 
 
 @frappe.whitelist()
+def get_exchange_counterpart(invoice_name):
+	"""Màn Chi tiết hoá đơn: chứng từ bên kia của một lần đổi (anh Thắng 09/11)."""
+	if not frappe.has_permission(DOCTYPE, "read", invoice_name):
+		frappe.throw(_("You don't have permission to view this invoice"), frappe.PermissionError)
+	return chung_tu_ben_kia(invoice_name)
+
+
+def chung_tu_ben_kia(invoice_name):
+	"""HĐ mới → phiếu trả (món khách mang trả); phiếu trả → HĐ mới (món khách lấy).
+
+	Dùng chung cho màn Chi tiết hoá đơn và mẫu in hoá đơn (receipt_print).
+	Không phải chứng từ đổi hàng thì trả None. Không kiểm quyền: hàm gọi tự kiểm.
+	"""
+	from pos_next.api.receipt_print import item_barcode_for_receipt
+
+	hd = frappe.db.get_value(
+		DOCTYPE, invoice_name, ["is_return", "posa_is_exchange", "posa_exchange_against"], as_dict=True
+	)
+	if not hd or not cint(hd.posa_is_exchange):
+		return None
+	if cint(hd.is_return):
+		ten = frappe.db.get_value(DOCTYPE, {"posa_exchange_against": invoice_name, "docstatus": ["<", 2]}, "name")
+	else:
+		ten = hd.posa_exchange_against
+	if not ten:
+		return None
+	doc = frappe.get_doc(DOCTYPE, ten)
+	return {
+		"name": doc.name,
+		"is_return": cint(doc.is_return),
+		"return_against": doc.return_against,
+		"docstatus": doc.docstatus,
+		# Phiếu trả mang số âm; màn hình và phiếu in hiện số dương cho dễ đọc
+		"grand_total": abs(flt(doc.grand_total)),
+		"items": [
+			{
+				"item_code": r.item_code,
+				"item_name": r.item_name,
+				"barcode": item_barcode_for_receipt(r),
+				"qty": abs(flt(r.qty)),
+				"price_list_rate": flt(r.price_list_rate),
+				"rate": flt(r.rate),
+				"discount_percentage": flt(r.discount_percentage),
+				# Mức giảm trên MỘT đơn vị, như Sales Invoice Item
+				"discount_amount": flt(r.discount_amount),
+				"amount": abs(flt(r.amount)),
+			}
+			for r in doc.items
+		],
+	}
+
+
+@frappe.whitelist()
 def search_new_items(pos_profile, search):
 	"""Tìm món khách muốn lấy: quét mã vạch, mã hàng hoặc tên. Kèm giá niêm yết và tồn
 	tại kho cửa hàng (món hết hàng vẫn trả về để thu ngân thấy, nhưng không chọn được)."""
@@ -817,7 +912,8 @@ def calculate_exchange(payload):
 	"""Xem trước số tiền của một lần đổi. Không lưu gì.
 
 	payload: {invoice_name, pos_profile, pos_opening_shift, return_reason, approval,
-	          pairs: [{sales_invoice_item, qty, new_item_code, manual_type, manual_value}]}
+	          pairs: [{sales_invoice_item, qty,
+	                   new_items: [{item_code, qty, discount_mode, discount_value}]}]}
 	"""
 	p = _chuan_hoa(payload)
 	_kiem_quyen_cua_hang(p.pos_profile)

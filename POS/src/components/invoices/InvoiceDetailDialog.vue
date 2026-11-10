@@ -180,6 +180,48 @@
 					</div>
 				</div>
 
+				<!-- Món ở chứng từ bên kia của lần đổi hàng (PM-FEAT-00044) -->
+				<div v-if="exchangeData && exchangeData.items.length">
+					<h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center flex-wrap gap-x-2">
+						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/>
+						</svg>
+						<span>{{ exchangeData.is_return ? __('Items returned by the customer') : __('Items taken in exchange') }}</span>
+						<span class="text-xs font-normal text-gray-500">
+							({{ exchangeData.is_return ? __('return {0}', [exchangeData.name]) : __('invoice {0}', [exchangeData.name]) }}<template v-if="exchangeData.return_against">, {{ __('original invoice {0}', [exchangeData.return_against]) }}</template>)
+						</span>
+					</h4>
+					<div class="border border-amber-200 rounded-lg overflow-x-auto">
+						<table class="min-w-full divide-y divide-amber-100">
+							<thead class="bg-amber-50">
+								<tr>
+									<th class="px-4 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ __('Item') }}</th>
+									<th class="px-4 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ __('Qty') }}</th>
+									<th class="px-4 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ __('Rate') }}</th>
+									<th class="px-4 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ __('Discount') }}</th>
+									<th class="px-4 py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ __('Amount') }}</th>
+								</tr>
+							</thead>
+							<tbody class="bg-white divide-y divide-amber-100">
+								<tr v-for="(item, idx) in exchangeData.items" :key="idx">
+									<td class="px-4 py-2 text-center">
+										<div class="text-sm font-medium text-gray-900">{{ item.item_name }}</div>
+										<div class="text-xs text-gray-500">{{ item.item_code }}</div>
+									</td>
+									<td class="px-4 py-2 text-center text-sm text-gray-900">{{ item.qty }}</td>
+									<td class="px-4 py-2 text-center text-sm text-gray-900">{{ formatCurrency(item.rate) }}</td>
+									<td class="px-4 py-2 text-center text-sm text-gray-600">{{ formatDiscountPercent(item) }}</td>
+									<td class="px-4 py-2 text-center text-sm font-semibold text-gray-900">{{ formatCurrency(item.amount) }}</td>
+								</tr>
+							</tbody>
+						</table>
+					</div>
+					<div class="text-end text-sm text-gray-600 mt-2">
+						{{ exchangeData.is_return ? __('Value of returned items (customer paid):') : __('Exchange invoice total:') }}
+						<span class="font-semibold text-gray-900">{{ formatCurrency(exchangeData.grand_total) }}</span>
+					</div>
+				</div>
+
 				<!-- Totals Section -->
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
 					<!-- Payment Info -->
@@ -335,6 +377,8 @@ const emit = defineEmits(["update:modelValue", "print-invoice"])
 const show = ref(props.modelValue)
 const loading = ref(false)
 const invoiceData = ref(null)
+// Chứng từ bên kia của lần đổi hàng: HĐ mới ↔ phiếu trả (PM-FEAT-00044)
+const exchangeData = ref(null)
 
 // Computed: Check if this is a credit sale (Pay on Account - no payments, full outstanding)
 const isCreditSale = computed(() => {
@@ -380,6 +424,7 @@ watch(show, async (val) => {
 	if (!val) {
 		// Clear data when closing
 		invoiceData.value = null
+		exchangeData.value = null
 	} else {
 		// Ensure dialog appears above other dialogs
 		await nextTick()
@@ -410,6 +455,15 @@ async function loadInvoiceDetails() {
 			}))
 		}
 		invoiceData.value = result
+		exchangeData.value = null
+		if (result?.posa_is_exchange) {
+			// Lỗi phần này không được làm hỏng màn chi tiết: chỉ mất bảng món đổi
+			call("pos_next.api.exchange_ha_vang.get_exchange_counterpart", { invoice_name: result.name })
+				.then((r) => {
+					if (invoiceData.value?.name === result.name) exchangeData.value = r || null
+				})
+				.catch((e) => log.error("Error loading exchange counterpart:", e))
+		}
 	} catch (error) {
 		log.error("Error loading invoice details:", error)
 		invoiceData.value = null

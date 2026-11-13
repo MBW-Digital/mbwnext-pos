@@ -660,6 +660,7 @@
 
 			<!-- Invoice History Dialog -->
 			<InvoiceHistoryDialog
+				ref="invoiceHistoryDialogRef"
 				v-model="uiStore.showHistoryDialog"
 				:pos-profile="shiftStore.profileName"
 				:pos-opening-shift="shiftStore.currentShift?.name"
@@ -738,6 +739,7 @@
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
 				@print-invoice="handlePrintInvoice"
+				@invoice-changed="handleDraftInvoiceChanged"
 			/>
 
 			<!-- Clear Cart Confirmation Dialog -->
@@ -2477,9 +2479,16 @@ async function handlePaymentCompleted(paymentData) {
 		setActiveTabPaymentDialog(false);
 
 		const errorContext = parseError(error);
+		// Step 1 left a draft: tell the cashier in the dialog itself (PM-TASK-00442)
+		const draftHint = error?.draftInvoiceName
+			? __(
+					"Invoice {0} was saved as a draft but not completed. Press Pay again on this cart to finish this same invoice - no second invoice is made.",
+					[error.draftInvoiceName]
+			  )
+			: "";
 		uiStore.showError(
 			errorContext.title || __("Error"),
-			errorContext.message || __("An unexpected error occurred"),
+			[errorContext.message || __("An unexpected error occurred"), draftHint].filter(Boolean).join("\n\n"),
 			errorContext.technicalDetails || null,
 			errorContext.retryable ? "payment" : null
 		);
@@ -2492,6 +2501,15 @@ async function handlePaymentCompleted(paymentData) {
 			showWarning(errorContext.message);
 		}
 	}
+}
+
+// Nháp đã thu tiền được hoàn tất / xoá từ Chi tiết hoá đơn (PM-TASK-00442)
+const invoiceHistoryDialogRef = ref(null);
+function handleDraftInvoiceChanged() {
+	if (uiStore.showHistoryDialog) invoiceHistoryDialogRef.value?.loadInvoices();
+	loadInvoiceHistoryData().catch((err) =>
+		log.debug("Background invoice cache refresh failed:", err)
+	);
 }
 
 async function handleSePayPaymentReceived() {

@@ -44,6 +44,9 @@ export function useInvoice() {
 
 	// Submission state - prevents duplicate submissions
 	const isSubmitting = ref(false)
+	// Draft saved by step 1 whose step 2 failed. The next Pay on the same cart
+	// re-sends it by name instead of making a second paid draft (PM-TASK-00442).
+	const pendingDraftName = ref(null)
 
 	// Performance: Incrementally maintained aggregates (updated on add/remove/change)
 	// This avoids O(n) array reductions on every reactive change
@@ -1173,6 +1176,10 @@ export function useInvoice() {
 					}))
 				}
 
+				if (pendingDraftName.value) {
+					invoiceData.name = pendingDraftName.value
+				}
+
 				const draftInvoice = await updateInvoiceResource.submit({
 					data: invoiceData,
 				})
@@ -1191,6 +1198,20 @@ export function useInvoice() {
 						"Failed to create draft invoice - no invoice name returned",
 					)
 				}
+
+				// Step 2 of the earlier try did go through; only its reply was lost
+				if (invoiceDoc.docstatus === 1) {
+					pendingDraftName.value = null
+					resetInvoice()
+					return {
+						name: invoiceDoc.name,
+						status: 1,
+						grand_total: invoiceDoc.grand_total,
+						total: invoiceDoc.total,
+						paid_amount: invoiceDoc.paid_amount,
+					}
+				}
+				pendingDraftName.value = invoiceDoc.name
 
 				const submitData = {
 					change_amount:
@@ -1221,9 +1242,14 @@ export function useInvoice() {
 						throw detailedError
 					}
 
+					pendingDraftName.value = null
 					resetInvoice()
 					return result
 				} catch (error) {
+					// Step 1 already saved a paid draft; the cashier needs its name (PM-TASK-00442)
+					if (error && typeof error === "object") {
+						error.draftInvoiceName = invoiceDoc.name
+					}
 					// Preserve original error object with all its properties
 					console.error("Submit invoice error:", error)
 					console.log(
@@ -1415,6 +1441,7 @@ export function useInvoice() {
 	 * If a POS Profile is active and has a default customer, it will be pre-selected.
 	 */
 	async function clearCart() {
+		pendingDraftName.value = null
 		// Return all serial numbers back to cache before clearing
 		for (const item of invoiceItems.value) {
 			if (item.has_serial_no && item.serial_no) {
@@ -1531,6 +1558,7 @@ export function useInvoice() {
 		taxRules,
 		taxInclusive,
 		isSubmitting,
+		pendingDraftName,
 
 		// Computed
 		subtotal,

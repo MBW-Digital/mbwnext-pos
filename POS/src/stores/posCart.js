@@ -113,6 +113,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		transactionPricingRule,
 		taxInclusive,
 		isSubmitting,
+		pendingDraftName,
 		addItem: addItemToInvoice,
 		removeItem,
 		updateItemQuantity,
@@ -969,6 +970,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			targetDoctype: targetDoctype.value,
 			deliveryDate: deliveryDate.value || "",
 			writeOffAmount: writeOffAmount.value || 0,
+			pendingDraftName: pendingDraftName.value || null,
 		}
 	}
 
@@ -996,6 +998,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		targetDoctype.value = snapshot.targetDoctype || "Sales Invoice"
 		deliveryDate.value = snapshot.deliveryDate || ""
 		writeOffAmount.value = snapshot.writeOffAmount || 0
+		pendingDraftName.value = snapshot.pendingDraftName || null
 
 		if (Array.isArray(snapshot.items)) {
 			for (const item of snapshot.items) {

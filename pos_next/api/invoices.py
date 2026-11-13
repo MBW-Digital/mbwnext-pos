@@ -2111,22 +2111,35 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
 
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
-    filters = {
-        "docstatus": 0,  # Draft only
-        # is_pos is set unconditionally on every invoice this app creates (see
-        # update_invoice()), so POS drafts are never missed - but invoices typed
-        # into the desk are, and they are none of this function's business.
-        "is_pos": 1,
-        "pos_profile": pos_profile,
-        "modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
-    }
+    # A till taking SePay transfers leaves the QR draft unpaid until the bank
+    # money arrives. Customers do transfer late; delete the draft after an hour
+    # and the webhook finds no invoice for money already in the bank. Keep such
+    # drafts for a day on SePay tills.
+    from pos_next.api.sepay import SEPAY_DRAFT_KEEP_HOURS, _get_sepay_settings
 
-    # Get old drafts
-    old_drafts = frappe.get_all(
-        doctype,
-        filters=filters,
-        fields=["name", "modified", "grand_total", "paid_amount"],
-        limit_page_length=100,  # Safety limit
+    if _get_sepay_settings(pos_profile):
+        cutoff_time = min(cutoff_time, datetime.now() - timedelta(hours=SEPAY_DRAFT_KEEP_HOURS))
+
+    # Drafts kept on purpose (paid in full, see below) are left out in SQL, not
+    # skipped in the loop: otherwise they fill the 100-row batch and the drafts
+    # behind them are never reached.
+    old_drafts = frappe.db.sql(
+        """
+        SELECT name, modified, grand_total, paid_amount
+        FROM `tabSales Invoice`
+        WHERE docstatus = 0
+            -- is_pos is set unconditionally on every invoice this app creates (see
+            -- update_invoice()), so POS drafts are never missed - but invoices typed
+            -- into the desk are, and they are none of this function's business.
+            AND is_pos = 1
+            AND pos_profile = %(pos_profile)s
+            AND modified < %(cutoff)s
+            AND NOT (grand_total > 0 AND paid_amount >= grand_total)
+        ORDER BY modified
+        LIMIT 100
+        """,
+        {"pos_profile": pos_profile, "cutoff": cutoff_time.strftime("%Y-%m-%d %H:%M:%S")},
+        as_dict=True,
     )
 
     deleted_count = 0
@@ -2136,8 +2149,7 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
         # typically the network dropped in between. The goods have left the
         # shop: deleting it erases the sale (PM-TASK-00442: Payoo 2.906.400 of
         # 362611120003 wiped an hour later by the next sale's clearCart). Keep
-        # it so the till can finish it from Invoice Details. SePay drafts still
-        # waiting for the transfer are not paid in full and stay cleanable.
+        # it so the till can finish it from Invoice Details.
         if flt(draft.get("grand_total")) > 0 and flt(draft.get("paid_amount")) >= flt(
             draft.get("grand_total")
         ):

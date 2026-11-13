@@ -841,6 +841,15 @@ def update_invoice(data):
         # Normalize pricing_rules before document creation
         standardize_pricing_rules(data.get("items"))
 
+        # The POS re-sends the draft of a failed try by name (PM-TASK-00442)
+        if data.get("name"):
+            docstatus = frappe.db.get_value(doctype, data.get("name"), "docstatus")
+            if docstatus == 1:
+                # Step 2 of that try went through, only its reply was lost
+                return frappe.get_doc(doctype, data.get("name")).as_dict()
+            if docstatus is None or docstatus == 2:
+                data.pop("name")
+
         # Create or update invoice
         if data.get("name"):
             invoice_doc = frappe.get_doc(doctype, data.get("name"))
@@ -1520,6 +1529,18 @@ def submit_invoice(invoice=None, data=None):
             invoice_doc = frappe.get_doc(doctype, invoice_name)
         else:
             invoice_doc = frappe.get_doc(doctype, invoice_name)
+            if invoice_doc.docstatus == 1:
+                invoice_submitted = True
+                return {
+                    "name": invoice_doc.name,
+                    "status": invoice_doc.docstatus,
+                    "grand_total": invoice_doc.grand_total,
+                    "total": invoice_doc.total,
+                    "net_total": invoice_doc.net_total,
+                    "outstanding_amount": getattr(invoice_doc, "outstanding_amount", 0),
+                    "paid_amount": getattr(invoice_doc, "paid_amount", 0),
+                    "change_amount": getattr(invoice_doc, "change_amount", 0),
+                }
             invoice_doc.update(invoice)
 
         # Ensure update_stock is set for Sales Invoice
@@ -1750,6 +1771,110 @@ def get_invoice(invoice_name):
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 
 	return invoice.as_dict()
+
+
+# ==========================================
+# Paid drafts left behind by a lost connection (PM-TASK-00442)
+# ==========================================
+#
+# A POS sale is two calls: update_invoice saves a draft that already carries the
+# payments, then submit_invoice submits it. When the network drops between the
+# two, the customer has paid and left with the goods, but the invoice is a
+# draft: no stock movement, no revenue - and cleanup_old_drafts used to delete
+# it an hour later. Pressing Pay again on the same cart re-sends that draft by
+# name (see update_invoice); these two endpoints cover the cart that is gone.
+
+
+def _la_nhap_da_thu_du(doc):
+	return (
+		doc.docstatus == 0
+		and cint(doc.is_pos)
+		and not cint(doc.is_return)
+		and flt(doc.grand_total) > 0
+		and flt(doc.paid_amount) >= flt(doc.grand_total)
+	)
+
+
+def _nhap_da_thu_cua_quay(invoice_name):
+	doc = frappe.get_doc("Sales Invoice", invoice_name)
+	if not doc.pos_profile or not frappe.db.exists(
+		"POS Profile User", {"parent": doc.pos_profile, "user": frappe.session.user}
+	):
+		frappe.throw(_("You don't have access to POS Profile {0}").format(doc.pos_profile))
+	if not _la_nhap_da_thu_du(doc):
+		frappe.throw(_("Only fully paid POS drafts can be handled here"))
+	return doc
+
+
+def _hoa_don_giong(doc):
+	"""Submitted invoices of the same shift that look like the same sale.
+
+	Only a hint for the cashier: a walk-in customer buying the same item twice
+	in a shift matches too, so this never blocks anything on its own.
+	"""
+	if not doc.get("posa_pos_opening_shift"):
+		return []
+	ung_vien = frappe.get_all(
+		"Sales Invoice",
+		filters={
+			"docstatus": 1,
+			"is_pos": 1,
+			"is_return": 0,
+			"posa_pos_opening_shift": doc.posa_pos_opening_shift,
+			"customer": doc.customer,
+			"grand_total": flt(doc.grand_total),
+		},
+		fields=["name", "posting_time"],
+	)
+	if not ung_vien:
+		return []
+	tong = {}
+	for r in frappe.get_all(
+		"Sales Invoice Item",
+		filters={"parenttype": "Sales Invoice", "parent": ["in", [u.name for u in ung_vien] + [doc.name]]},
+		fields=["parent", "item_code", "qty"],
+	):
+		# Summed per item: FIFO batch splitting makes the row layout differ
+		hang = tong.setdefault(r.parent, {})
+		hang[r.item_code] = flt(hang.get(r.item_code)) + flt(r.qty)
+	return [
+		{"name": u.name, "posting_time": str(u.posting_time or "")[:5]}
+		for u in ung_vien
+		if tong.get(u.name) == tong.get(doc.name)
+	]
+
+
+@frappe.whitelist()
+def complete_draft_invoice(invoice_name, confirm_similar=0):
+	"""Submit a paid POS draft from Invoice Details (PM-TASK-00442)."""
+	doc = _nhap_da_thu_cua_quay(invoice_name)
+
+	shift = doc.get("posa_pos_opening_shift")
+	if not shift or frappe.db.get_value("POS Opening Shift", shift, "status") != "Open":
+		frappe.throw(
+			_("Shift {0} is closed. Ask accounting to record invoice {1} for its original date.").format(
+				shift or "-", doc.name
+			)
+		)
+
+	if not cint(confirm_similar):
+		giong = _hoa_don_giong(doc)
+		if giong:
+			return {"needs_confirm": True, "similar": giong}
+
+	# The coupon is not counted again here: step 2 may have counted it already
+	return submit_invoice(
+		invoice={"name": doc.name, "doctype": "Sales Invoice", "pos_profile": doc.pos_profile},
+		data={},
+	)
+
+
+@frappe.whitelist()
+def delete_paid_draft(invoice_name):
+	"""Drop a paid POS draft whose sale did not happen (PM-TASK-00442)."""
+	doc = _nhap_da_thu_cua_quay(invoice_name)
+	frappe.delete_doc("Sales Invoice", doc.name, force=True, ignore_permissions=True)
+	return doc.name
 
 
 @frappe.whitelist()
@@ -1986,26 +2111,49 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
 
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
-    filters = {
-        "docstatus": 0,  # Draft only
-        # is_pos is set unconditionally on every invoice this app creates (see
-        # update_invoice()), so POS drafts are never missed - but invoices typed
-        # into the desk are, and they are none of this function's business.
-        "is_pos": 1,
-        "pos_profile": pos_profile,
-        "modified": ["<", cutoff_time.strftime("%Y-%m-%d %H:%M:%S")],
-    }
+    # A till taking SePay transfers leaves the QR draft unpaid until the bank
+    # money arrives. Customers do transfer late; delete the draft after an hour
+    # and the webhook finds no invoice for money already in the bank. Keep such
+    # drafts for a day on SePay tills.
+    from pos_next.api.sepay import SEPAY_DRAFT_KEEP_HOURS, _get_sepay_settings
 
-    # Get old drafts
-    old_drafts = frappe.get_all(
-        doctype,
-        filters=filters,
-        fields=["name", "modified"],
-        limit_page_length=100,  # Safety limit
+    if _get_sepay_settings(pos_profile):
+        cutoff_time = min(cutoff_time, datetime.now() - timedelta(hours=SEPAY_DRAFT_KEEP_HOURS))
+
+    # Drafts kept on purpose (paid in full, see below) are left out in SQL, not
+    # skipped in the loop: otherwise they fill the 100-row batch and the drafts
+    # behind them are never reached.
+    old_drafts = frappe.db.sql(
+        """
+        SELECT name, modified, grand_total, paid_amount
+        FROM `tabSales Invoice`
+        WHERE docstatus = 0
+            -- is_pos is set unconditionally on every invoice this app creates (see
+            -- update_invoice()), so POS drafts are never missed - but invoices typed
+            -- into the desk are, and they are none of this function's business.
+            AND is_pos = 1
+            AND pos_profile = %(pos_profile)s
+            AND modified < %(cutoff)s
+            AND NOT (grand_total > 0 AND paid_amount >= grand_total)
+        ORDER BY modified
+        LIMIT 100
+        """,
+        {"pos_profile": pos_profile, "cutoff": cutoff_time.strftime("%Y-%m-%d %H:%M:%S")},
+        as_dict=True,
     )
 
     deleted_count = 0
     for draft in old_drafts:
+        # Paid in full = step 1 (update_invoice) saved the draft with the
+        # customer's money on it, but step 2 (submit_invoice) never landed -
+        # typically the network dropped in between. The goods have left the
+        # shop: deleting it erases the sale (PM-TASK-00442: Payoo 2.906.400 of
+        # 362611120003 wiped an hour later by the next sale's clearCart). Keep
+        # it so the till can finish it from Invoice Details.
+        if flt(draft.get("grand_total")) > 0 and flt(draft.get("paid_amount")) >= flt(
+            draft.get("grand_total")
+        ):
+            continue
         try:
             frappe.delete_doc(
                 doctype, draft["name"], force=True, ignore_permissions=True

@@ -297,6 +297,9 @@ function loadMore() {
 	invoicesResource.reload()
 }
 
+// POSSale reloads the list after a paid draft is completed or deleted (PM-TASK-00442)
+defineExpose({ loadInvoices })
+
 onUnmounted(() => {
 	if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
 })

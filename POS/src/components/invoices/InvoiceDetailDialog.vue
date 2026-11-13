@@ -56,6 +56,30 @@
 					</div>
 				</div>
 
+				<!-- Nháp đã thu đủ tiền: mất mạng giữa lưu nháp và hoàn tất (PM-TASK-00442) -->
+				<div v-if="isPaidDraft" class="bg-red-50 rounded-lg p-4 border border-red-200 text-start">
+					<h4 class="text-sm font-semibold text-red-900">{{ __('Paid but not completed') }}</h4>
+					<p class="text-xs text-red-800 mt-1">
+						{{ __('The connection dropped before this invoice was completed: the payment is recorded but stock and revenue are not. If the customer has paid and taken the goods, and the sale was not rung up again, press Complete invoice. If the sale did not happen, delete the draft.') }}
+					</p>
+					<div v-if="similarInvoices.length" class="mt-3 text-xs text-red-900">
+						{{ __('This shift already has an invoice with the same customer, items and total: {0}. Check it is not this same sale rung up again.', [similarInvoices.map((s) => s.name + (s.posting_time ? ' (' + s.posting_time + ')' : '')).join(', ')]) }}
+					</div>
+					<div v-if="confirmAction" class="mt-3 flex flex-wrap items-center gap-2">
+						<span class="text-xs font-medium text-red-900">
+							{{ confirmAction === 'delete'
+								? __('Delete draft {0}? Only if the customer did not pay or did not take the goods.', [invoiceData.name])
+								: __('Make sure this sale was not rung up again. Complete {0}?', [invoiceData.name]) }}
+						</span>
+						<Button size="sm" variant="solid" theme="red" :loading="working" @click="confirmAction === 'delete' ? handleDelete() : handleComplete()">
+							{{ confirmAction === 'delete' ? __('Yes, delete') : __('Yes, complete') }}
+						</Button>
+						<Button size="sm" variant="subtle" :disabled="working" @click="confirmAction = null">
+							{{ __('Cancel') }}
+						</Button>
+					</div>
+				</div>
+
 				<!-- Return Type Notice: Added to Customer Credit (no payments, negative outstanding) -->
 				<div v-if="invoiceData.is_return && isAddedToCustomerCredit" class="bg-gradient-to-r rtl:bg-gradient-to-l from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200">
 					<div class="flex items-start gap-3">
@@ -304,6 +328,15 @@
 				<Button variant="subtle" @click="show = false">
 					{{ __('Close') }}
 				</Button>
+				<div class="flex items-center gap-2">
+				<template v-if="isPaidDraft && !confirmAction">
+					<Button variant="subtle" theme="red" @click="confirmAction = 'delete'">
+						{{ __('Delete draft') }}
+					</Button>
+					<Button variant="solid" theme="red" @click="confirmAction = 'complete'">
+						{{ __('Complete invoice') }}
+					</Button>
+				</template>
 				<Button @click="handlePrint">
 					<template #prefix>
 						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -312,6 +345,7 @@
 					</template>
 					{{ __('Print') }}
 				</Button>
+				</div>
 			</div>
 		</template>
 	</Dialog>
@@ -323,10 +357,13 @@ import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/
 import { getInvoiceStatusColor } from "@/utils/invoice"
 import { logger } from "@/utils/logger"
 import { Button, Dialog, call } from "frappe-ui"
+import { useToast } from "@/composables/useToast"
+import { parseError } from "@/utils/errorHandler"
 import { ref, watch, nextTick, computed } from "vue"
 
 const log = logger.create('InvoiceDetailDialog')
 const { formatDate, formatTime } = useFormatters()
+const { showSuccess, showError } = useToast()
 
 const props = defineProps({
 	modelValue: Boolean,
@@ -372,13 +409,69 @@ function formatDiscountPercent(item) {
 	return pct === null ? "-" : `${Number(pct.toFixed(2))}%`
 }
 
-const emit = defineEmits(["update:modelValue", "print-invoice"])
+const emit = defineEmits(["update:modelValue", "print-invoice", "invoice-changed"])
 
 const show = ref(props.modelValue)
 const loading = ref(false)
 const invoiceData = ref(null)
 // Chứng từ bên kia của lần đổi hàng: HĐ mới ↔ phiếu trả (PM-FEAT-00044)
 const exchangeData = ref(null)
+
+const confirmAction = ref(null) // "complete" | "delete"
+const working = ref(false)
+const similarInvoices = ref([])
+
+// Same rule as _la_nhap_da_thu_du() in pos_next/api/invoices.py
+const isPaidDraft = computed(() => {
+	const inv = invoiceData.value
+	if (!inv || inv.docstatus !== 0 || !inv.is_pos || inv.is_return) return false
+	const grandTotal = Number.parseFloat(inv.grand_total) || 0
+	return grandTotal > 0 && (Number.parseFloat(inv.paid_amount) || 0) >= grandTotal
+})
+
+async function handleComplete() {
+	if (!invoiceData.value || working.value) return
+	working.value = true
+	try {
+		const name = invoiceData.value.name
+		const r = await call("pos_next.api.invoices.complete_draft_invoice", {
+			invoice_name: name,
+			// Second press after the similar invoices were shown
+			confirm_similar: similarInvoices.value.length ? 1 : 0,
+		})
+		if (r?.needs_confirm) {
+			similarInvoices.value = r.similar || []
+			return
+		}
+		showSuccess(__("Invoice {0} completed", [name]))
+		confirmAction.value = null
+		similarInvoices.value = []
+		emit("invoice-changed", name)
+		await loadInvoiceDetails()
+	} catch (error) {
+		log.error("Error completing draft invoice:", error)
+		showError(parseError(error)?.message || __("Could not complete the invoice"))
+	} finally {
+		working.value = false
+	}
+}
+
+async function handleDelete() {
+	if (!invoiceData.value || working.value) return
+	working.value = true
+	try {
+		const name = invoiceData.value.name
+		await call("pos_next.api.invoices.delete_paid_draft", { invoice_name: name })
+		showSuccess(__("Draft {0} deleted", [name]))
+		emit("invoice-changed", name)
+		show.value = false
+	} catch (error) {
+		log.error("Error deleting paid draft:", error)
+		showError(parseError(error)?.message || __("Could not delete the draft"))
+	} finally {
+		working.value = false
+	}
+}
 
 // Computed: Check if this is a credit sale (Pay on Account - no payments, full outstanding)
 const isCreditSale = computed(() => {
@@ -425,6 +518,8 @@ watch(show, async (val) => {
 		// Clear data when closing
 		invoiceData.value = null
 		exchangeData.value = null
+		confirmAction.value = null
+		similarInvoices.value = []
 	} else {
 		// Ensure dialog appears above other dialogs
 		await nextTick()

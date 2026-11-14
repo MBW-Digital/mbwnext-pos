@@ -7,6 +7,7 @@
 from __future__ import unicode_literals
 import re
 import hmac
+import unicodedata
 import json
 from contextlib import contextmanager
 import frappe
@@ -85,6 +86,30 @@ def _get_sepay_settings(pos_profile=None):
 		sepay_bank_code=bank_code,
 		sepay_account_holder=account_holder,
 	)
+
+
+def _is_transfer_mode_name(name):
+	"""Same rule as isBankTransferMethod() in PaymentDialog.vue - the methods that show the SePay QR."""
+	name = unicodedata.normalize("NFC", name or "").lower()
+	return name in ("bank draft", "wire transfer", "bank transfer") or "chuyển" in name or "transfer" in name
+
+
+def _transfer_mode_of_payment(pos_profile, legacy_order):
+	"""
+	Mode of Payment to book a SePay transfer under: the transfer method on the
+	invoice's POS Profile, i.e. the row that made the POS show the QR. Booking
+	under a different method puts the money on another account, in the wrong
+	mall report column, and outside the till's methods at shift close.
+	Falls back to legacy_order (names tried in turn) for profiles without one.
+	"""
+	if pos_profile:
+		for row in frappe.get_cached_doc("POS Profile", pos_profile).get("payments") or []:
+			if row.mode_of_payment and _is_transfer_mode_name(row.mode_of_payment):
+				return row.mode_of_payment
+	for name in legacy_order:
+		if frappe.db.exists("Mode of Payment", name):
+			return name
+	return frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name") or "Bank"
 
 
 @frappe.whitelist()
@@ -188,12 +213,7 @@ def _manual_confirm(invoice_name):
 
 	# Only the transfer part: cash already paid on a mixed payment stays out.
 	amount = flt(doc.outstanding_amount, 2)
-	mode_of_payment = (
-		frappe.db.get_value("Mode of Payment", "Bank Draft", "name")
-		or frappe.db.get_value("Mode of Payment", "Chuyển khoản", "name")
-		or frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name")
-		or "Bank"
-	)
+	mode_of_payment = _transfer_mode_of_payment(doc.pos_profile, ("Bank Draft", "Chuyển khoản"))
 
 	if doc.docstatus == 0:
 		doc.flags.ignore_permissions = True
@@ -441,13 +461,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		)
 		return
 
-	# Prefer "Wire Transfer" (chuyển khoản), fallback to Chuyển khoản, then any Bank type
-	mode_of_payment = (
-		frappe.db.get_value("Mode of Payment", "Wire Transfer", "name")
-		or frappe.db.get_value("Mode of Payment", "Chuyển khoản", "name")
-		or frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name")
-		or "Bank"
-	)
+	mode_of_payment = _transfer_mode_of_payment(doc.pos_profile, ("Wire Transfer", "Chuyển khoản"))
 
 	if doc.docstatus == 0:
 		# Step 1: Submit draft WITHOUT payment (avoids GL merge zero-amount issue)

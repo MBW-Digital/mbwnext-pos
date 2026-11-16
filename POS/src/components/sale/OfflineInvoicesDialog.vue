@@ -264,12 +264,13 @@ const showDetails = ref(false)
 const showDeleteConfirm = ref(false)
 const invoiceToDelete = ref(null)
 
-// Load invoices when dialog opens
+// Load invoices when dialog opens. immediate: the POS opens this dialog at
+// startup (PM-TASK-00451), before the component is mounted
 watch(show, async (newVal) => {
 	if (newVal) {
 		await loadInvoices()
 	}
-})
+}, { immediate: true })
 
 // Watch for prop changes (e.g., after delete or sync)
 watch(() => props.pendingInvoices, (newInvoices) => {

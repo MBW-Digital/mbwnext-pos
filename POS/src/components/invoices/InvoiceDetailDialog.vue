@@ -63,7 +63,7 @@
 						{{ __('The connection dropped before this invoice was completed: the payment is recorded but stock and revenue are not. If the customer has paid and taken the goods, and the sale was not rung up again, press Complete invoice. If the sale did not happen, delete the draft.') }}
 					</p>
 					<div v-if="similarInvoices.length" class="mt-3 text-xs text-red-900">
-						{{ __('This shift already has an invoice with the same customer, items and total: {0}. Check it is not this same sale rung up again.', [similarInvoices.map((s) => s.name + (s.posting_time ? ' (' + s.posting_time + ')' : '')).join(', ')]) }}
+						{{ __('This shift already has an invoice with the same items and total, sold after this one: {0}. Check it is not this same sale rung up again.', [similarInvoices.map((s) => s.name + (s.posting_time ? ' (' + s.posting_time + ')' : '')).join(', ')]) }}
 					</div>
 					<div v-if="confirmAction" class="mt-3 flex flex-wrap items-center gap-2">
 						<span class="text-xs font-medium text-red-900">

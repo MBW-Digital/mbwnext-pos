@@ -169,6 +169,8 @@ class POSClosingShift(Document):
 
     def delete_draft_invoices(self):
         if frappe.get_value("POS Profile", self.pos_profile, "posa_allow_delete"):
+            # Paid drafts are kept: the customer paid, the sale is only waiting
+            # for a cashier to complete it (PM-TASK-00442/00451)
             doctype = "Sales Invoice"
             data = frappe.db.sql(
                 f"""
@@ -178,6 +180,7 @@ class POSClosingShift(Document):
 		    `tab{doctype}`
 		where
 		    docstatus = 0 and posa_is_printed = 0 and posa_pos_opening_shift = %s
+		    and not (grand_total > 0 and paid_amount >= grand_total)
 		""",
                 (self.pos_opening_shift),
                 as_dict=1,

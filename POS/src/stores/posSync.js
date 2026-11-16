@@ -15,6 +15,7 @@
  */
 
 import { useToast } from "@/composables/useToast"
+import { checkOfflineIdSynced } from "@/utils/offline/sync"
 import {
 	cacheCustomersFromServer,
 	cachePaymentMethodsFromServer,
@@ -56,6 +57,22 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 	/** Track previous offline state for detecting online/offline transitions */
 	let wasOffline = offlineState.isOffline
 
+	/**
+	 * Paid POS drafts of this till waiting for a cashier: an offline sale held as
+	 * a likely resale, or a sale cut off by the network (PM-TASK-00442/00451)
+	 */
+	const paidDrafts = ref([])
+
+	/** POS Profile the paid drafts belong to (set by loadPaidDrafts) */
+	let paidDraftsProfile = null
+
+	/** Held invoices already reported, so one result is not announced twice */
+	const reportedHeld = new Set()
+
+	/** Retry timer while invoices wait in the queue */
+	let retryTimer = null
+	const RETRY_INTERVAL_MS = 2 * 60 * 1000
+
 	// =========================================================================
 	// TOAST NOTIFICATIONS
 	// =========================================================================
@@ -81,7 +98,7 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		if (wasOffline && !nowOffline) {
 			log.info('Transition to online detected, auto-syncing pending invoices')
 			try {
-				await syncPending()
+				reportHeld(await syncPending())
 			} catch (error) {
 				log.error('Auto-sync failed on reconnection', error)
 			}
@@ -125,6 +142,9 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		try {
 			const result = await syncOfflineInvoices()
 			await updatePendingCount()
+			if (result.success > 0 || result.held?.length > 0) {
+				await loadPaidDrafts()
+			}
 			return result
 		} catch (error) {
 			log.error('Failed to sync invoices', error)
@@ -170,9 +190,115 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		}
 	}
 
+	/**
+	 * Tell the cashier about offline sales the server held as a likely resale
+	 * @param {Object} result - syncOfflineInvoices() result
+	 */
+	function reportHeld(result) {
+		const moi = (result?.held || []).filter((h) => !reportedHeld.has(h.name))
+		if (!moi.length) return
+		moi.forEach((h) => reportedHeld.add(h.name))
+		showWarning(
+			__('{0} offline invoice(s) were held as drafts: the same sale was rung up again. Check them in the red bar above the cart.', [moi.length])
+		)
+	}
+
+	/**
+	 * May the cashier edit or delete this queued invoice? Not while a sync is
+	 * running, and not once the server has it: editing it then and selling the
+	 * cart again would make the same double sale (PM-TASK-00451).
+	 * @param {Object} invoice - Queue record
+	 * @returns {Promise<boolean>}
+	 */
+	async function canChangePending(invoice) {
+		if (isSyncing.value) {
+			showWarning(__("Invoices are being synced. Try again in a moment."))
+			return false
+		}
+		const offlineId = invoice?.offline_id || invoice?.data?.offline_id
+		if (offlineId && !isOffline.value) {
+			const status = await checkOfflineIdSynced(offlineId)
+			if (status?.synced) {
+				// Let the normal sync mark it as synced in the queue
+				await syncPending().catch((error) => log.error('Sync after check failed', error))
+				await loadPendingInvoices()
+				showWarning(__("Invoice {0} is already in the system. It was not changed.", [status.sales_invoice || ""]))
+				return false
+			}
+		}
+		return true
+	}
+
+	/**
+	 * Keep retrying while invoices wait in the queue. Syncing only on an
+	 * offline -> online transition missed the queue after a restart: the POS
+	 * came back online without a transition, and the sale sat there for
+	 * 40 minutes while it was rung up again (PM-TASK-00451).
+	 */
+	function scheduleRetry() {
+		if (retryTimer || pendingInvoicesCount.value === 0) return
+		retryTimer = setInterval(async () => {
+			if (pendingInvoicesCount.value === 0) {
+				clearInterval(retryTimer)
+				retryTimer = null
+				return
+			}
+			if (isOffline.value || isSyncing.value) return
+			try {
+				reportHeld(await syncPending())
+			} catch (error) {
+				log.error('Periodic sync failed', error)
+			}
+		}, RETRY_INTERVAL_MS)
+	}
+
 	// =========================================================================
 	// PUBLIC ACTIONS
 	// =========================================================================
+
+	/**
+	 * Run when the POS opens: push what is left in the queue right away, then
+	 * show the cashier anything that still waits (PM-TASK-00451)
+	 * @param {string} posProfile - POS Profile of the open shift
+	 * @returns {Promise<{pending: number, held: Array}>}
+	 */
+	async function syncOnStartup(posProfile) {
+		paidDraftsProfile = posProfile || paidDraftsProfile
+		await updatePendingCount()
+		let held = []
+		if (pendingInvoicesCount.value > 0 && !isOffline.value) {
+			try {
+				const result = await syncPending()
+				held = result.held || []
+				if (result.success > 0) {
+					showSuccess(__('{0} invoice(s) synced successfully', [result.success]))
+				}
+				reportHeld(result)
+			} catch (error) {
+				log.error('Startup sync failed', error)
+			}
+		}
+		await loadPaidDrafts()
+		scheduleRetry()
+		return { pending: pendingInvoicesCount.value, held }
+	}
+
+	/**
+	 * Reload the paid drafts of the till from the server
+	 * @param {string} [posProfile] - POS Profile, defaults to the last one used
+	 */
+	async function loadPaidDrafts(posProfile) {
+		paidDraftsProfile = posProfile || paidDraftsProfile
+		if (!paidDraftsProfile || isOffline.value) return
+		try {
+			const res = await call("pos_next.api.invoices.get_paid_drafts", {
+				pos_profile: paidDraftsProfile,
+			})
+			paidDrafts.value = res?.message || res || []
+		} catch (error) {
+			log.error('Failed to load paid drafts', error)
+		}
+	}
 
 	/**
 	 * Save an invoice offline for later sync
@@ -182,6 +308,7 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		try {
 			await offlineWorker.saveOfflineInvoice(invoiceData)
 			await updatePendingCount()
+			scheduleRetry()
 			log.info('Invoice saved offline successfully')
 			return true
 		} catch (error) {
@@ -233,8 +360,11 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 
 			if (result.success > 0) {
 				showSuccess(__('{0} invoice(s) synced successfully', [result.success]))
+			}
+			if (result.success > 0 || result.held?.length > 0) {
 				await loadPendingInvoices()
 			}
+			reportHeld(result)
 
 			return result
 		} catch (error) {
@@ -420,6 +550,7 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		pendingInvoicesCount,
 		isSyncing,
 		pendingInvoicesList,
+		paidDrafts,
 
 		// Computed
 		hasPendingInvoices,
@@ -429,6 +560,9 @@ export const usePOSSyncStore = defineStore("posSync", () => {
 		loadPendingInvoices,
 		deleteOfflineInvoice,
 		syncAllPending,
+		syncOnStartup,
+		loadPaidDrafts,
+		canChangePending,
 		preloadDataForOffline,
 		checkOfflineCacheAvailability,
 		checkCacheReady,

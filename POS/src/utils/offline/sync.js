@@ -272,9 +272,24 @@ const stringifyPricingRules = (value) => {
  * Items should already be formatted by formatItemsForSubmission() when saved.
  * This provides a safety net for legacy data.
  */
-const normalizeInvoiceForSync = (invoiceData, offlineId) => ({
+/**
+ * Queue timestamp as the till's local "YYYY-MM-DD HH:mm:ss", so the server can
+ * book the sale at the time it was rung up instead of at sync time (PM-TASK-00451)
+ */
+const formatSoldAt = (timestamp) => {
+	if (!timestamp) return undefined
+	const d = new Date(timestamp)
+	const p = (n) => String(n).padStart(2, "0")
+	return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
+}
+
+const normalizeInvoiceForSync = (invoiceData, offlineId, timestamp) => ({
 	...invoiceData,
 	offline_id: offlineId || invoiceData.offline_id,
+	// How long ago, on the till's own clock: the server subtracts it from its
+	// time, so a wrong clock or time zone on the till does not matter
+	offline_sold_ago_ms: timestamp ? Math.max(0, Date.now() - timestamp) : undefined,
+	offline_sold_at: formatSoldAt(timestamp),
 	items: invoiceData.items?.map((item) => ({
 		...item,
 		qty: item.qty || item.quantity || 1,
@@ -309,7 +324,7 @@ const syncInvoiceToServer = async (invoice, retryCount = 0) => {
 	}
 
 	// Prepare and submit
-	const invoiceData = normalizeInvoiceForSync(invoice.data, offlineId)
+	const invoiceData = normalizeInvoiceForSync(invoice.data, offlineId, invoice.timestamp)
 
 	try {
 		const response = await call("pos_next.api.invoices.submit_invoice", {
@@ -319,6 +334,16 @@ const syncInvoiceToServer = async (invoice, retryCount = 0) => {
 		if (response.message || response.name) {
 			const serverName = response.name || response.message
 			await markInvoiceSynced(invoice.id, serverName)
+			// The till already rang this sale up again: the server kept it as a
+			// paid draft for the cashier to decide (PM-TASK-00451)
+			if (response.held_as_draft) {
+				log.warn("Invoice held as draft, likely rung up again", {
+					id: invoice.id,
+					sales_invoice: serverName,
+					similar: response.similar,
+				})
+				return { status: "held", name: serverName, similar: response.similar || [] }
+			}
 			log.success("Invoice synced", {
 				id: invoice.id,
 				offline_id: offlineId,
@@ -354,19 +379,19 @@ const syncInvoiceToServer = async (invoice, retryCount = 0) => {
 export const syncOfflineInvoices = async () => {
 	if (isOffline()) {
 		log.debug("Cannot sync while offline")
-		return { success: 0, failed: 0, skipped: 0, errors: [] }
+		return { success: 0, failed: 0, skipped: 0, held: [], errors: [] }
 	}
 
 	return await syncMutex.withLock(async () => {
 		const pendingInvoices = await getOfflineInvoices()
 
 		if (!pendingInvoices.length) {
-			return { success: 0, failed: 0, skipped: 0, errors: [] }
+			return { success: 0, failed: 0, skipped: 0, held: [], errors: [] }
 		}
 
 		log.info(`Starting sync of ${pendingInvoices.length} invoice(s)`)
 
-		const result = { success: 0, failed: 0, skipped: 0, errors: [] }
+		const result = { success: 0, failed: 0, skipped: 0, held: [], errors: [] }
 
 		for (const invoice of pendingInvoices) {
 			try {
@@ -374,6 +399,8 @@ export const syncOfflineInvoices = async () => {
 
 				if (syncResult.status === "success") {
 					result.success++
+				} else if (syncResult.status === "held") {
+					result.held.push({ name: syncResult.name, similar: syncResult.similar })
 				} else if (syncResult.status === "skipped") {
 					result.skipped++
 				}
@@ -407,6 +434,7 @@ export const syncOfflineInvoices = async () => {
 
 		log.info("Sync completed", {
 			success: result.success,
+			held: result.held.length,
 			skipped: result.skipped,
 			failed: result.failed,
 		})

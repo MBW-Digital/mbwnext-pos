@@ -226,6 +226,44 @@
 				</template>
 			</POSHeader>
 
+			<!-- Hoá đơn bán lúc mất mạng còn nằm trên máy, chưa lên hệ thống (PM-TASK-00451) -->
+			<div
+				v-if="offlineStore.pendingInvoicesCount > 0"
+				class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 bg-orange-100 border-b border-orange-300 text-sm text-orange-900"
+			>
+				<span class="font-semibold">
+					{{ __('{0} invoice(s) sold while offline are not in the system yet.', [offlineStore.pendingInvoicesCount]) }}
+				</span>
+				<span>{{ __('Do not ring these sales up again.') }}</span>
+				<button
+					class="ms-auto px-3 py-1 rounded bg-orange-600 text-white text-xs font-medium hover:bg-orange-700"
+					@click="handleSyncClick"
+				>
+					{{ __('View') }}
+				</button>
+			</div>
+
+			<!-- Hoá đơn đã thu tiền nhưng chưa hoàn tất: chờ thu ngân quyết (PM-TASK-00442/00451) -->
+			<div
+				v-if="shiftStore.hasOpenShift && offlineStore.paidDrafts.length > 0"
+				class="flex flex-wrap items-center gap-2 px-4 py-2 bg-red-50 border-b border-red-300 text-sm text-red-900"
+			>
+				<span class="font-semibold">
+					{{ __('{0} paid invoice(s) are not completed:', [offlineStore.paidDrafts.length]) }}
+				</span>
+				<button
+					v-for="d in offlineStore.paidDrafts"
+					:key="d.name"
+					class="px-2 py-0.5 rounded border border-red-300 bg-white text-xs hover:bg-red-100"
+					@click="handleViewInvoice(d.name)"
+				>
+					{{ d.name }} · {{ d.posting_time }} · {{ formatMoney(d.grand_total, shiftStore.profileCurrency) }}
+					<span v-if="d.from_offline" class="text-red-700">{{ ' · ' + __('sold offline') }}</span>
+					<span v-if="d.similar?.length" class="font-semibold text-red-700">{{ ' · ' + __('same as {0}', [d.similar.join(', ')]) }}</span>
+				</button>
+				<span class="text-xs">{{ __('Open each one to complete it or delete it.') }}</span>
+			</div>
+
 			<!-- Main Content: Responsive Layout -->
 			<div
 				v-if="shiftStore.hasOpenShift"
@@ -1085,6 +1123,7 @@ import { session } from "@/data/session";
 import { useUserData } from "@/data/user";
 import { parseError } from "@/utils/errorHandler";
 import { getSetting } from "@/utils/offline/db";
+import { formatCurrency as formatMoney } from "@/utils/currency";
 import { getCachedItemByCodeOrName, cacheItems } from "@/utils/offline/items";
 import { offlineWorker } from "@/utils/offline/workerClient";
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
@@ -1678,6 +1717,11 @@ onMounted(async () => {
 			// and click "Open Shift" themselves after reviewing their HR schedule.
 			loadTodayShifts();
 
+			// The queue still goes up with no shift open (PM-TASK-00451)
+			offlineStore.syncOnStartup(null).catch((err) =>
+				log.error("Startup sync failed:", err)
+			);
+
 			// Offline: use last profile from IndexedDB and load items from cache
 			if (offlineStore.isOffline) {
 				try {
@@ -1724,6 +1768,14 @@ onMounted(async () => {
 					await offlineStore.preloadDataForOffline(shiftStore.currentProfile);
 				} else {
 					await offlineStore.checkOfflineCacheAvailability();
+				}
+
+				// Bill left in the offline queue from before a restart: push it now,
+				// and if it still cannot go, show it before the next sale (PM-TASK-00451)
+				const startup = await offlineStore.syncOnStartup(shiftStore.profileName);
+				if (startup.pending > 0) {
+					await offlineStore.loadPendingInvoices();
+					uiStore.showOfflineInvoicesDialog = true;
 				}
 
 				// HR roster: header schedule badge + welcome screen when no POS shift
@@ -2506,6 +2558,7 @@ async function handlePaymentCompleted(paymentData) {
 // Nháp đã thu tiền được hoàn tất / xoá từ Chi tiết hoá đơn (PM-TASK-00442)
 const invoiceHistoryDialogRef = ref(null);
 function handleDraftInvoiceChanged() {
+	offlineStore.loadPaidDrafts();
 	if (uiStore.showHistoryDialog) invoiceHistoryDialogRef.value?.loadInvoices();
 	loadInvoiceHistoryData().catch((err) =>
 		log.debug("Background invoice cache refresh failed:", err)
@@ -3034,6 +3087,7 @@ async function confirmClearCache() {
 
 async function handleEditOfflineInvoice(invoice) {
 	try {
+		if (!(await offlineStore.canChangePending(invoice))) return;
 		cartStore.clearCart();
 
 		const invoiceData = invoice.data;
@@ -3068,6 +3122,8 @@ async function handleEditOfflineInvoice(invoice) {
 
 async function handleDeleteOfflineInvoice(invoiceId) {
 	try {
+		const invoice = offlineStore.pendingInvoicesList.find((i) => i.id === invoiceId);
+		if (!(await offlineStore.canChangePending(invoice))) return;
 		await offlineStore.deleteOfflineInvoice(invoiceId);
 	} catch (error) {
 		log.error("Error deleting offline invoice:", error);

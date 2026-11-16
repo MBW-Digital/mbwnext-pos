@@ -6,7 +6,7 @@ from __future__ import unicode_literals
 import json
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, nowdate, nowtime, get_datetime, cstr
+from frappe.utils import flt, cint, nowdate, nowtime, get_datetime, cstr, now_datetime, add_to_date
 from erpnext.stock.doctype.batch.batch import get_batch_qty, get_batch_no
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
 
@@ -1260,6 +1260,13 @@ def _ensure_offline_uniqueness(offline_id, pos_profile=None, customer=None):
                             "offline_id": offline_id,
                         }
                     }
+                if existing_invoice.docstatus == 0:
+                    # Held as a draft as a likely resale (PM-TASK-00451): sending it
+                    # again must not make a second draft.
+                    return {
+                        "already_synced": True,
+                        "invoice_data": _ket_qua_giu_nhap(existing_invoice, offline_id),
+                    }
 
             # Synced record points to deleted/invalid invoice - allow retry
             return _reuse_sync_record(sync_record_name)
@@ -1514,6 +1521,7 @@ def submit_invoice(invoice=None, data=None):
 
     # Track whether invoice was successfully submitted
     invoice_submitted = False
+    giu_nhap = False
 
     try:
         invoice_name = invoice.get("name")
@@ -1546,6 +1554,21 @@ def submit_invoice(invoice=None, data=None):
         # Ensure update_stock is set for Sales Invoice
         if doctype == "Sales Invoice":
             invoice_doc.update_stock = 1
+
+        # Offline sale (PM-TASK-00451): book it at the time it was rung up, and
+        # hold it as a paid draft when the till already re-rang the same sale.
+        # Decided before the coupon below is counted: a held sale may be deleted.
+        ban_luc = None
+        giong = []
+        if offline_id and not invoice_doc.get("is_return"):
+            ban_luc = _dat_gio_ban_offline(
+                invoice_doc, invoice.get("offline_sold_ago_ms"), invoice.get("offline_sold_at")
+            )
+            # Without a sale time (a till still on the old build) there is no
+            # "after" to compare against. Only a fully paid sale can be held:
+            # anything else would be a draft no screen lists and cleanup deletes.
+            if ban_luc and _la_nhap_da_thu_du(invoice_doc):
+                giong = _hoa_don_giong(invoice_doc, tu_luc=ban_luc)
 
         # For return invoices, set update_outstanding_for_self = 0
         # This ensures the GL entry's against_voucher points to the original invoice,
@@ -1597,7 +1620,7 @@ def submit_invoice(invoice=None, data=None):
 
         # Handle POS Coupon if coupon_code is provided
         coupon_code = invoice.get("coupon_code") or data.get("coupon_code")
-        if coupon_code:
+        if coupon_code and not giong:
             # Increment usage counter for POS Coupon
             if frappe.db.table_exists("POS Coupon"):
                 try:
@@ -1675,6 +1698,36 @@ def submit_invoice(invoice=None, data=None):
         frappe.flags.ignore_account_permission = True
         invoice_doc.save()
 
+        if giong:
+            # A draft moves no stock, so it carries the sale time: the red bar and
+            # complete_draft_invoice() compare from it. Completing re-checks
+            # whether it can still be booked at that time.
+            invoice_doc.db_set(
+                {
+                    "set_posting_time": 1,
+                    "posting_date": ban_luc.date(),
+                    "posting_time": ban_luc.strftime("%H:%M:%S"),
+                },
+                update_modified=False,
+            )
+            invoice_doc.add_comment(
+                "Comment",
+                _("Sold while offline and synced later. Held as a draft: invoice {0} with the same items and total was rung up after it. Complete it only if these were two separate sales.").format(
+                    ", ".join(g["name"] for g in giong)
+                ),
+            )
+            if sync_record_name:
+                # Not _complete_offline_sync(), which swallows errors: a record
+                # left Pending would let a resend make a second draft. Failing
+                # here rolls the draft back and the till simply retries.
+                frappe.db.set_value(
+                    "Offline Invoice Sync",
+                    sync_record_name,
+                    {"sales_invoice": invoice_doc.name, "status": "Synced", "synced_at": now_datetime()},
+                )
+            giu_nhap = True
+            return _ket_qua_giu_nhap(invoice_doc, offline_id, giong)
+
         # Submit invoice
         invoice_doc.submit()
         invoice_submitted = True
@@ -1737,7 +1790,7 @@ def submit_invoice(invoice=None, data=None):
 
     finally:
         # Cleanup sync record if invoice was not successfully submitted
-        if sync_record_name and not invoice_submitted:
+        if sync_record_name and not invoice_submitted and not giu_nhap:
             _cleanup_failed_sync(sync_record_name)
 
 
@@ -1806,42 +1859,162 @@ def _nhap_da_thu_cua_quay(invoice_name):
 	return doc
 
 
-def _hoa_don_giong(doc):
-	"""Submitted invoices of the same shift that look like the same sale.
+def _hang_co_tien(rows):
+	"""{item_code: qty} of the priced lines. Summed per item because FIFO batch
+	splitting changes the row layout; free lines (gift bags) are left out, since
+	a till that rings a sale up again often adds or drops one of those."""
+	hang = {}
+	for r in rows:
+		if flt(r.get("amount")):
+			hang[r.get("item_code")] = flt(hang.get(r.get("item_code"))) + flt(r.get("qty"))
+	return hang
 
-	Only a hint for the cashier: a walk-in customer buying the same item twice
-	in a shift matches too, so this never blocks anything on its own.
+
+def _hoa_don_giong(doc, tu_luc=None):
+	"""Submitted invoices of the same shift that look like the same sale: same
+	total, same priced items. The customer is not compared - a sale rung up again
+	in a hurry often falls back to another walk-in customer (942611150007 vs
+	942611150008, PM-TASK-00451).
+
+	tu_luc: only invoices sold from that moment on, with 1 minute of slack for
+	the sync request itself.
+
+	Only a hint for the cashier: two walk-ins buying the same item in a shift
+	match too, so this never decides anything on its own.
 	"""
 	if not doc.get("posa_pos_opening_shift"):
 		return []
-	ung_vien = frappe.get_all(
-		"Sales Invoice",
-		filters={
-			"docstatus": 1,
-			"is_pos": 1,
-			"is_return": 0,
-			"posa_pos_opening_shift": doc.posa_pos_opening_shift,
-			"customer": doc.customer,
-			"grand_total": flt(doc.grand_total),
+	# Sale time, not creation: an offline sale synced late is booked at the
+	# time it was rung up (_dat_gio_ban_offline)
+	ung_vien = frappe.db.sql(
+		"""
+		SELECT name, posting_time FROM `tabSales Invoice`
+		WHERE docstatus = 1 AND is_pos = 1 AND is_return = 0
+			AND posa_pos_opening_shift = %(shift)s AND grand_total = %(total)s AND name != %(name)s
+			AND (%(tu_luc)s IS NULL OR TIMESTAMP(posting_date, posting_time) >= %(tu_luc)s)
+			-- A resale is rung up online. Sales from the offline queue are left
+			-- out, or two real sales queued together would hold each other.
+			AND NOT EXISTS (
+				SELECT 1 FROM `tabOffline Invoice Sync` o WHERE o.sales_invoice = `tabSales Invoice`.name
+			)
+		""",
+		{
+			"shift": doc.posa_pos_opening_shift,
+			"total": flt(doc.grand_total),
+			"name": doc.name or "",
+			"tu_luc": add_to_date(tu_luc, minutes=-1) if tu_luc else None,
 		},
-		fields=["name", "posting_time"],
+		as_dict=True,
 	)
 	if not ung_vien:
 		return []
-	tong = {}
+	cua_no = _hang_co_tien(doc.get("items") or [])
+	if not cua_no:
+		return []
+	dong = {}
 	for r in frappe.get_all(
 		"Sales Invoice Item",
-		filters={"parenttype": "Sales Invoice", "parent": ["in", [u.name for u in ung_vien] + [doc.name]]},
-		fields=["parent", "item_code", "qty"],
+		filters={"parenttype": "Sales Invoice", "parent": ["in", [u.name for u in ung_vien]]},
+		fields=["parent", "item_code", "qty", "amount"],
 	):
-		# Summed per item: FIFO batch splitting makes the row layout differ
-		hang = tong.setdefault(r.parent, {})
-		hang[r.item_code] = flt(hang.get(r.item_code)) + flt(r.qty)
+		dong.setdefault(r.parent, []).append(r)
 	return [
 		{"name": u.name, "posting_time": str(u.posting_time or "")[:5]}
 		for u in ung_vien
-		if tong.get(u.name) == tong.get(doc.name)
+		if _hang_co_tien(dong.get(u.name, [])) == cua_no
 	]
+
+
+def _gio_ban(doc):
+	return get_datetime(f"{doc.posting_date} {doc.posting_time}") if doc.get("posting_date") else None
+
+
+def _dat_gio_ban_offline(doc, offline_sold_ago_ms, offline_sold_at=None):
+	"""Book an offline sale at the time the till rang it up, not at sync time
+	(PM-TASK-00451: 942611150008 was sold around 13:00 and booked at 14:05).
+
+	The till sends how long ago the sale was (offline_sold_ago_ms), measured on
+	its own clock, so a till clock that is wrong or in another time zone does
+	not matter. offline_sold_at (the till's local time) is the fallback.
+
+	The sale is booked back only while that is today, inside the still-open
+	shift, and no stock of its items has moved in that warehouse since: booking
+	behind a later movement can make batch/stock validation fail at that time
+	and forces a valuation repost. Otherwise it keeps the sync time and Remarks
+	say when it was sold.
+	Returns the sale time (applied or not, None if unknown): a resale can only
+	come after it either way.
+	"""
+	bay_gio = now_datetime()
+	ban_luc = None
+	if cint(offline_sold_ago_ms) > 0:
+		ban_luc = add_to_date(bay_gio, seconds=-(cint(offline_sold_ago_ms) // 1000))
+	elif offline_sold_at:
+		try:
+			ban_luc = min(get_datetime(offline_sold_at), bay_gio)
+		except Exception:
+			ban_luc = None
+	if not ban_luc:
+		return None
+
+	shift = doc.get("posa_pos_opening_shift")
+	ca = (
+		frappe.db.get_value("POS Opening Shift", shift, ["status", "period_start_date"], as_dict=True)
+		if shift
+		else None
+	)
+	hop_le = (
+		ca
+		and ca.status == "Open"
+		and ban_luc.date() == bay_gio.date()
+		and get_datetime(ca.period_start_date) <= ban_luc
+		and not _kho_da_phat_sinh_sau(doc, ban_luc)
+	)
+	if not hop_le:
+		ghi_chu = _("Sold offline at {0}, synced at {1}.").format(
+			ban_luc.strftime("%d-%m-%Y %H:%M"), bay_gio.strftime("%d-%m-%Y %H:%M")
+		)
+		doc.remarks = (doc.get("remarks") + "\n" if doc.get("remarks") else "") + ghi_chu
+		return ban_luc
+	doc.set_posting_time = 1
+	doc.posting_date = ban_luc.date()
+	doc.posting_time = ban_luc.strftime("%H:%M:%S")
+	return ban_luc
+
+
+def _kho_da_phat_sinh_sau(doc, ban_luc):
+	"""Has any item of the invoice moved in its warehouse after ban_luc?"""
+	kho_mac_dinh = doc.get("set_warehouse") or (
+		frappe.get_cached_value("POS Profile", doc.pos_profile, "warehouse") if doc.get("pos_profile") else None
+	)
+	cap = {(d.item_code, d.get("warehouse") or kho_mac_dinh) for d in doc.get("items") or [] if d.item_code}
+	cap = {c for c in cap if c[1]}
+	if not cap:
+		return False
+	return bool(
+		frappe.db.sql(
+			"""
+			SELECT 1 FROM `tabStock Ledger Entry`
+			WHERE is_cancelled = 0 AND (item_code, warehouse) IN %(cap)s
+				AND TIMESTAMP(posting_date, posting_time) > %(ban_luc)s
+			LIMIT 1
+			""",
+			{"cap": tuple(cap), "ban_luc": ban_luc},
+		)
+	)
+
+
+def _ket_qua_giu_nhap(doc, offline_id, giong=None):
+	if giong is None:
+		giong = _hoa_don_giong(doc, tu_luc=_gio_ban(doc))
+	return {
+		"name": doc.name,
+		"status": doc.docstatus,
+		"grand_total": doc.grand_total,
+		"held_as_draft": True,
+		"similar": giong,
+		"offline_id": offline_id,
+	}
 
 
 @frappe.whitelist()
@@ -1858,10 +2031,24 @@ def complete_draft_invoice(invoice_name, confirm_similar=0):
 		)
 
 	if not cint(confirm_similar):
-		giong = _hoa_don_giong(doc)
+		giong = _hoa_don_giong(doc, tu_luc=_gio_ban(doc))
 		if giong:
 			return {"needs_confirm": True, "similar": giong}
 
+	# A draft held from the offline queue (PM-TASK-00451) still carries its sale
+	# time. Stock moved since then: book it now instead (see _dat_gio_ban_offline).
+	gio_ban = _gio_ban(doc)
+	if cint(doc.set_posting_time) and gio_ban and _kho_da_phat_sinh_sau(doc, gio_ban):
+		bay_gio = now_datetime()
+		doc.posting_date = bay_gio.date()
+		doc.posting_time = bay_gio.strftime("%H:%M:%S")
+		ghi_chu = _("Sold offline at {0}, synced at {1}.").format(
+			gio_ban.strftime("%d-%m-%Y %H:%M"), bay_gio.strftime("%d-%m-%Y %H:%M")
+		)
+		if ghi_chu not in (doc.remarks or ""):
+			doc.remarks = (doc.remarks + "\n" if doc.remarks else "") + ghi_chu
+		doc.flags.ignore_permissions = True
+		doc.save()
 	# The coupon is not counted again here: step 2 may have counted it already
 	return submit_invoice(
 		invoice={"name": doc.name, "doctype": "Sales Invoice", "pos_profile": doc.pos_profile},
@@ -1875,6 +2062,43 @@ def delete_paid_draft(invoice_name):
 	doc = _nhap_da_thu_cua_quay(invoice_name)
 	frappe.delete_doc("Sales Invoice", doc.name, force=True, ignore_permissions=True)
 	return doc.name
+
+
+@frappe.whitelist()
+def get_paid_drafts(pos_profile):
+	"""Paid POS drafts of this till waiting for a cashier (PM-TASK-00442/00451):
+	left by a dropped connection, or an offline sale held as a likely resale.
+	The POS lists them above the cart so they are not forgotten."""
+	if not frappe.db.exists("POS Profile User", {"parent": pos_profile, "user": frappe.session.user}):
+		frappe.throw(_("You don't have access to POS Profile {0}").format(pos_profile))
+	nhap = frappe.db.sql(
+		"""
+		SELECT si.name, si.customer, si.customer_name, si.grand_total, si.posting_date, si.posting_time
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabPOS Opening Shift` ca ON ca.name = si.posa_pos_opening_shift
+		WHERE si.docstatus = 0 AND si.is_pos = 1 AND si.is_return = 0 AND si.pos_profile = %(pos_profile)s
+			AND si.grand_total > 0 AND si.paid_amount >= si.grand_total
+		-- Open shift first: those are the ones the cashier can still complete
+		ORDER BY (ca.status = 'Open') DESC, si.creation DESC
+		LIMIT 20
+		""",
+		{"pos_profile": pos_profile},
+		as_dict=True,
+	)
+	if not nhap:
+		return []
+	offline = set(
+		frappe.get_all(
+			"Offline Invoice Sync",
+			filters={"sales_invoice": ["in", [n.name for n in nhap]]},
+			pluck="sales_invoice",
+		)
+	)
+	for n in nhap:
+		n.from_offline = n.name in offline
+		n.similar = [g["name"] for g in _hoa_don_giong(frappe.get_doc("Sales Invoice", n.name), tu_luc=_gio_ban(n))]
+		n.posting_time = str(n.posting_time or "")[:5]
+	return nhap
 
 
 @frappe.whitelist()

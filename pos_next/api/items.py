@@ -1786,6 +1786,30 @@ def _get_warehouse_display_name(warehouse_id, warehouse_map, fallback_company=No
 	return warehouse_id, fallback_company or ""
 
 
+def _other_shop_warehouses(wh_filters, already):
+	"""Shop warehouses the user's permissions hide, for Stock Lookup only.
+
+	A shop account carries a User Permission on its own POS Profile applied to
+	all doctypes, and every shop warehouse links a POS Profile, so get_list()
+	shows the cashier their own shop only. Cashiers need to tell a customer
+	which other shop has the item (PM-TASK-00454): add every warehouse tied to a
+	POS Profile, quantities only. Transit warehouses stay out. Only for users
+	working a POS till.
+	"""
+	if not frappe.get_meta("Warehouse").has_field("custom_pos_profile"):
+		return []
+	if not frappe.db.exists("POS Profile User", {"user": frappe.session.user}):
+		return []
+	filters = dict(wh_filters, custom_pos_profile=["is", "set"], warehouse_type=["!=", "Transit"])
+	return [
+		w
+		for w in frappe.get_all(
+			"Warehouse", filters=filters, fields=["name", "warehouse_name", "company"], order_by="warehouse_name"
+		)
+		if w.name not in already
+	]
+
+
 def _build_stock_entry(warehouse_id, actual_qty, reserved_qty, warehouse_map, item_code=None, fallback_company=None):
 	"""
 	Build a standardized stock entry dict with warehouse details.
@@ -1886,6 +1910,7 @@ def get_item_warehouse_availability(item_code=None, item_codes=None, company=Non
 			fields=["name", "warehouse_name", "company"],
 			order_by="warehouse_name"
 		)
+		warehouses += _other_shop_warehouses(wh_filters, {w.name for w in warehouses})
 		if not warehouses:
 			return []
 

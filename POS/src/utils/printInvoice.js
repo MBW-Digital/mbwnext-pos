@@ -114,6 +114,44 @@ function printHtmlViaIframe(htmlContent) {
 	})
 }
 
+function escapeHtml(value) {
+	return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c])
+}
+
+/**
+ * In riêng phiếu mã QR chuyển khoản SePay, không kèm hoá đơn (PM-TASK-00446).
+ *
+ * @param {Object} qrData - kết quả get_vietqr_url: qr_url, amount, bank_code, account_number, account_holder, content
+ * @param {Object} options - { invoiceName, paperWidth: 58|80 }
+ */
+export function printTransferQr(qrData, options = {}) {
+	const { invoiceName = "", paperWidth = 58 } = options
+	const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>QR</title>
+		<style>
+			@page { size: ${paperWidth}mm auto; margin: 0; }
+			body { width: ${paperWidth - 4}mm; margin: 0 auto; padding: 2mm 0; font-family: Arial, sans-serif; font-size: 11px; color: #000; text-align: center; }
+			h1 { font-size: 13px; margin: 0 0 2mm; }
+			img { width: ${paperWidth - 14}mm; height: auto; display: block; margin: 0 auto; }
+			.amount { font-size: 16px; font-weight: bold; margin: 2mm 0; }
+			table { width: 100%; border-collapse: collapse; text-align: left; }
+			td { padding: 0.5mm 0; vertical-align: top; }
+			td + td { text-align: right; font-weight: bold; word-break: break-all; }
+			.note { margin-top: 2mm; font-size: 10px; }
+		</style></head><body>
+		<h1>QUÉT MÃ ĐỂ THANH TOÁN</h1>
+		<img src="${escapeHtml(qrData.qr_url)}" alt="VietQR" />
+		<div class="amount">${escapeHtml(formatVN(qrData.amount))} đ</div>
+		<table>
+			<tr><td>Ngân hàng</td><td>${escapeHtml(qrData.bank_code)}</td></tr>
+			<tr><td>Số TK</td><td>${escapeHtml(qrData.account_number)}</td></tr>
+			<tr><td>Chủ TK</td><td>${escapeHtml(qrData.account_holder)}</td></tr>
+			<tr><td>Nội dung</td><td>${escapeHtml(qrData.content)}</td></tr>
+		</table>
+		${invoiceName ? `<div class="note">Hoá đơn ${escapeHtml(invoiceName)}</div>` : ""}
+		</body></html>`
+	return printHtmlViaIframe(html)
+}
+
 /**
  * Fetch enriched receipt fields (payments from Payment Entry, loyalty, etc.)
  */

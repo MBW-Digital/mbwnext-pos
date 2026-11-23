@@ -1823,7 +1823,78 @@ def get_invoice(invoice_name):
 	# Get invoice document
 	invoice = frappe.get_doc("Sales Invoice", invoice_name)
 
-	return invoice.as_dict()
+	result = invoice.as_dict()
+	# Which bank account the money went to, so the cashier can answer the customer (PM-TASK-00446)
+	for row in result.get("payments") or []:
+		row["bank_info"] = _payment_bank_info(invoice, "Sales Invoice", invoice.name, row.get("account"), row.get("reference_no"))
+	result["payment_entries"] = _invoice_payment_entries(invoice)
+	return result
+
+
+def _payment_bank_info(invoice, voucher_type, voucher_no, account, reference_no=None):
+	"""
+	Bank name, account number and holder that received this payment, or None.
+	Tried in order: the Bank Transaction reconciled with the voucher (what the
+	bank actually reported), the till's SePay account for a SePay booking, then
+	the company Bank Account on the same ledger account (if it is the only one).
+	"""
+	from pos_next.api.sepay import _compact, _get_sepay_settings
+
+	if not account:
+		return None
+
+	bank_account = None
+	for parent in frappe.get_all(
+		"Bank Transaction Payments",
+		filters={"payment_document": voucher_type, "payment_entry": voucher_no, "docstatus": 1},
+		pluck="parent",
+	):
+		candidate = frappe.db.get_value("Bank Transaction", parent, "bank_account")
+		if candidate and frappe.db.get_value("Bank Account", candidate, "account") == account:
+			bank_account = candidate
+			break
+	if not bank_account:
+		# Only when one bank sits on this ledger account: with several (all on 112), it would be a guess
+		same_ledger = frappe.get_all(
+			"Bank Account",
+			filters={"account": account, "is_company_account": 1, "disabled": 0},
+			pluck="name",
+			limit=2,
+		)
+		if len(same_ledger) == 1:
+			bank_account = same_ledger[0]
+
+	settings = _get_sepay_settings(invoice.pos_profile) if invoice.get("pos_profile") else None
+	info = None
+	if bank_account:
+		ba = frappe.db.get_value("Bank Account", bank_account, ["bank", "bank_account_no"], as_dict=True)
+		info = {"bank": ba.bank, "account_no": ba.bank_account_no or "", "holder": ""}
+	elif settings and str(reference_no or "").startswith("SEPAY-"):
+		info = {"bank": settings.sepay_bank_code, "account_no": settings.sepay_bank_account, "holder": ""}
+
+	if info and settings and _compact(info["account_no"]) == _compact(settings.sepay_bank_account):
+		info["holder"] = settings.sepay_account_holder or ""
+	return info
+
+
+def _invoice_payment_entries(invoice):
+	"""Payment Entries settling this invoice (e.g. SePay manual confirm): they are not in invoice.payments."""
+	rows = frappe.db.sql(
+		"""
+		SELECT pe.name, pe.mode_of_payment, pe.paid_to AS account, pe.reference_no,
+			SUM(per.allocated_amount) AS amount
+		FROM `tabPayment Entry Reference` per
+		JOIN `tabPayment Entry` pe ON pe.name = per.parent
+		WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name = %s AND pe.docstatus = 1
+		GROUP BY pe.name
+		ORDER BY pe.posting_date, pe.creation
+		""",
+		(invoice.name,),
+		as_dict=True,
+	)
+	for row in rows:
+		row["bank_info"] = _payment_bank_info(invoice, "Payment Entry", row.name, row.account, row.reference_no)
+	return rows
 
 
 # ==========================================

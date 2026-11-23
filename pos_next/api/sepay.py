@@ -12,7 +12,7 @@ import json
 from contextlib import contextmanager
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, now
+from frappe.utils import flt, cint, now, getdate, today
 
 
 # VietQR base URL (SePay)
@@ -289,38 +289,127 @@ def receive_webhook():
 	reference_code = data.get("referenceCode") or ""
 
 	invoice_name = _resolve_invoice_name(data)
-	if not invoice_name:
-		frappe.log_error(
-			title="SePay Webhook",
-			message="SePay webhook: no invoice matches this transfer. Check it by hand.\n"
-			f"code={data.get('code')!r} content={data.get('content')!r} amount={amount} id={sepay_id}",
-		)
-		return _webhook_response({"success": True})
 
-	# Process payment (run as Administrator - webhook is allow_guest, needs elevated permissions)
+	# Run as Administrator - webhook is allow_guest, needs elevated permissions
 	old_user = frappe.session.user
 	try:
 		frappe.set_user("Administrator")
 		frappe.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
-		with _sepay_lock(invoice_name):
-			_process_sepay_payment(
-				invoice_name=invoice_name,
-				amount=amount,
-				sepay_id=sepay_id,
-				reference_code=reference_code,
-				data=data,
+		if not invoice_name:
+			frappe.log_error(
+				title="SePay Webhook",
+				message="SePay webhook: no invoice matches this transfer. Check it by hand.\n"
+				f"code={data.get('code')!r} content={data.get('content')!r} amount={amount} id={sepay_id}",
 			)
-	except Exception as e:
-		frappe.db.rollback()
-		frappe.log_error(
-			title="SePay Webhook",
-			message=f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}\n{frappe.get_traceback()}",
-		)
+		else:
+			try:
+				with _sepay_lock(invoice_name):
+					_process_sepay_payment(
+						invoice_name=invoice_name,
+						amount=amount,
+						sepay_id=sepay_id,
+						reference_code=reference_code,
+						data=data,
+					)
+			except Exception as e:
+				frappe.db.rollback()
+				frappe.log_error(
+					title="SePay Webhook",
+					message=f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}\n{frappe.get_traceback()}",
+				)
+		_record_bank_transaction(data, invoice_name)
 	finally:
 		frappe.set_user(old_user)
 
 	return _webhook_response({"success": True})
+
+
+def _sepay_bank_account(data):
+	"""Company Bank Account whose number received this transfer (main account or VA), or None."""
+	received = {_compact(data.get("accountNumber")), _compact(data.get("subAccount"))} - {""}
+	if not received:
+		return None
+	for row in frappe.get_all(
+		"Bank Account",
+		filters={"is_company_account": 1, "disabled": 0},
+		fields=["name", "bank_account_no"],
+	):
+		if _compact(row.bank_account_no) in received:
+			return row.name
+	return None
+
+
+def _invoice_payment_vouchers(invoice_name, gl_account):
+	"""
+	Vouchers carrying the bank side of this invoice: the invoice (POS/SePay rows)
+	and its Payment Entries (manual confirm). Only those posting to the bank's
+	account - ERPNext refuses to allocate a voucher that does not.
+	"""
+	candidates = [("Sales Invoice", invoice_name)] + [
+		("Payment Entry", pe)
+		for pe in frappe.get_all(
+			"Payment Entry Reference",
+			filters={"reference_doctype": "Sales Invoice", "reference_name": invoice_name, "docstatus": 1},
+			pluck="parent",
+			distinct=True,
+		)
+	]
+	return [
+		(doctype, name)
+		for doctype, name in candidates
+		if frappe.db.exists(
+			"GL Entry",
+			{"voucher_type": doctype, "voucher_no": name, "account": gl_account, "is_cancelled": 0},
+		)
+	]
+
+
+def _record_bank_transaction(data, invoice_name=None):
+	"""
+	One Bank Transaction per SePay transfer, so every money-in can be traced on
+	the bank side. Linked to the invoice it paid, it ends Reconciled; a transfer
+	that paid nothing (no invoice, wrong amount, already paid) stays Unreconciled
+	for the accountant in Bank Reconciliation. ERPNext allocates from the GL on
+	the bank's account, so a link that carries no unallocated money drops out.
+	Skipped when no company Bank Account has the receiving account number.
+	"""
+	sepay_id = data.get("id")
+	if not sepay_id or frappe.db.exists("Bank Transaction", {"transaction_id": str(sepay_id)}):
+		return
+	bank_account = _sepay_bank_account(data)
+	if not bank_account:
+		return
+
+	try:
+		gl_account = frappe.db.get_value("Bank Account", bank_account, "account")
+		bt = frappe.new_doc("Bank Transaction")
+		bt.update(
+			{
+				"date": getdate(data.get("transactionDate")) if data.get("transactionDate") else today(),
+				"bank_account": bank_account,
+				"currency": frappe.get_cached_value("Account", gl_account, "account_currency") if gl_account else None,
+				"deposit": flt(data.get("transferAmount")),
+				"description": data.get("content") or data.get("description") or "",
+				"reference_number": data.get("referenceCode") or _payment_reference(sepay_id),
+				"transaction_id": str(sepay_id),
+			}
+		)
+		if gl_account and invoice_name and frappe.db.get_value("Sales Invoice", invoice_name, "docstatus") == 1:
+			for doctype, name in _invoice_payment_vouchers(invoice_name, gl_account):
+				bt.append(
+					"payment_entries",
+					{"payment_document": doctype, "payment_entry": name, "allocated_amount": 0},
+				)
+		bt.insert(ignore_permissions=True)
+		bt.submit()
+		frappe.db.commit()
+	except Exception as e:
+		frappe.db.rollback()
+		frappe.log_error(
+			title="SePay Bank Transaction",
+			message=f"SePay transfer {sepay_id}: Bank Transaction not created: {e}\nData: {data}\n{frappe.get_traceback()}",
+		)
 
 
 @contextmanager
@@ -436,7 +525,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
 		frappe.log_error(
 			title="SePay Webhook",
-			message=f"SePay transfer {sepay_id} of {amount} for invoice {invoice_name}, which is already paid. Not booked - refund or rebook by hand.",
+			message=f"SePay transfer {sepay_id} of {amount} for invoice {invoice_name}, which is already paid. Not booked again - if its Bank Transaction stays Unreconciled, refund or rebook by hand.",
 		)
 		return
 

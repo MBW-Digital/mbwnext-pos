@@ -45,6 +45,18 @@
 									<span class="text-gray-600">{{ __('Return Against:') }}</span>
 									<span class="ms-2 font-medium text-gray-900">{{ invoiceData.return_against }}</span>
 								</div>
+								<div v-if="einvoiceStatus" class="text-start">
+									<span class="text-gray-600">{{ __('E-Invoice:') }}</span>
+									<span :class="['ms-2 px-2 py-0.5 text-xs font-semibold rounded-full', einvoiceStatus.color]">{{ einvoiceStatus.label }}</span>
+									<button
+										v-if="einvoiceStatus.canIssue"
+										type="button"
+										class="ms-2 text-xs font-semibold text-blue-700 underline hover:text-blue-900"
+										@click="showEInvoiceDialog = true"
+									>
+										{{ __('Issue E-Invoice') }}
+									</button>
+								</div>
 							</div>
 						</div>
 						<div class="text-start sm:text-end">
@@ -249,7 +261,7 @@
 				<!-- Totals Section -->
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
 					<!-- Payment Info -->
-					<div v-if="invoiceData.payments && invoiceData.payments.length > 0">
+					<div v-if="paymentRows.length > 0">
 						<h4 class="text-sm font-semibold text-gray-700 mb-3 flex items-center">
 							<svg class="w-4 h-4 me-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 								<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/>
@@ -258,13 +270,17 @@
 						</h4>
 						<div class="flex flex-col gap-2">
 							<div
-								v-for="(payment, idx) in invoiceData.payments"
+								v-for="(payment, idx) in paymentRows"
 								:key="idx"
 								class="flex justify-between items-center p-3 bg-green-50 border border-green-200 rounded-lg"
 							>
 								<div class="text-start">
 									<div class="text-sm font-medium text-gray-900">{{ payment.mode_of_payment }}</div>
+									<div v-if="payment.bank_info" class="text-xs font-medium text-gray-800">
+										{{ [payment.bank_info.bank, payment.bank_info.account_no, payment.bank_info.holder].filter(Boolean).join(' · ') }}
+									</div>
 									<div v-if="payment.account" class="text-xs text-gray-500">{{ payment.account }}</div>
+									<div v-if="payment.entry" class="text-xs text-gray-500">{{ __('Payment Entry {0}', [payment.entry]) }}</div>
 								</div>
 								<div class="text-sm font-semibold text-green-700">{{ formatCurrency(payment.amount) }}</div>
 							</div>
@@ -349,6 +365,7 @@
 			</div>
 		</template>
 	</Dialog>
+	<EInvoiceIssueDialog v-model="showEInvoiceDialog" :invoice-name="invoiceData?.name" @issued="loadInvoiceDetails" />
 </template>
 
 <script setup>
@@ -360,6 +377,7 @@ import { Button, Dialog, call } from "frappe-ui"
 import { useToast } from "@/composables/useToast"
 import { parseError } from "@/utils/errorHandler"
 import { ref, watch, nextTick, computed } from "vue"
+import EInvoiceIssueDialog from "@/components/sale/EInvoiceIssueDialog.vue"
 
 const log = logger.create('InvoiceDetailDialog')
 const { formatDate, formatTime } = useFormatters()
@@ -413,6 +431,7 @@ const emit = defineEmits(["update:modelValue", "print-invoice", "invoice-changed
 
 const show = ref(props.modelValue)
 const loading = ref(false)
+const showEInvoiceDialog = ref(false)
 const invoiceData = ref(null)
 // Chứng từ bên kia của lần đổi hàng: HĐ mới ↔ phiếu trả (PM-FEAT-00044)
 const exchangeData = ref(null)
@@ -473,15 +492,39 @@ async function handleDelete() {
 	}
 }
 
+// Thanh toán trên hoá đơn và phiếu thu (xác nhận chuyển khoản tay), kèm tài khoản nhận tiền (PM-TASK-00446)
+const paymentRows = computed(() => {
+	if (!invoiceData.value) return []
+	const onInvoice = (invoiceData.value.payments || []).filter((p) => Number(p.amount || 0) !== 0)
+	const entries = (invoiceData.value.payment_entries || []).map((pe) => ({ ...pe, entry: pe.name }))
+	return [...onInvoice, ...entries]
+})
+
+// Trạng thái HĐĐT, chỉ khi site có app hoá đơn điện tử (ô created_einvoice) và hoá đơn đã gửi
+const einvoiceStatus = computed(() => {
+	const inv = invoiceData.value
+	if (!inv || inv.docstatus !== 1 || !("created_einvoice" in inv)) return null
+	if (!inv.created_einvoice) {
+		return { label: __("Not issued yet"), color: "bg-orange-100 text-orange-800", canIssue: !inv.is_return }
+	}
+	const cqt = {
+		Accepted: [__("accepted by tax authority"), "bg-green-100 text-green-800"],
+		Rejected: [__("rejected by tax authority"), "bg-red-100 text-red-800"],
+		Sent: [__("sent to tax authority"), "bg-blue-100 text-blue-800"],
+	}[inv.einvoice_cqt_status] || [null, "bg-blue-100 text-blue-800"]
+	const label = inv.einvoice_no ? __("Issued, No. {0}", [inv.einvoice_no]) : __("Issued")
+	return { label: cqt[0] ? `${label} · ${cqt[0]}` : label, color: cqt[1] }
+})
+
 // Computed: Check if this is a credit sale (Pay on Account - no payments, full outstanding)
 const isCreditSale = computed(() => {
 	if (!invoiceData.value) return false
-	const hasNoPayments = !invoiceData.value.payments || invoiceData.value.payments.length === 0
-	const totalPaid = invoiceData.value.payments?.reduce((sum, p) => sum + Math.abs(p.amount || 0), 0) || 0
+	// Phiếu thu (xác nhận chuyển khoản tay) cũng là tiền đã thu: hoá đơn đó không phải bán chịu
+	const totalPaid = paymentRows.value.reduce((sum, p) => sum + Math.abs(p.amount || 0), 0)
 	const grandTotal = Math.abs(invoiceData.value.grand_total || 0)
 	const outstanding = Math.abs(invoiceData.value.outstanding_amount || 0)
-	// Credit sale if no payments and outstanding equals grand total
-	return hasNoPayments || (totalPaid < 0.01 && Math.abs(outstanding - grandTotal) < 0.01)
+	// Credit sale if nothing was paid and outstanding equals grand total
+	return totalPaid < 0.01 && Math.abs(outstanding - grandTotal) < 0.01
 })
 
 // Computed: Check if this return was added to customer credit (no payments, negative outstanding)

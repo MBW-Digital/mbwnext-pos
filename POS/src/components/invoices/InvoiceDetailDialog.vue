@@ -48,6 +48,14 @@
 								<div v-if="einvoiceStatus" class="text-start">
 									<span class="text-gray-600">{{ __('E-Invoice:') }}</span>
 									<span :class="['ms-2 px-2 py-0.5 text-xs font-semibold rounded-full', einvoiceStatus.color]">{{ einvoiceStatus.label }}</span>
+									<button
+										v-if="einvoiceStatus.canIssue"
+										type="button"
+										class="ms-2 text-xs font-semibold text-blue-700 underline hover:text-blue-900"
+										@click="showEInvoiceDialog = true"
+									>
+										{{ __('Issue E-Invoice') }}
+									</button>
 								</div>
 							</div>
 						</div>
@@ -357,6 +365,7 @@
 			</div>
 		</template>
 	</Dialog>
+	<EInvoiceIssueDialog v-model="showEInvoiceDialog" :invoice-name="invoiceData?.name" @issued="loadInvoiceDetails" />
 </template>
 
 <script setup>
@@ -368,6 +377,7 @@ import { Button, Dialog, call } from "frappe-ui"
 import { useToast } from "@/composables/useToast"
 import { parseError } from "@/utils/errorHandler"
 import { ref, watch, nextTick, computed } from "vue"
+import EInvoiceIssueDialog from "@/components/sale/EInvoiceIssueDialog.vue"
 
 const log = logger.create('InvoiceDetailDialog')
 const { formatDate, formatTime } = useFormatters()
@@ -421,6 +431,7 @@ const emit = defineEmits(["update:modelValue", "print-invoice", "invoice-changed
 
 const show = ref(props.modelValue)
 const loading = ref(false)
+const showEInvoiceDialog = ref(false)
 const invoiceData = ref(null)
 // Chứng từ bên kia của lần đổi hàng: HĐ mới ↔ phiếu trả (PM-FEAT-00044)
 const exchangeData = ref(null)
@@ -494,7 +505,7 @@ const einvoiceStatus = computed(() => {
 	const inv = invoiceData.value
 	if (!inv || inv.docstatus !== 1 || !("created_einvoice" in inv)) return null
 	if (!inv.created_einvoice) {
-		return { label: __("Not issued yet"), color: "bg-orange-100 text-orange-800" }
+		return { label: __("Not issued yet"), color: "bg-orange-100 text-orange-800", canIssue: !inv.is_return }
 	}
 	const cqt = {
 		Accepted: [__("accepted by tax authority"), "bg-green-100 text-green-800"],

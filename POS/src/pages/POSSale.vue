@@ -1004,6 +1004,18 @@
 							{{ __("Close") }}
 						</Button>
 						<Button
+							variant="outline"
+							@click="
+								() => {
+									einvoiceInvoiceName = uiStore.lastInvoiceName;
+									uiStore.showSuccessDialog = false;
+									showEInvoiceDialog = true;
+								}
+							"
+						>
+							{{ __("Issue E-Invoice") }}
+						</Button>
+						<Button
 							variant="solid"
 							theme="blue"
 							@click="
@@ -1018,6 +1030,8 @@
 					</div>
 				</template>
 			</Dialog>
+
+			<EInvoiceIssueDialog v-model="showEInvoiceDialog" :invoice-name="einvoiceInvoiceName" />
 
 			<!-- Error Dialog -->
 			<Dialog
@@ -1110,6 +1124,7 @@ import PromotionManagement from "@/components/sale/PromotionManagement.vue";
 import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
 import ExchangeHaVangDialog from "@/components/sale/ExchangeHaVangDialog.vue";
 import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
+import EInvoiceIssueDialog from "@/components/sale/EInvoiceIssueDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";
 import InvoiceManagement from "@/components/invoices/InvoiceManagement.vue";
@@ -1246,6 +1261,9 @@ const externalAppUrl = computed(() => {
 });
 
 // Component refs
+// Xuất HĐĐT ngay sau khi bán (PM-FEAT-00094)
+const showEInvoiceDialog = ref(false);
+const einvoiceInvoiceName = ref("");
 const itemsSelectorRef = ref(null);
 const invoiceCartRef = ref(null);
 const offersDialogRef = ref(null);

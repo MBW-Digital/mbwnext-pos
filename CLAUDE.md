@@ -191,6 +191,8 @@ pos_next/
 
 ### 6. Sepay QR Payment
 - `api/sepay.py` — tích hợp thanh toán Sepay QR
+- Webhook `receive_webhook`: khớp hoá đơn theo `DH<tên hoá đơn>`, ghi tiền thẳng vào bảng thanh toán của hoá đơn (Nợ TK ngân hàng / Có 131, không Payment Entry), mã tham chiếu `SEPAY-<id>`.
+- Mỗi khoản tiền vào sinh một **Bank Transaction** (`transaction_id` = id SePay, không trùng): gắn với hoá đơn hoặc Payment Entry xác nhận tay đã ghi vào TK ngân hàng → *Reconciled*; không khớp / sai số tiền / bill đã trả → *Unreconciled* để kế toán xử lý ở Bank Reconciliation Tool. Cần một **Bank Account** công ty có `bank_account_no` = số tài khoản nhận SePay (hoặc VA), trỏ về TK 112; không có thì bỏ qua bước này (PM-TASK-00446).
 
 ### 7. Company-aware Items
 - Custom field `custom_company` trên Item

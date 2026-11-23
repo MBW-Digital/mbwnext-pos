@@ -136,6 +136,8 @@ async function init() {
   const locale = getLocale()
   const loaded = await loadLocale(locale, { preferCache: true })
   if (!loaded) fallbackFetch(locale)
+  // Refresh behind the cached copy: otherwise strings added in a new build stay English until the 24h cache expires
+  else if (navigator.onLine) loadLocale(locale, { forceNetwork: true }).catch(() => {})
 }
 
 /**

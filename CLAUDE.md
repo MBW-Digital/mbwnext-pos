@@ -188,6 +188,7 @@ pos_next/
 - `einvoice_batch.py` — phát hành eInvoice hàng loạt
 - `einvoice_self_service.py` — người mua tự nhập thông tin qua QR
 - `www/einvoice_self_service.html` — trang self-service
+- `einvoice_pos.py` — thu ngân xuất HĐĐT ngay trên POS (nút Xuất HĐĐT ở hộp tạo hoá đơn thành công + Chi tiết hoá đơn, `EInvoiceIssueDialog.vue`): ghi người mua vào `pos_einvoice_buyer_*` rồi phát hành qua cùng đường với trang QR; quyền theo quyền đọc hoá đơn (User Permission quầy); phiếu trả không xuất từ POS (PM-FEAT-00094)
 
 ### 6. Sepay QR Payment
 - `api/sepay.py` — tích hợp thanh toán Sepay QR

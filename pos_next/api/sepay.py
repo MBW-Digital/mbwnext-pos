@@ -271,7 +271,11 @@ def receive_webhook():
 	if not expected_key:
 		_warn_webhook_key_not_set()
 	elif not hmac.compare_digest(str(expected_key).encode(), given_key.encode()):
-		frappe.log_error(title="SePay Webhook", message="SePay webhook rejected: wrong or missing key")
+		# Open to guests: log at most once per 10 minutes so a flood of bad posts
+		# cannot fill the Error Log
+		if not frappe.cache.get_value("sepay_webhook_bad_key", expires=True):
+			frappe.cache.set_value("sepay_webhook_bad_key", 1, expires_in_sec=600)
+			frappe.log_error(title="SePay Webhook", message="SePay webhook rejected: wrong or missing key")
 		return _webhook_response({"success": False, "message": "Unauthorized"}, 401)
 
 	raw = ""
@@ -292,6 +296,7 @@ def receive_webhook():
 	reference_code = data.get("referenceCode") or ""
 
 	invoice_name = _resolve_invoice_name(data)
+	booked = False
 
 	# Run as Administrator - webhook is allow_guest, needs elevated permissions
 	old_user = frappe.session.user
@@ -308,7 +313,7 @@ def receive_webhook():
 		else:
 			try:
 				with _sepay_lock(invoice_name):
-					_process_sepay_payment(
+					booked = _process_sepay_payment(
 						invoice_name=invoice_name,
 						amount=amount,
 						sepay_id=sepay_id,
@@ -321,7 +326,7 @@ def receive_webhook():
 					title="SePay Webhook",
 					message=f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}\n{frappe.get_traceback()}",
 				)
-		_record_bank_transaction(data, invoice_name)
+		_record_bank_transaction(data, invoice_name, booked)
 	finally:
 		frappe.set_user(old_user)
 
@@ -343,13 +348,16 @@ def _sepay_bank_account(data):
 	return None
 
 
-def _invoice_payment_vouchers(invoice_name, gl_account):
+def _invoice_payment_vouchers(invoice_name, gl_account, booked):
 	"""
-	Vouchers carrying the bank side of this invoice: the invoice (POS/SePay rows)
-	and its Payment Entries (manual confirm). Only those posting to the bank's
-	account - ERPNext refuses to allocate a voucher that does not.
+	Vouchers carrying the bank side of this transfer. Booked now: the invoice,
+	whose SePay row it just wrote. Not booked: only the invoice's Payment Entries
+	(manual confirm before the money arrived) - linking the invoice there would let
+	ERPNext take another line's money on the same bank account (an earlier SePay
+	row, a card row) and mark an extra or wrong transfer Reconciled. Only vouchers
+	posting to the bank's account - ERPNext refuses to allocate one that does not.
 	"""
-	candidates = [("Sales Invoice", invoice_name)] + [
+	candidates = ([("Sales Invoice", invoice_name)] if booked else []) + [
 		("Payment Entry", pe)
 		for pe in frappe.get_all(
 			"Payment Entry Reference",
@@ -368,7 +376,7 @@ def _invoice_payment_vouchers(invoice_name, gl_account):
 	]
 
 
-def _record_bank_transaction(data, invoice_name=None):
+def _record_bank_transaction(data, invoice_name=None, booked=False):
 	"""
 	One Bank Transaction per SePay transfer, so every money-in can be traced on
 	the bank side. Linked to the invoice it paid, it ends Reconciled; a transfer
@@ -399,7 +407,7 @@ def _record_bank_transaction(data, invoice_name=None):
 			}
 		)
 		if gl_account and invoice_name and frappe.db.get_value("Sales Invoice", invoice_name, "docstatus") == 1:
-			for doctype, name in _invoice_payment_vouchers(invoice_name, gl_account):
+			for doctype, name in _invoice_payment_vouchers(invoice_name, gl_account, booked):
 				bt.append(
 					"payment_entries",
 					{"payment_document": doctype, "payment_entry": name, "allocated_amount": 0},
@@ -526,11 +534,13 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 	"""
 	Process incoming SePay payment: add payment to invoice and submit if draft.
 
+	Returns True when this transfer was booked onto the invoice.
+
 	Uses Payment Entry flow (submit invoice first, then add payment) to avoid
 	GL merge issues where receivable debit+credit can cancel to zero.
 	"""
 	if _is_sepay_transaction_processed(sepay_id):
-		return
+		return False
 
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
 
@@ -539,7 +549,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 			title="SePay Webhook",
 			message=f"SePay payment for cancelled invoice {invoice_name}: amount={amount} id={sepay_id}. Refund or rebook by hand.",
 		)
-		return
+		return False
 
 	# Already paid by another transfer: this one is extra money from the customer
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
@@ -547,7 +557,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 			title="SePay Webhook",
 			message=f"SePay transfer {sepay_id} of {amount} for invoice {invoice_name}, which is already paid. Not booked again - if its Bank Transaction stays Unreconciled, refund or rebook by hand.",
 		)
-		return
+		return False
 
 	# The money must have reached the account this till shows on its QR.
 	settings = _get_sepay_settings(doc.pos_profile)
@@ -559,7 +569,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 			message=f"SePay payment to account {data.get('accountNumber')!r} does not match POS Profile "
 			f"{doc.pos_profile} of invoice {invoice_name} (or SePay is off there). Not booked.",
 		)
-		return
+		return False
 
 	# Validate amount: must match outstanding (supports mixed payments: cash + bank transfer)
 	outstanding = flt(doc.outstanding_amount, 2)
@@ -568,7 +578,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 			title="SePay Webhook",
 			message=f"SePay amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}",
 		)
-		return
+		return False
 
 	mode_of_payment = _transfer_mode_of_payment(doc.pos_profile, ("Wire Transfer", "Chuyển khoản"))
 
@@ -593,6 +603,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		reference_code=reference_code,
 		data=data,
 	)
+	return True
 
 
 def _add_sepay_payment_direct(doc, amount, mode_of_payment, reference_no, transaction_id=None):

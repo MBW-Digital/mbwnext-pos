@@ -1,6 +1,6 @@
 /**
  * Receipt payment summary — includes Payment Entry rows enriched by backend
- * (e.g. VNPost bank transfer not stored on Sales Invoice Payment child table).
+ * (e.g. a bank transfer confirmed by Payment Entry, not stored on the Sales Invoice Payment child table).
  */
 export function getReceiptPaymentSummary(invoiceData = {}) {
 	const payments = (invoiceData.receipt_payments || invoiceData.payments || [])

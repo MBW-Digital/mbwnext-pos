@@ -84,7 +84,7 @@ def receipt_totals_aux_for_print(doc):
 
 
 def receipt_payments_for_invoice(inv) -> list[dict[str, Any]]:
-	"""All payment lines for receipt: POS rows + Payment Entry allocations (e.g. VNPost bank transfer)."""
+	"""All payment lines for receipt: POS rows + Payment Entry allocations (e.g. a manually confirmed bank transfer)."""
 	rows: list[dict[str, Any]] = []
 	seen_pe: set[str] = set()
 

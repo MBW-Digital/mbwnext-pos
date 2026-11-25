@@ -2012,6 +2012,15 @@ def cleanup_old_drafts(pos_profile=None, max_age_hours=24):
 
     cutoff_time = datetime.now() - timedelta(hours=int(max_age_hours))
 
+    # A till taking SePay transfers leaves the QR draft unpaid until the bank
+    # money arrives. Customers do transfer late; delete the draft after an hour
+    # and the webhook finds no invoice for money already in the bank. Keep such
+    # drafts for a day on SePay tills.
+    from pos_next.api.sepay import SEPAY_DRAFT_KEEP_HOURS, _get_sepay_settings
+
+    if _get_sepay_settings(pos_profile):
+        cutoff_time = min(cutoff_time, datetime.now() - timedelta(hours=SEPAY_DRAFT_KEEP_HOURS))
+
     filters = {
         "docstatus": 0,  # Draft only
         # is_pos is set unconditionally on every invoice this app creates (see

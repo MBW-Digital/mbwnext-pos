@@ -191,6 +191,10 @@ pos_next/
 
 ### 6. Sepay QR Payment
 - `api/sepay.py` — tích hợp thanh toán Sepay QR
+- Khoá webhook: URL SePay phải có `?key=<sepay_webhook_key>` (site config; chế độ API Key của SePay bị Frappe chặn 401). Site **chưa đặt** khoá thì vẫn nhận như cũ, ghi Error Log mỗi ngày một lần nhắc đặt; đã đặt thì thiếu/sai khoá bị từ chối.
+- Nội dung QR là `DH` + **nguyên tên hoá đơn bỏ ký tự đặc biệt** (vd `DHACCSINV202600001`), không còn `DH` + phần số. Trên my.sepay.vn, "Cấu trúc mã thanh toán" phải là tiền tố `DH` + **chữ và số**, đủ dài cho tên hoá đơn; để kiểu chỉ số thì SePay không nhận ra mã. QR in trước khi cập nhật bản này không còn tự khớp: thu ngân xác nhận tay.
+- Webhook `receive_webhook`: khớp hoá đơn theo `DH<tên hoá đơn>`, ghi tiền thẳng vào bảng thanh toán của hoá đơn (Nợ TK ngân hàng / Có 131, không Payment Entry), mã tham chiếu `SEPAY-<id>`.
+- Mỗi khoản tiền vào sinh một **Bank Transaction** (`transaction_id` = id SePay, không trùng): gắn với hoá đơn hoặc Payment Entry xác nhận tay đã ghi vào TK ngân hàng → *Reconciled*; không khớp / sai số tiền / bill đã trả → *Unreconciled* để kế toán xử lý ở Bank Reconciliation Tool. Cần một **Bank Account** công ty có `bank_account_no` = số tài khoản nhận SePay (hoặc VA), trỏ về TK 112; không có thì bỏ qua bước này (PM-TASK-00446).
 
 ### 7. Company-aware Items
 - Custom field `custom_company` trên Item

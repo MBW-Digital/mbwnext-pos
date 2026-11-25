@@ -289,7 +289,7 @@ async function sendRaw(data) {
 }
 
 /**
- * Print invoice (with optional e-invoice QR and VNPost QR) via ESC/POS.
+ * Print invoice (with optional e-invoice QR) via ESC/POS.
  *
  * @param {Object} invoiceData   - Invoice document from ERPNext
  * @param {Object} opts          - { paperWidthMm, einvoiceQr }

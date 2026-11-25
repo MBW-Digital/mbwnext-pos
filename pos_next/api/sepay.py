@@ -257,18 +257,21 @@ def receive_webhook():
 	a fake "money in". SePay's own "API Key" option cannot be used: it sends
 	"Authorization: Apikey ...", which Frappe rejects as a failed login before
 	this function runs. Set SePay's webhook auth to "none" and put the key in the URL.
+
+	Sites that took SePay before the key existed have no sepay_webhook_key yet:
+	they keep receiving as before, with a daily Error Log asking to set it, so an
+	app update does not silently stop booking their transfers. Once the key is
+	set, a missing or wrong key is rejected.
 	"""
 	if frappe.request.method != "POST":
 		return _webhook_response({"success": False, "message": "Method Not Allowed"}, 405)
 
 	expected_key = frappe.conf.get("sepay_webhook_key")
 	given_key = frappe.request.args.get("key") or ""
-	if not expected_key or not hmac.compare_digest(str(expected_key).encode(), given_key.encode()):
-		frappe.log_error(
-			title="SePay Webhook",
-			message="SePay webhook rejected: wrong or missing key"
-			+ ("" if expected_key else " (sepay_webhook_key is not set in site config)"),
-		)
+	if not expected_key:
+		_warn_webhook_key_not_set()
+	elif not hmac.compare_digest(str(expected_key).encode(), given_key.encode()):
+		frappe.log_error(title="SePay Webhook", message="SePay webhook rejected: wrong or missing key")
 		return _webhook_response({"success": False, "message": "Unauthorized"}, 401)
 
 	raw = ""
@@ -429,6 +432,23 @@ def _sepay_lock(invoice_name):
 		yield
 	finally:
 		frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock,))
+
+
+def _warn_webhook_key_not_set():
+	"""One Error Log a day while the site still takes unauthenticated webhooks."""
+	cache_key = f"sepay_webhook_key_not_set:{today()}"
+	if frappe.cache.get_value(cache_key, expires=True):
+		return
+	frappe.cache.set_value(cache_key, 1, expires_in_sec=86400)
+	frappe.log_error(
+		title="SePay Webhook",
+		message=(
+			"sepay_webhook_key is not set in site config: SePay webhooks are accepted without a key, "
+			"so anyone who knows the URL can post a fake payment. Set the key "
+			"(bench --site <site> set-config sepay_webhook_key <random>) and add ?key=<random> "
+			"to the webhook URL on my.sepay.vn."
+		),
+	)
 
 
 def _webhook_response(body, status=200):

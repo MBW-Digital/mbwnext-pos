@@ -39,51 +39,63 @@
 									? 'border-blue-500 bg-blue-50 text-blue-800'
 									: 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50',
 							]"
-							@click="form.buyer_type = opt.value"
+							@click="selectBuyerType(opt.value)"
 						>
 							{{ opt.label }}
 						</button>
 					</div>
 
-					<div v-if="form.buyer_type === 'company'" class="flex flex-col gap-1">
-						<label for="einv-tax-id" class="text-xs font-medium text-gray-700">{{ __('Tax code') }} *</label>
-						<div class="flex gap-2">
-							<input id="einv-tax-id" v-model="form.tax_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 flex-1" inputmode="numeric" @blur="lookup" />
-							<Button size="sm" variant="subtle" :loading="looking" @click="lookup">{{ __('Look up') }}</Button>
+					<!-- Cá nhân: người mua cố định, không sửa được (khách chốt 26/11, NĐ 254/2026) -->
+					<template v-if="form.buyer_type === 'retail'">
+						<div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+							<p class="text-xs text-gray-500">{{ __('Buyer') }}</p>
+							<p class="text-sm font-semibold text-gray-900">{{ consumerName }}</p>
 						</div>
-						<p v-if="lookupNote" class="text-xs text-gray-500">{{ lookupNote }}</p>
-					</div>
+						<div v-if="confirmStep === 1" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
+							<p class="text-sm font-bold text-red-700">{{ __('Salesperson: ask the customer carefully whether they want an invoice.') }}</p>
+							<p class="mt-1 text-xs text-red-700">{{ __('Only continue if the customer asked for an e-invoice.') }}</p>
+						</div>
+						<div v-else-if="confirmStep === 2" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
+							<p class="text-sm font-bold text-red-700">
+								{{ __('Issue the e-invoice for invoice {0} to buyer "{1}"?', [invoiceName, consumerName]) }}
+							</p>
+							<p class="mt-1 text-xs text-red-700">{{ __('An issued e-invoice cannot be edited from the POS.') }}</p>
+						</div>
+					</template>
 
-					<div class="flex flex-col gap-1">
-						<label for="einv-name" class="text-xs font-medium text-gray-700">
-							{{ form.buyer_type === 'company' ? __('Company name') : __('Buyer name') }}
-							<span v-if="form.buyer_type === 'company'">*</span>
-						</label>
-						<input id="einv-name" v-model="form.buyer_name" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-					</div>
-
-					<div v-if="form.buyer_type === 'retail'" class="flex flex-col gap-1">
-						<label for="einv-personal-id" class="text-xs font-medium text-gray-700">{{ __('Personal tax code / ID number (optional)') }}</label>
-						<input id="einv-personal-id" v-model="form.tax_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" inputmode="numeric" />
-					</div>
-
-					<div class="flex flex-col gap-1">
-						<label for="einv-address" class="text-xs font-medium text-gray-700">
-							{{ __('Address') }} <span v-if="form.buyer_type === 'company'">*</span>
-						</label>
-						<input id="einv-address" v-model="form.address" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
-					</div>
-
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+					<template v-else>
 						<div class="flex flex-col gap-1">
-							<label for="einv-email" class="text-xs font-medium text-gray-700">{{ __('Email to receive the invoice') }}</label>
-							<input id="einv-email" v-model="form.email" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+							<label for="einv-tax-id" class="text-xs font-medium text-gray-700">{{ __('Tax code') }} *</label>
+							<div class="flex gap-2">
+								<input id="einv-tax-id" v-model="form.tax_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 flex-1" inputmode="numeric" @blur="lookup" />
+								<Button size="sm" variant="subtle" :loading="looking" @click="lookup">{{ __('Look up') }}</Button>
+							</div>
+							<p v-if="lookupNote" class="text-xs text-gray-500">{{ lookupNote }}</p>
 						</div>
+
 						<div class="flex flex-col gap-1">
-							<label for="einv-phone" class="text-xs font-medium text-gray-700">{{ __('Phone') }}</label>
-							<input id="einv-phone" v-model="form.phone" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" inputmode="tel" />
+							<label for="einv-name" class="text-xs font-medium text-gray-700">{{ __('Company name') }} *</label>
+							<input id="einv-name" v-model="form.buyer_name" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
 						</div>
-					</div>
+
+						<div class="flex flex-col gap-1">
+							<label for="einv-address" class="text-xs font-medium text-gray-700">
+								{{ __('Address') }} *
+							</label>
+							<input id="einv-address" v-model="form.address" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+						</div>
+
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+							<div class="flex flex-col gap-1">
+								<label for="einv-email" class="text-xs font-medium text-gray-700">{{ __('Email to receive the invoice') }}</label>
+								<input id="einv-email" v-model="form.email" type="email" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+							</div>
+							<div class="flex flex-col gap-1">
+								<label for="einv-phone" class="text-xs font-medium text-gray-700">{{ __('Phone') }}</label>
+								<input id="einv-phone" v-model="form.phone" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" inputmode="tel" />
+							</div>
+						</div>
+					</template>
 
 					<p v-if="error" class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">{{ error }}</p>
 				</template>
@@ -91,15 +103,17 @@
 		</template>
 		<template #actions>
 			<div class="flex gap-2 justify-end">
-				<Button variant="subtle" @click="show = false">{{ __('Close') }}</Button>
+				<Button v-if="confirmStep > 0 && !issued" variant="subtle" @click="confirmStep = 0">{{ __('Back') }}</Button>
+				<Button v-else variant="subtle" @click="show = false">{{ __('Close') }}</Button>
 				<Button
 					v-if="canIssue && !issued"
 					variant="solid"
-					theme="blue"
+					:theme="confirmStep > 0 ? 'red' : 'blue'"
 					:loading="issuing"
-					@click="issue"
+					:disabled="stepLocked"
+					@click="onIssueClick"
 				>
-					{{ __('Issue') }}
+					{{ issueLabel }}
 				</Button>
 			</div>
 		</template>
@@ -127,7 +141,7 @@ const show = computed({
 
 const buyerTypes = [
 	{ value: "retail", label: __("Individual") },
-	{ value: "company", label: __("Company") },
+	{ value: "company", label: __("Business") },
 ]
 
 const loading = ref(false)
@@ -140,6 +154,38 @@ const lookupNote = ref("")
 const error = ref("")
 const form = reactive({ buyer_type: "retail", buyer_name: "", tax_id: "", address: "", email: "", phone: "" })
 let prefill = {}
+// Individual buyer: fixed name, two confirmations before issuing (Ha Vang, 26/11)
+const consumerName = ref("Bán cho người tiêu dùng")
+const confirmStep = ref(0)
+// Same button for every step: lock it a moment after each step so a double tap
+// cannot skip a confirmation the cashier never read
+const stepLocked = ref(false)
+let stepLockTimer = null
+
+const issueLabel = computed(() => {
+	if (confirmStep.value === 1) return __("Customer wants an invoice")
+	if (confirmStep.value === 2) return __("Issue E-Invoice")
+	return __("Issue")
+})
+
+function selectBuyerType(type) {
+	form.buyer_type = type
+	confirmStep.value = 0
+}
+
+function onIssueClick() {
+	if (stepLocked.value) return
+	if (form.buyer_type === "retail" && confirmStep.value < 2) {
+		confirmStep.value += 1
+		stepLocked.value = true
+		clearTimeout(stepLockTimer)
+		stepLockTimer = setTimeout(() => {
+			stepLocked.value = false
+		}, 1000)
+		return
+	}
+	issue()
+}
 
 const cqtLabel = computed(() => {
 	const map = {
@@ -163,6 +209,7 @@ async function load() {
 	issued.value = null
 	error.value = ""
 	lookupNote.value = ""
+	confirmStep.value = 0
 	try {
 		const state = await call("pos_next.api.einvoice_pos.get_pos_einvoice_state", {
 			sales_invoice: props.invoiceName,
@@ -174,6 +221,7 @@ async function load() {
 		} else {
 			canIssue.value = true
 			prefill = state.prefill || {}
+			consumerName.value = state.consumer_name || consumerName.value
 			Object.assign(form, { buyer_type: state.buyer_type || "retail" }, prefill)
 		}
 	} catch (e) {
@@ -209,31 +257,35 @@ async function issue() {
 	issuing.value = true
 	error.value = ""
 	try {
+		// Individual: send nothing but the type, the server writes the fixed buyer
+		const buyer = form.buyer_type === "retail" ? { buyer_type: "retail" } : { ...form }
 		const r = await call("pos_next.api.einvoice_pos.issue_pos_einvoice", {
 			sales_invoice: props.invoiceName,
-			...form,
+			...buyer,
 		})
 		issued.value = r
 		emit("issued", r)
 	} catch (e) {
 		log.error("Error issuing e-invoice:", e)
 		error.value = errorText(e)
+		confirmStep.value = 0
 	} finally {
 		issuing.value = false
 	}
 }
 
-// Đổi loại người mua: không để tên khách lẻ nằm trong ô tên công ty (và ngược lại)
+// Sang tab Doanh nghiệp: khách chưa có MST thì để trống hết, không mang tên/SĐT khách lẻ sang hoá đơn công ty
 watch(
 	() => form.buyer_type,
 	(type) => {
 		if (loading.value) return
 		error.value = ""
 		lookupNote.value = ""
-		if (type === "company" && !prefill.tax_id) {
-			Object.assign(form, { buyer_name: "", tax_id: "", address: "" })
-		} else if (type === "retail") {
-			Object.assign(form, { buyer_name: prefill.buyer_name || "", tax_id: "", address: prefill.address || "" })
+		if (type === "company") {
+			Object.assign(
+				form,
+				prefill.tax_id ? { ...prefill } : { buyer_name: "", tax_id: "", address: "", email: "", phone: "" },
+			)
 		}
 	},
 )

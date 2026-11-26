@@ -188,7 +188,7 @@ pos_next/
 - `einvoice_batch.py` — phát hành eInvoice hàng loạt
 - `einvoice_self_service.py` — người mua tự nhập thông tin qua QR
 - `www/einvoice_self_service.html` — trang self-service
-- `einvoice_pos.py` — thu ngân xuất HĐĐT ngay trên POS (nút Xuất HĐĐT ở hộp tạo hoá đơn thành công + Chi tiết hoá đơn, `EInvoiceIssueDialog.vue`): ghi người mua vào `pos_einvoice_buyer_*` rồi phát hành qua cùng đường với trang QR; quyền theo quyền đọc hoá đơn (User Permission quầy); phiếu trả không xuất từ POS (PM-FEAT-00094)
+- `einvoice_pos.py` — thu ngân xuất HĐĐT ngay trên POS (nút Xuất HĐĐT ở hộp tạo hoá đơn thành công + Chi tiết hoá đơn, `EInvoiceIssueDialog.vue`): ghi người mua vào `pos_einvoice_buyer_*` rồi phát hành qua cùng đường với trang QR; quyền theo quyền đọc hoá đơn (User Permission quầy); phiếu trả không xuất từ POS (PM-FEAT-00094). Tab Cá nhân: người mua cố định "Bán cho người tiêu dùng" (`ANONYMOUS_CONSUMER_NAME` của mbwnext_einvoice), không sửa được, hỏi xác nhận 2 lần; máy chủ ép tên này và bỏ trống MST/địa chỉ/email/SĐT cho mọi `buyer_type` khác `company` (khách chốt 26/11, NĐ 254/2026)
 
 ### 6. Sepay QR Payment
 - `api/sepay.py` — tích hợp thanh toán Sepay QR

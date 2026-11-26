@@ -16,6 +16,14 @@ from pos_next.api.einvoice_self_service import (
 	_resolve_buyer_master_by_tax_id,
 )
 
+# Ha Vang (Vu Quoc Hung, 26/11, ND 254/2026 Phu luc muc 4b): an individual buyer
+# is always written as this name, nothing else; the core then drops the
+# address/phone of the Customer record. Same text as the core constant.
+try:
+	from mbwnext_einvoice.integrations.common import ANONYMOUS_CONSUMER_NAME
+except ImportError:
+	ANONYMOUS_CONSUMER_NAME = "Bán cho người tiêu dùng"
+
 BUYER_FIELDS = (
 	"pos_einvoice_buyer_name",
 	"pos_einvoice_buyer_tax_id",
@@ -94,8 +102,9 @@ def get_pos_einvoice_state(sales_invoice: str) -> Dict[str, Any]:
 	return {
 		"can_issue": True,
 		"prefill": prefill,
-		# A buyer with a tax code is most likely a company: open on that tab
-		"buyer_type": "company" if len("".join(c for c in prefill["tax_id"] if c.isdigit())) in (10, 13) else "retail",
+		# Individual is the default; the cashier switches to Company on purpose
+		"buyer_type": "retail",
+		"consumer_name": ANONYMOUS_CONSUMER_NAME,
 	}
 
 
@@ -144,8 +153,8 @@ def issue_pos_einvoice(
 		if not address:
 			frappe.throw(_("Please enter the company address."))
 	else:
-		ensure_valid_buyer_tax_code(tax_id)
-		buyer_name = buyer_name or si.customer_name or si.customer
+		# Individual: nothing the till sends is kept (the customer chose this on 26/11)
+		buyer_name, tax_id, address, email, phone = ANONYMOUS_CONSUMER_NAME, "", "", "", ""
 
 	if email and not frappe.utils.validate_email_address(email):
 		frappe.throw(_("Email {0} is not valid.").format(email))

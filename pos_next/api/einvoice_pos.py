@@ -123,6 +123,7 @@ def issue_pos_einvoice(
 	address: str | None = None,
 	email: str | None = None,
 	phone: str | None = None,
+	wants_invoice: int | str | None = 0,
 ) -> Dict[str, Any]:
 	"""Stage the buyer on the bill, then issue through the company's provider (same path as the QR page)."""
 	from mbwnext_einvoice.integrations.common import ensure_valid_buyer_tax_code
@@ -152,8 +153,17 @@ def issue_pos_einvoice(
 			frappe.throw(_("Please enter the company name."))
 		if not address:
 			frappe.throw(_("Please enter the company address."))
+	elif cint(wants_invoice):
+		# Individual who asks for an invoice: tax code = 12-digit citizen ID, full name, address (Ha Vang, 27/11)
+		if not tax_id:
+			frappe.throw(_("Please enter the customer's tax code / citizen ID."))
+		ensure_valid_buyer_tax_code(tax_id)
+		if not buyer_name:
+			frappe.throw(_("Please enter the customer's full name."))
+		if not address:
+			frappe.throw(_("Please enter the customer's address."))
 	else:
-		# Individual: nothing the till sends is kept (the customer chose this on 26/11)
+		# Individual who does not want an invoice: nothing the till sends is kept (Decree 254/2026)
 		buyer_name, tax_id, address, email, phone = ANONYMOUS_CONSUMER_NAME, "", "", "", ""
 
 	if email and not frappe.utils.validate_email_address(email):

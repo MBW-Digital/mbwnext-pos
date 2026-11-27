@@ -45,36 +45,44 @@
 						</button>
 					</div>
 
-					<!-- Cá nhân: người mua cố định, không sửa được (khách chốt 26/11, NĐ 254/2026) -->
+					<!-- Cá nhân: không lấy hoá đơn = "Bán cho người tiêu dùng" (NĐ 254/2026);
+					     tick "Có lấy hoá đơn" thì điền MST = CCCD 12 số, họ tên, địa chỉ (Thắng chốt 27/11) -->
 					<template v-if="form.buyer_type === 'retail'">
-						<div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-							<p class="text-xs text-gray-500">{{ __('Buyer') }}</p>
-							<p class="text-sm font-semibold text-gray-900">{{ consumerName }}</p>
-						</div>
-						<div v-if="confirmStep === 1" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
-							<p class="text-sm font-bold text-red-700">{{ __('Salesperson: ask the customer carefully whether they want an invoice.') }}</p>
-							<p class="mt-1 text-xs text-red-700">{{ __('Only continue if the customer asked for an e-invoice.') }}</p>
-						</div>
-						<div v-else-if="confirmStep === 2" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
-							<p class="text-sm font-bold text-red-700">
-								{{ __('Issue the e-invoice for invoice {0} to buyer "{1}"?', [invoiceName, consumerName]) }}
-							</p>
-							<p class="mt-1 text-xs text-red-700">{{ __('An issued e-invoice cannot be edited from the POS.') }}</p>
-						</div>
+						<label class="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 cursor-pointer select-none">
+							<input v-model="wantsInvoice" type="checkbox" class="h-4 w-4 rounded border-gray-300" @change="onWantsInvoiceChange" />
+							<span class="text-sm font-medium text-gray-900">{{ __('Wants an invoice') }}</span>
+						</label>
+						<template v-if="!wantsInvoice">
+							<div class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+								<p class="text-xs text-gray-500">{{ __('Customer') }}</p>
+								<p class="text-sm font-semibold text-gray-900">{{ consumerName }}</p>
+							</div>
+							<div v-if="confirmStep === 1" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
+								<p class="text-sm font-bold text-red-700">{{ __('Salesperson: ask the customer carefully whether they want an invoice.') }}</p>
+								<p class="mt-1 text-xs text-red-700">{{ __('Only continue if the customer does not want an invoice.') }}</p>
+							</div>
+							<div v-else-if="confirmStep === 2" class="rounded-lg border-2 border-red-300 bg-red-50 p-3">
+								<p class="text-sm font-bold text-red-700">
+									{{ __('Issue the e-invoice for invoice {0} to customer "{1}"?', [invoiceName, consumerName]) }}
+								</p>
+								<p class="mt-1 text-xs text-red-700">{{ __('An issued e-invoice cannot be edited from the POS.') }}</p>
+							</div>
+						</template>
 					</template>
 
-					<template v-else>
+					<template v-if="showBuyerFields">
 						<div class="flex flex-col gap-1">
-							<label for="einv-tax-id" class="text-xs font-medium text-gray-700">{{ __('Tax code') }} *</label>
+							<label for="einv-tax-id" class="text-xs font-medium text-gray-700">{{ isCompany ? __('Tax code') : __('Tax code / Citizen ID') }} *</label>
 							<div class="flex gap-2">
 								<input id="einv-tax-id" v-model="form.tax_id" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 flex-1" inputmode="numeric" @blur="lookup" />
 								<Button size="sm" variant="subtle" :loading="looking" @click="lookup">{{ __('Look up') }}</Button>
 							</div>
+							<p v-if="!isCompany" class="text-xs text-gray-500">{{ __('Individual: the tax code is the 12-digit citizen ID.') }}</p>
 							<p v-if="lookupNote" class="text-xs text-gray-500">{{ lookupNote }}</p>
 						</div>
 
 						<div class="flex flex-col gap-1">
-							<label for="einv-name" class="text-xs font-medium text-gray-700">{{ __('Company name') }} *</label>
+							<label for="einv-name" class="text-xs font-medium text-gray-700">{{ isCompany ? __('Company name') : __('Full name') }} *</label>
 							<input id="einv-name" v-model="form.buyer_name" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" />
 						</div>
 
@@ -157,25 +165,44 @@ let prefill = {}
 // Individual buyer: fixed name, two confirmations before issuing (Ha Vang, 26/11)
 const consumerName = ref("Bán cho người tiêu dùng")
 const confirmStep = ref(0)
+// Individual who asks for an invoice gives tax code (= citizen ID), name and address
+const wantsInvoice = ref(false)
+const isCompany = computed(() => form.buyer_type === "company")
+const showBuyerFields = computed(() => isCompany.value || wantsInvoice.value)
+// Two confirmations only for "Bán cho người tiêu dùng"
+const needsConfirm = computed(() => form.buyer_type === "retail" && !wantsInvoice.value)
 // Same button for every step: lock it a moment after each step so a double tap
 // cannot skip a confirmation the cashier never read
 const stepLocked = ref(false)
 let stepLockTimer = null
 
 const issueLabel = computed(() => {
-	if (confirmStep.value === 1) return __("Customer wants an invoice")
+	if (confirmStep.value === 1) return __("Customer does not want an invoice")
 	if (confirmStep.value === 2) return __("Issue E-Invoice")
-	return __("Issue")
+	return wantsInvoice.value ? __("Issue E-Invoice") : __("Issue")
 })
+
+function clearBuyer() {
+	Object.assign(form, { buyer_name: "", tax_id: "", address: "", email: "", phone: "" })
+	lookupNote.value = ""
+	error.value = ""
+}
 
 function selectBuyerType(type) {
 	form.buyer_type = type
 	confirmStep.value = 0
+	wantsInvoice.value = false
+}
+
+// Ticking starts from empty fields: the walk-in customer's name/phone must not land on the invoice
+function onWantsInvoiceChange() {
+	confirmStep.value = 0
+	clearBuyer()
 }
 
 function onIssueClick() {
 	if (stepLocked.value) return
-	if (form.buyer_type === "retail" && confirmStep.value < 2) {
+	if (needsConfirm.value && confirmStep.value < 2) {
 		confirmStep.value += 1
 		stepLocked.value = true
 		clearTimeout(stepLockTimer)
@@ -210,6 +237,7 @@ async function load() {
 	error.value = ""
 	lookupNote.value = ""
 	confirmStep.value = 0
+	wantsInvoice.value = false
 	try {
 		const state = await call("pos_next.api.einvoice_pos.get_pos_einvoice_state", {
 			sales_invoice: props.invoiceName,
@@ -237,14 +265,25 @@ async function lookup() {
 	if (digits.length < 10 || looking.value) return
 	looking.value = true
 	lookupNote.value = ""
+	const company = isCompany.value
 	try {
 		const r = await call("pos_next.api.einvoice_pos.lookup_buyer", { tax_id: form.tax_id })
+		// Tab, tick or tax code changed while waiting: the answer is for another buyer
+		if (isCompany.value !== company || (form.tax_id || "").replace(/\D/g, "") !== digits) return
 		if (r?.found) {
-			form.buyer_name = r.name || form.buyer_name
-			form.address = r.address || form.address
+			if (company) {
+				form.buyer_name = r.name || form.buyer_name
+				form.address = r.address || form.address
+			} else {
+				// Individual: never overwrite what the cashier already typed
+				form.buyer_name = form.buyer_name || r.name || ""
+				form.address = form.address || r.address || ""
+			}
 			lookupNote.value = __("Filled from the customer list.")
 		} else {
-			lookupNote.value = __("Not in the customer list: enter the name and address as on the business registration.")
+			lookupNote.value = company
+				? __("Not in the customer list: enter the name and address as on the business registration.")
+				: __("Not in the customer list: enter the full name and address as on the citizen ID.")
 		}
 	} catch (e) {
 		log.error("Error looking up tax code:", e)
@@ -254,11 +293,14 @@ async function lookup() {
 }
 
 async function issue() {
+	if (issuing.value) return
 	issuing.value = true
 	error.value = ""
 	try {
-		// Individual: send nothing but the type, the server writes the fixed buyer
-		const buyer = form.buyer_type === "retail" ? { buyer_type: "retail" } : { ...form }
+		// No invoice wanted: send nothing but the type, the server writes "Bán cho người tiêu dùng"
+		const buyer = needsConfirm.value
+			? { buyer_type: "retail" }
+			: { ...form, wants_invoice: wantsInvoice.value ? 1 : 0 }
 		const r = await call("pos_next.api.einvoice_pos.issue_pos_einvoice", {
 			sales_invoice: props.invoiceName,
 			...buyer,

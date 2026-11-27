@@ -6,10 +6,13 @@
 
 from __future__ import unicode_literals
 import re
+import hmac
+import unicodedata
 import json
+from contextlib import contextmanager
 import frappe
 from frappe import _
-from frappe.utils import flt, cint, now
+from frappe.utils import flt, cint, now, getdate, today
 
 
 # VietQR base URL (SePay)
@@ -18,6 +21,9 @@ BANKS_JSON_URL = "https://qr.sepay.vn/banks.json"
 
 # Order code prefix - must match SePay "Cấu trúc mã thanh toán" config
 ORDER_PREFIX = "DH"
+
+# How long cleanup_old_drafts() spares an unpaid QR draft on a SePay till
+SEPAY_DRAFT_KEEP_HOURS = 24
 
 
 @frappe.whitelist()
@@ -82,6 +88,30 @@ def _get_sepay_settings(pos_profile=None):
 	)
 
 
+def _is_transfer_mode_name(name):
+	"""Same rule as isBankTransferMethod() in PaymentDialog.vue - the methods that show the SePay QR."""
+	name = unicodedata.normalize("NFC", name or "").lower()
+	return name in ("bank draft", "wire transfer", "bank transfer") or "chuyển" in name or "transfer" in name
+
+
+def _transfer_mode_of_payment(pos_profile, legacy_order):
+	"""
+	Mode of Payment to book a SePay transfer under: the transfer method on the
+	invoice's POS Profile, i.e. the row that made the POS show the QR. Booking
+	under a different method puts the money on another account, in the wrong
+	mall report column, and outside the till's methods at shift close.
+	Falls back to legacy_order (names tried in turn) for profiles without one.
+	"""
+	if pos_profile:
+		for row in frappe.get_cached_doc("POS Profile", pos_profile).get("payments") or []:
+			if row.mode_of_payment and _is_transfer_mode_name(row.mode_of_payment):
+				return row.mode_of_payment
+	for name in legacy_order:
+		if frappe.db.exists("Mode of Payment", name):
+			return name
+	return frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name") or "Bank"
+
+
 @frappe.whitelist()
 def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 	"""
@@ -101,13 +131,10 @@ def get_vietqr_url(pos_profile, amount, invoice_id=None, template="compact"):
 		return {"enabled": False, "message": _("SePay is not configured for this POS Profile")}
 
 	amount_int = int(flt(amount, 0))
-	# Content: DH + invoice number. SePay matches this for webhook.
-	# Use numeric part of invoice for short content (e.g. SINV-00001 -> 1)
-	if invoice_id:
-		match = re.search(r"(\d+)$", str(invoice_id))
-		content = f"{ORDER_PREFIX}{match.group(1) if match else invoice_id}"
-	else:
-		content = ""
+	# Content: DH + the WHOLE invoice name, letters included. Ha Vang names are
+	# {shop code}.YY.MM.DD.#### - the digits alone repeat across shops on the
+	# same day, so the old "DH + trailing digits" could match another shop's bill.
+	content = f"{ORDER_PREFIX}{_compact(invoice_id)}" if invoice_id else ""
 
 	params = {
 		"acc": settings.sepay_bank_account,
@@ -170,36 +197,38 @@ def manual_confirm_sepay_payment(invoice_name):
 	if not frappe.db.exists("Sales Invoice", invoice_name):
 		return {"success": False, "message": _("Invoice not found")}
 
+	try:
+		with _sepay_lock(invoice_name):
+			return _manual_confirm(invoice_name)
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "SePay Manual Confirm")
+		return {"success": False, "message": str(e)}
+
+
+def _manual_confirm(invoice_name):
+	# Read inside the lock: the webhook may have just booked this transfer.
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
 		return {"success": True, "paid": True, "message": _("Invoice already submitted")}
 
-	amount = flt(doc.grand_total, 2)
-	mode_of_payment = (
-		frappe.db.get_value("Mode of Payment", "Bank Draft", "name")
-		or frappe.db.get_value("Mode of Payment", "Chuyển khoản", "name")
-		or frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name")
-		or "Bank"
+	# Only the transfer part: cash already paid on a mixed payment stays out.
+	amount = flt(doc.outstanding_amount, 2)
+	mode_of_payment = _transfer_mode_of_payment(doc.pos_profile, ("Bank Draft", "Chuyển khoản"))
+
+	if doc.docstatus == 0:
+		doc.flags.ignore_permissions = True
+		frappe.flags.ignore_account_permission = True
+		doc.submit()
+
+	from pos_next.api.partial_payments import create_payment_entry
+
+	create_payment_entry(
+		invoice_name=invoice_name,
+		amount=amount,
+		mode_of_payment=mode_of_payment,
+		remarks="SePay manual confirmation",
 	)
-
-	try:
-		if doc.docstatus == 0:
-			doc.flags.ignore_permissions = True
-			frappe.flags.ignore_account_permission = True
-			doc.submit()
-
-		from pos_next.api.partial_payments import create_payment_entry
-
-		create_payment_entry(
-			invoice_name=invoice_name,
-			amount=amount,
-			mode_of_payment=mode_of_payment,
-			remarks="SePay manual confirmation",
-		)
-		return {"success": True, "paid": True, "invoice_name": invoice_name}
-	except Exception as e:
-		frappe.log_error(frappe.get_traceback(), "SePay Manual Confirm")
-		return {"success": False, "message": str(e)}
+	return {"success": True, "paid": True, "invoice_name": invoice_name}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -222,158 +251,373 @@ def receive_webhook():
 	- subAccount: VA if any
 	- referenceCode: Reference
 	- description: Full SMS content
-	"""
-	# Only accept POST
-	if frappe.request.method != "POST":
-		frappe.response["http_status_code"] = 405
-		return {"success": False, "message": "Method Not Allowed"}
 
+	The URL must carry ?key=<site config sepay_webhook_key>. This endpoint is open
+	to guests and books money onto invoices, so without the key anyone could post
+	a fake "money in". SePay's own "API Key" option cannot be used: it sends
+	"Authorization: Apikey ...", which Frappe rejects as a failed login before
+	this function runs. Set SePay's webhook auth to "none" and put the key in the URL.
+
+	Sites that took SePay before the key existed have no sepay_webhook_key yet:
+	they keep receiving as before, with a daily Error Log asking to set it, so an
+	app update does not silently stop booking their transfers. Once the key is
+	set, a missing or wrong key is rejected.
+	"""
+	if frappe.request.method != "POST":
+		return _webhook_response({"success": False, "message": "Method Not Allowed"}, 405)
+
+	expected_key = frappe.conf.get("sepay_webhook_key")
+	given_key = frappe.request.args.get("key") or ""
+	if not expected_key:
+		_warn_webhook_key_not_set()
+	elif not hmac.compare_digest(str(expected_key).encode(), given_key.encode()):
+		# Open to guests: log at most once per 10 minutes so a flood of bad posts
+		# cannot fill the Error Log
+		if not frappe.cache.get_value("sepay_webhook_bad_key", expires=True):
+			frappe.cache.set_value("sepay_webhook_bad_key", 1, expires_in_sec=600)
+			frappe.log_error(title="SePay Webhook", message="SePay webhook rejected: wrong or missing key")
+		return _webhook_response({"success": False, "message": "Unauthorized"}, 401)
+
+	raw = ""
 	try:
 		raw = frappe.request.get_data(as_text=True)
 		data = json.loads(raw) if raw else {}
 	except Exception as e:
-		frappe.log_error(f"SePay webhook parse error: {e}\nRaw: {raw}", "SePay Webhook")
-		_return_webhook_success()
+		frappe.log_error(title="SePay Webhook", message=f"SePay webhook parse error: {e}\nRaw: {raw}")
+		return _webhook_response({"success": True})
 
-	# Only process "in" (money in)
+	# Only process "in" (money in). Money going OUT of the account must never
+	# be booked as a customer payment.
 	if data.get("transferType") != "in":
-		_return_webhook_success()
+		return _webhook_response({"success": True})
 
-	content = (data.get("content") or "").strip()
 	amount = flt(data.get("transferAmount") or 0)
 	sepay_id = data.get("id")
 	reference_code = data.get("referenceCode") or ""
 
-	# Deduplication: check if we already processed this SePay transaction
-	if sepay_id and _is_sepay_transaction_processed(sepay_id):
-		_return_webhook_success()
+	invoice_name = _resolve_invoice_name(data)
+	booked = False
 
-	# Extract order/invoice ID from content (e.g. DH123 -> 123, DH-SINV-00001 -> SINV-00001)
-	order_id = _extract_order_id(content)
-	if not order_id:
-		frappe.log_error(
-			f"SePay webhook: No order ID in content. content={content!r}",
-			"SePay Webhook"
-		)
-		_return_webhook_success()
-
-	# Find invoice: by name (SINV-00001) or by numeric part
-	invoice_name = _resolve_invoice_name(order_id)
-	if not invoice_name:
-		frappe.log_error(
-			f"SePay webhook: Invoice not found for order_id={order_id}",
-			"SePay Webhook"
-		)
-		_return_webhook_success()
-
-	# Process payment (run as Administrator - webhook is allow_guest, needs elevated permissions)
+	# Run as Administrator - webhook is allow_guest, needs elevated permissions
+	old_user = frappe.session.user
 	try:
-		old_user = frappe.session.user
 		frappe.set_user("Administrator")
 		frappe.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
-		try:
-			_process_sepay_payment(
-				invoice_name=invoice_name,
-				amount=amount,
-				sepay_id=sepay_id,
-				reference_code=reference_code,
-				data=data,
+		claimed = None if invoice_name else _run_transfer_handlers(data)
+		if claimed:
+			# Another app (e.g. QR on Sales Order / Sales Invoice) owns this transfer
+			pass
+		elif not invoice_name:
+			frappe.log_error(
+				title="SePay Webhook",
+				message="SePay webhook: no invoice matches this transfer. Check it by hand.\n"
+				f"code={data.get('code')!r} content={data.get('content')!r} amount={amount} id={sepay_id}",
 			)
-		finally:
-			frappe.set_user(old_user)
+		else:
+			try:
+				with _sepay_lock(invoice_name):
+					booked = _process_sepay_payment(
+						invoice_name=invoice_name,
+						amount=amount,
+						sepay_id=sepay_id,
+						reference_code=reference_code,
+						data=data,
+					)
+			except Exception as e:
+				frappe.db.rollback()
+				frappe.log_error(
+					title="SePay Webhook",
+					message=f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}\n{frappe.get_traceback()}",
+				)
+		extra = [("Payment Entry", claimed["payment_entry"])] if claimed and claimed.get("payment_entry") else None
+		_record_bank_transaction(data, invoice_name, booked, extra_vouchers=extra)
+	finally:
+		frappe.set_user(old_user)
 
+	return _webhook_response({"success": True})
+
+
+def _sepay_bank_account(data):
+	"""Company Bank Account whose number received this transfer (main account or VA), or None."""
+	received = {_compact(data.get("accountNumber")), _compact(data.get("subAccount"))} - {""}
+	if not received:
+		return None
+	for row in frappe.get_all(
+		"Bank Account",
+		filters={"is_company_account": 1, "disabled": 0},
+		fields=["name", "bank_account_no"],
+	):
+		if _compact(row.bank_account_no) in received:
+			return row.name
+	return None
+
+
+def _invoice_payment_vouchers(invoice_name, gl_account, booked):
+	"""
+	Vouchers carrying the bank side of this transfer. Booked now: the invoice,
+	whose SePay row it just wrote. Not booked: only the invoice's Payment Entries
+	(manual confirm before the money arrived) - linking the invoice there would let
+	ERPNext take another line's money on the same bank account (an earlier SePay
+	row, a card row) and mark an extra or wrong transfer Reconciled. Only vouchers
+	posting to the bank's account - ERPNext refuses to allocate one that does not.
+	"""
+	candidates = ([("Sales Invoice", invoice_name)] if booked else []) + [
+		("Payment Entry", pe)
+		for pe in frappe.get_all(
+			"Payment Entry Reference",
+			filters={"reference_doctype": "Sales Invoice", "reference_name": invoice_name, "docstatus": 1},
+			pluck="parent",
+			distinct=True,
+		)
+	]
+	return [
+		(doctype, name)
+		for doctype, name in candidates
+		if frappe.db.exists(
+			"GL Entry",
+			{"voucher_type": doctype, "voucher_no": name, "account": gl_account, "is_cancelled": 0},
+		)
+	]
+
+
+def _run_transfer_handlers(data):
+	"""
+	A transfer that matches no POS invoice may belong to another app: hooks
+	`sepay_transfer_handlers` (e.g. mbwnext_advanced_selling for the QR printed on
+	Sales Orders / Sales Invoices) get it, in hook order, with the company Bank
+	Account that received it. A handler returns None when the transfer is not its
+	own, or a dict once it has claimed it ({"payment_entry": <name or None>, ...});
+	the first claim wins. A failing handler is logged and skipped, so one app's bug
+	never stops the Bank Transaction from being recorded.
+	"""
+	bank_account = _sepay_bank_account(data)
+	for path in frappe.get_hooks("sepay_transfer_handlers"):
+		try:
+			result = frappe.get_attr(path)(data, bank_account)
+		except Exception as e:
+			frappe.db.rollback()
+			frappe.log_error(
+				title="SePay Webhook",
+				message=f"SePay transfer handler {path} failed: {e}\nData: {data}\n{frappe.get_traceback()}",
+			)
+			continue
+		if result:
+			return result
+	return None
+
+
+def _record_bank_transaction(data, invoice_name=None, booked=False, extra_vouchers=None):
+	"""
+	One Bank Transaction per SePay transfer, so every money-in can be traced on
+	the bank side. Linked to the invoice it paid, it ends Reconciled; a transfer
+	that paid nothing (no invoice, wrong amount, already paid) stays Unreconciled
+	for the accountant in Bank Reconciliation. ERPNext allocates from the GL on
+	the bank's account, so a link that carries no unallocated money drops out.
+	Skipped when no company Bank Account has the receiving account number.
+	"""
+	sepay_id = data.get("id")
+	if not sepay_id or frappe.db.exists("Bank Transaction", {"transaction_id": str(sepay_id)}):
+		return
+	bank_account = _sepay_bank_account(data)
+	if not bank_account:
+		return
+
+	try:
+		gl_account = frappe.db.get_value("Bank Account", bank_account, "account")
+		bt = frappe.new_doc("Bank Transaction")
+		bt.update(
+			{
+				"date": getdate(data.get("transactionDate")) if data.get("transactionDate") else today(),
+				"bank_account": bank_account,
+				"currency": frappe.get_cached_value("Account", gl_account, "account_currency") if gl_account else None,
+				"deposit": flt(data.get("transferAmount")),
+				"description": data.get("content") or data.get("description") or "",
+				"reference_number": data.get("referenceCode") or _payment_reference(sepay_id),
+				"transaction_id": str(sepay_id),
+			}
+		)
+		if gl_account and invoice_name and frappe.db.get_value("Sales Invoice", invoice_name, "docstatus") == 1:
+			for doctype, name in _invoice_payment_vouchers(invoice_name, gl_account, booked):
+				bt.append(
+					"payment_entries",
+					{"payment_document": doctype, "payment_entry": name, "allocated_amount": 0},
+				)
+		for doctype, name in extra_vouchers or []:
+			# Voucher booked by a transfer handler: link it only if it posted to the bank's account
+			if gl_account and frappe.db.exists(
+				"GL Entry", {"voucher_type": doctype, "voucher_no": name, "account": gl_account, "is_cancelled": 0}
+			):
+				bt.append("payment_entries", {"payment_document": doctype, "payment_entry": name, "allocated_amount": 0})
+		bt.insert(ignore_permissions=True)
+		bt.submit()
+		frappe.db.commit()
 	except Exception as e:
+		frappe.db.rollback()
 		frappe.log_error(
-			f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}",
-			"SePay Webhook"
+			title="SePay Bank Transaction",
+			message=f"SePay transfer {sepay_id}: Bank Transaction not created: {e}\nData: {data}\n{frappe.get_traceback()}",
 		)
 
-	_return_webhook_success()
+
+@contextmanager
+def _sepay_lock(invoice_name):
+	"""
+	One booking at a time per invoice: SePay may deliver the same transfer twice
+	at once, and the cashier may confirm by hand while the webhook runs. Named
+	lock, not a row lock: submit hooks commit mid-way, which drops row locks.
+	"""
+	lock = f"sepay:{invoice_name}"
+	if not frappe.db.sql("SELECT GET_LOCK(%s, 30)", (lock,))[0][0]:
+		raise frappe.ValidationError(f"Timed out waiting for lock {lock}")
+	try:
+		# Start a fresh transaction: the one opened before the wait still reads
+		# the snapshot from before the other booking committed (REPEATABLE READ).
+		frappe.db.commit()
+		yield
+	finally:
+		frappe.db.sql("SELECT RELEASE_LOCK(%s)", (lock,))
 
 
-def _return_webhook_success():
-	"""Return success response for SePay webhook (HTTP 200, body {"success": true})."""
-	frappe.response["type"] = "json"
-	frappe.response["result"] = {"success": True}
-	frappe.response["http_status_code"] = 200
+def _warn_webhook_key_not_set():
+	"""One Error Log a day while the site still takes unauthenticated webhooks."""
+	cache_key = f"sepay_webhook_key_not_set:{today()}"
+	if frappe.cache.get_value(cache_key, expires=True):
+		return
+	frappe.cache.set_value(cache_key, 1, expires_in_sec=86400)
+	frappe.log_error(
+		title="SePay Webhook",
+		message=(
+			"sepay_webhook_key is not set in site config: SePay webhooks are accepted without a key, "
+			"so anyone who knows the URL can post a fake payment. Set the key "
+			"(bench --site <site> set-config sepay_webhook_key <random>) and add ?key=<random> "
+			"to the webhook URL on my.sepay.vn."
+		),
+	)
+
+
+def _webhook_response(body, status=200):
+	"""Exact body SePay expects - a plain Frappe return would wrap it in {"message": ...}."""
+	from werkzeug.wrappers import Response
+
+	return Response(json.dumps(body), status=status, mimetype="application/json")
+
+
+def _compact(value):
+	"""Invoice name as it survives a bank transfer note: letters and digits only, upper case."""
+	return re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+
+
+def _payment_reference(sepay_id):
+	return f"SEPAY-{sepay_id}"
 
 
 def _is_sepay_transaction_processed(sepay_id):
-	"""Check if we already processed this SePay transaction (deduplication)."""
-	if not frappe.db.table_exists("SePay Transaction Log"):
+	"""Was this SePay transaction already booked? SePay retries, and may send twice."""
+	if not sepay_id:
 		return False
-	return frappe.db.exists("SePay Transaction Log", {"sepay_transaction_id": sepay_id})
+	if frappe.db.exists(
+		"Sales Invoice Payment",
+		{"parenttype": "Sales Invoice", "reference_no": _payment_reference(sepay_id)},
+	):
+		return True
+	if frappe.db.table_exists("SePay Transaction Log"):
+		return bool(frappe.db.exists("SePay Transaction Log", {"sepay_transaction_id": str(sepay_id)}))
+	return False
 
 
-def _extract_order_id(content):
-	"""Extract order/invoice ID from transfer content. Supports DH123, DH-SINV-00001, etc."""
-	if not content:
-		return None
-	# Match DH + digits or DH + alphanumeric
-	m = re.search(rf"{re.escape(ORDER_PREFIX)}([\w\-]+)", content, re.IGNORECASE)
-	return m.group(1) if m else None
+def _order_codes(data):
+	"""Candidate invoice codes, compacted: SePay's parsed `code` first, then DH... in the note."""
+	codes = []
+	code = _compact(data.get("code"))
+	if code.startswith(ORDER_PREFIX):
+		code = code[len(ORDER_PREFIX):]
+	if code:
+		codes.append(code)
+	for m in re.finditer(rf"{re.escape(ORDER_PREFIX)}([A-Za-z0-9]+)", data.get("content") or "", re.IGNORECASE):
+		c = _compact(m.group(1))
+		if c and c not in codes:
+			codes.append(c)
+	return codes
 
 
-def _resolve_invoice_name(order_id):
-	"""Resolve order_id to Sales Invoice name."""
-	# If it looks like full invoice name
-	if str(order_id).upper().startswith("SINV-"):
-		if frappe.db.exists("Sales Invoice", order_id):
-			return order_id
-		return None
-
-	# Numeric: could be auto-increment or short form
-	if str(order_id).isdigit():
-		# Try SINV-00001 style (pad to 5 digits)
-		candidates = [
-			f"SINV-{int(order_id):05d}",
-			f"SINV-{order_id}",
-			order_id,
-		]
-		for name in candidates:
-			if frappe.db.exists("Sales Invoice", name):
-				return name
-
-	# Search by name contains
-	inv = frappe.db.get_value(
-		"Sales Invoice",
-		{"name": ["like", f"%{order_id}%"]},
-		"name",
-		order_by="creation desc"
-	)
-	return inv
+def _resolve_invoice_name(data):
+	"""
+	Exact match only. No "name contains" search: a near miss would book one
+	customer's money on another customer's bill.
+	"""
+	for code in _order_codes(data):
+		if frappe.db.exists("Sales Invoice", code):
+			return frappe.db.get_value("Sales Invoice", code, "name")
+		# Names with separators (SINV-00001, AC.26...) lose them in the bank note.
+		# Compare compacted, recent POS invoices only, and only if exactly one fits.
+		matches = frappe.db.sql(
+			"""
+			SELECT name FROM `tabSales Invoice`
+			WHERE is_pos = 1 AND docstatus < 2
+				AND creation >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+				AND UPPER(REPLACE(REPLACE(REPLACE(name, '-', ''), '.', ''), '/', '')) = %s
+			LIMIT 2
+			""",
+			(code,),
+			pluck=True,
+		)
+		if len(matches) == 1:
+			return matches[0]
+	return None
 
 
 def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data):
 	"""
 	Process incoming SePay payment: add payment to invoice and submit if draft.
 
+	Returns True when this transfer was booked onto the invoice.
+
 	Uses Payment Entry flow (submit invoice first, then add payment) to avoid
 	GL merge issues where receivable debit+credit can cancel to zero.
 	"""
+	if _is_sepay_transaction_processed(sepay_id):
+		return False
+
 	doc = frappe.get_doc("Sales Invoice", invoice_name)
 
-	# Already submitted and paid - skip (deduplication)
+	if doc.docstatus == 2:
+		frappe.log_error(
+			title="SePay Webhook",
+			message=f"SePay payment for cancelled invoice {invoice_name}: amount={amount} id={sepay_id}. Refund or rebook by hand.",
+		)
+		return False
+
+	# Already paid by another transfer: this one is extra money from the customer
 	if doc.docstatus == 1 and flt(doc.outstanding_amount, 2) <= 0:
-		return
+		frappe.log_error(
+			title="SePay Webhook",
+			message=f"SePay transfer {sepay_id} of {amount} for invoice {invoice_name}, which is already paid. Not booked again - if its Bank Transaction stays Unreconciled, refund or rebook by hand.",
+		)
+		return False
+
+	# The money must have reached the account this till shows on its QR.
+	settings = _get_sepay_settings(doc.pos_profile)
+	# A virtual account (VA) on the profile arrives as subAccount, the main account as accountNumber.
+	received = {_compact(data.get("accountNumber")), _compact(data.get("subAccount"))} - {""}
+	if not settings or (received and _compact(settings.sepay_bank_account) not in received):
+		frappe.log_error(
+			title="SePay Webhook",
+			message=f"SePay payment to account {data.get('accountNumber')!r} does not match POS Profile "
+			f"{doc.pos_profile} of invoice {invoice_name} (or SePay is off there). Not booked.",
+		)
+		return False
 
 	# Validate amount: must match outstanding (supports mixed payments: cash + bank transfer)
 	outstanding = flt(doc.outstanding_amount, 2)
 	if abs(flt(amount, 2) - outstanding) > 0.01:
 		frappe.log_error(
-			f"SePay amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}",
-			"SePay Webhook"
+			title="SePay Webhook",
+			message=f"SePay amount mismatch: invoice={invoice_name} outstanding={outstanding} got={amount}",
 		)
-		return
+		return False
 
-	# Prefer "Wire Transfer" (chuyển khoản), fallback to Chuyển khoản, then any Bank type
-	mode_of_payment = (
-		frappe.db.get_value("Mode of Payment", "Wire Transfer", "name")
-		or frappe.db.get_value("Mode of Payment", "Chuyển khoản", "name")
-		or frappe.db.get_value("Mode of Payment", {"type": "Bank"}, "name")
-		or "Bank"
-	)
+	mode_of_payment = _transfer_mode_of_payment(doc.pos_profile, ("Wire Transfer", "Chuyển khoản"))
 
 	if doc.docstatus == 0:
 		# Step 1: Submit draft WITHOUT payment (avoids GL merge zero-amount issue)
@@ -385,8 +629,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 	# Step 2: Add payment via Sales Invoice Payment + direct GL entries (like POS, no Payment Entry)
 	_add_sepay_payment_direct(
 		doc, amount, mode_of_payment,
-		reference_no=reference_code or str(sepay_id),
-		transaction_id=sepay_id,
+		reference_no=_payment_reference(sepay_id) if sepay_id else reference_code,
 	)
 
 	# Log for deduplication and audit
@@ -397,6 +640,7 @@ def _process_sepay_payment(invoice_name, amount, sepay_id, reference_code, data)
 		reference_code=reference_code,
 		data=data,
 	)
+	return True
 
 
 def _add_sepay_payment_direct(doc, amount, mode_of_payment, reference_no, transaction_id=None):

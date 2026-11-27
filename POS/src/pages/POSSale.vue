@@ -125,6 +125,7 @@
 						</span>
 					</button>
 					<button
+						v-if="posSettingsStore.allowReturn"
 						@click="uiStore.showReturnDialog = true"
 						class="w-full text-start px-4 py-2.5 text-sm text-gray-700 hover:bg-red-50 flex items-center gap-3 transition-colors"
 					>
@@ -370,6 +371,7 @@
 							]"
 							style="min-width: 300px; contain: layout style paint"
 						>
+							<ExchangeBanner @cancel="cancelExchange" />
 							<InvoiceCart
 								ref="invoiceCartRef"
 								:items="cartStore.displayCartItems"
@@ -380,6 +382,7 @@
 								:coupon-discount="cartStore.couponDiscount"
 								:applied-coupon="cartStore.appliedCoupon"
 								:grand-total="cartStore.grandTotal"
+								:exchange-summary="exchangeStore.isActive && !cartStore.isEmpty ? exchangeStore.active?.preview : null"
 								:pos-profile="shiftStore.profileName"
 								:currency="shiftStore.profileCurrency"
 								:applied-offers="cartStore.appliedOffers"
@@ -410,7 +413,7 @@
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="uiStore.showDraftDialog = true"
 								@show-history="uiStore.showHistoryDialog = true"
-								@show-return="uiStore.showReturnDialog = true"
+								@show-return="openExchangeDialog"
 								@close-shift="handleCloseShift()"
 								@add-cold-storage-fee-line="handleAddColdStorageFeeLine"
 								@remove-cold-storage-fee-line="handleRemoveColdStorageFeeLine"
@@ -558,14 +561,36 @@
 				@drafts-updated="draftsStore.updateDraftsCount"
 			/>
 
-			<!-- Return Invoice Dialog -->
-			<ReturnInvoiceDialog
+			<!-- Đổi / Trả hàng (PM-FEAT-00060) — thay ReturnInvoiceDialog -->
+			<ExchangeDialog
 				v-model="uiStore.showReturnDialog"
 				:pos-profile="shiftStore.profileName"
 				:pos-opening-shift="shiftStore.currentShift?.name"
 				:currency="shiftStore.profileCurrency"
+				:preselected-invoice="exchangePreselect"
 				@return-created="handleReturnCreated"
+				@exchange-started="handleExchangeStarted"
+				@print="(name) => handlePrintInvoice({ name })"
 			/>
+
+			<!-- Thanh toán khi đang đổi hàng: bước 5 của mockup -->
+			<Dialog v-model="showExchangePayment" :options="{ title: __('Exchange payment'), size: '4xl' }">
+				<template #body-content>
+					<div class="flex flex-col gap-3 text-start">
+						<div v-if="exchangePaymentError" class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{{ exchangePaymentError }}</div>
+						<div v-if="exchangeStore.previewLoading && !exchangeSummary" class="text-sm text-gray-500 py-6 text-center">{{ __("Calculating...") }}</div>
+						<ExchangeSettlement v-if="exchangeSummary" ref="exchangeSettlementRef" :summary="exchangeSummary"
+							:payment-methods="exchangePaymentMethods" :currency="shiftStore.profileCurrency" />
+					</div>
+				</template>
+				<template #actions>
+					<div class="flex justify-end gap-2 w-full">
+						<Button variant="subtle" :disabled="exchangeSubmitting" @click="showExchangePayment = false">{{ __("Back") }}</Button>
+						<Button variant="solid" :loading="exchangeSubmitting"
+							:disabled="!exchangeSettlementRef?.result || exchangeSubmitting" @click="submitExchange">{{ __("Complete") }}</Button>
+					</div>
+				</template>
+			</Dialog>
 
 			<!-- Coupon Dialog -->
 			<CouponDialog
@@ -639,6 +664,7 @@
 				@view-invoice="handleViewInvoice"
 				@print-invoice="handlePrintInvoice"
 				@return-created="handleReturnCreated"
+				@create-return="handleCreateReturnFromHistory"
 			/>
 
 			<!-- Offline Invoices Dialog -->
@@ -1039,7 +1065,10 @@ import BundleChoiceDialog from "@/components/sale/BundleChoiceDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
 import PaymentDialog from "@/components/sale/PaymentDialog.vue";
 import PromotionManagement from "@/components/sale/PromotionManagement.vue";
-import ReturnInvoiceDialog from "@/components/sale/ReturnInvoiceDialog.vue";
+import ExchangeBanner from "@/components/sale/ExchangeBanner.vue";
+import ExchangeDialog from "@/components/sale/ExchangeDialog.vue";
+import ExchangeSettlement from "@/components/sale/ExchangeSettlement.vue";
+import { useExchangeStore } from "@/stores/exchange";
 import SePayBankTransferDialog from "@/components/sale/SePayBankTransferDialog.vue";
 import WarehouseAvailabilityDialog from "@/components/sale/WarehouseAvailabilityDialog.vue";
 import POSSettings from "@/components/settings/POSSettings.vue";
@@ -2261,6 +2290,10 @@ function handleEditCustomer(customer) {
 }
 
 function handleProceedToPayment() {
+	if (exchangeStore.isActive) {
+		openExchangePayment();
+		return;
+	}
 	if (cartStore.isEmpty) {
 		showWarning(__("Please add items to cart before proceeding to payment"));
 		return;
@@ -2834,6 +2867,117 @@ async function handleLoadDraft(draft) {
 		uiStore.showDraftDialog = false;
 	} catch (error) {
 		log.error("Error loading draft:", error);
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Đổi hàng (PM-FEAT-00060): hàng mới chọn bằng chính giỏ POS, thanh toán qua
+// pos_next.api.exchange.submit_exchange thay vì luồng bán thường.
+// ---------------------------------------------------------------------------
+const exchangeStore = useExchangeStore();
+const exchangePreselect = ref("");
+const showExchangePayment = ref(false);
+const exchangeSummary = ref(null);
+const exchangePaymentError = ref("");
+const exchangeSubmitting = ref(false);
+const exchangePaymentMethods = ref([]);
+const exchangeSettlementRef = ref(null);
+
+watch(
+	() => uiStore.showReturnDialog,
+	(open) => {
+		if (!open) exchangePreselect.value = "";
+	},
+);
+
+function openExchangeDialog() {
+	if (!posSettingsStore.allowReturn) {
+		showWarning(__("Returns are disabled for this store."));
+		return;
+	}
+	if (exchangeStore.isActive) {
+		showWarning(__("Finish or cancel the current exchange first."));
+		return;
+	}
+	uiStore.showReturnDialog = true;
+}
+
+function handleCreateReturnFromHistory(invoice) {
+	if (exchangeStore.isActive) {
+		showWarning(__("Finish or cancel the current exchange first."));
+		return;
+	}
+	uiStore.showHistoryDialog = false;
+	exchangePreselect.value = invoice?.name || "";
+	uiStore.showReturnDialog = true;
+}
+
+// Dọn giỏ y như nút "Clear" (confirmClearCart): phải đặt lại previousCartHash, không thì
+// KM tổng đơn cũ của giỏ còn treo lại (đo: giỏ trống hiện Grand Total −500.000).
+function clearCartForExchange() {
+	cartStore.clearCart();
+	previousCartHash = "";
+}
+
+function handleExchangeStarted(invoice) {
+	// Hàng mới bán cho đúng khách của HĐ gốc
+	clearCartForExchange();
+	cartStore.setCustomer({ name: invoice.customer, customer_name: invoice.customer_name });
+	showSuccess(__("Exchange started: add the new items to the cart."));
+}
+
+function cancelExchange() {
+	exchangeStore.stop();
+	clearCartForExchange();
+}
+
+async function openExchangePayment() {
+	exchangePaymentError.value = "";
+	exchangeSummary.value = null;
+	showExchangePayment.value = true;
+	if (!exchangePaymentMethods.value.length) {
+		try {
+			const doc = await call("frappe.client.get", { doctype: "POS Profile", name: shiftStore.profileName });
+			exchangePaymentMethods.value = (doc?.payments || []).map((p) => ({ mode_of_payment: p.mode_of_payment, default: p.default }));
+		} catch (e) {
+			exchangePaymentError.value = e?.messages?.[0] || e?.message || String(e);
+		}
+	}
+	const res = await exchangeStore.refreshPreview(
+		shiftStore.profileName,
+		shiftStore.currentShift?.name,
+		cartStore.getItemsForInvoiceSubmission(),
+	);
+	if (res) exchangeSummary.value = res;
+	else exchangePaymentError.value = exchangeStore.active?.previewError || __("Could not calculate the exchange.");
+}
+
+async function submitExchange() {
+	const pay = exchangeSettlementRef.value?.result;
+	if (!pay || !exchangeSummary.value) return;
+	exchangeSubmitting.value = true;
+	exchangePaymentError.value = "";
+	try {
+		const payload = exchangeStore.buildPayload(
+			shiftStore.profileName,
+			shiftStore.currentShift?.name,
+			cartStore.getItemsForInvoiceSubmission(),
+			{
+				expected_difference: exchangeSummary.value.difference,
+				payments: pay.payments,
+				refund_payments: pay.refund_payments,
+			},
+		);
+		const res = await call("pos_next.api.exchange.submit_exchange", { payload: JSON.stringify(payload) });
+		showExchangePayment.value = false;
+		exchangeStore.stop();
+		clearCartForExchange();
+		showSuccess(__("Exchange saved: return {0}, new invoice {1}", [res.return_invoice, res.new_invoice || "-"]));
+		if (res.new_invoice) handlePrintInvoice({ name: res.new_invoice });
+	} catch (e) {
+		exchangePaymentError.value = e?.messages?.[0] || e?.message || String(e);
+	} finally {
+		exchangeSubmitting.value = false;
 	}
 }
 

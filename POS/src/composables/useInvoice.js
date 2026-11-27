@@ -1396,6 +1396,10 @@ export function useInvoice() {
 		payments.value = []
 		additionalDiscount.value = 0
 		additionalDiscountPercentage.value = 0
+		// KM tổng đơn server báo về: không xoá thì giỏ trống vẫn hiện Grand Total âm
+		// đúng bằng khoản KM cũ (đo: −500.000 sau khi xoá giỏ có KM 10% đơn 5 triệu).
+		transactionPreviewTotals.value = null
+		transactionApplyDiscountOn.value = null
 		remarks.value = ""
 		couponCode.value = null
 		couponDiscountAmount.value = 0
@@ -1426,6 +1430,10 @@ export function useInvoice() {
 		payments.value = []
 		additionalDiscount.value = 0
 		additionalDiscountPercentage.value = 0
+		// KM tổng đơn server báo về: không xoá thì giỏ trống vẫn hiện Grand Total âm
+		// đúng bằng khoản KM cũ (đo: −500.000 sau khi xoá giỏ có KM 10% đơn 5 triệu).
+		transactionPreviewTotals.value = null
+		transactionApplyDiscountOn.value = null
 		remarks.value = ""
 		couponCode.value = null
 		couponDiscountAmount.value = 0

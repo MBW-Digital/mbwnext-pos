@@ -632,53 +632,52 @@ def get_offers(pos_profile: str) -> List[Dict]:
 		return []
 
 
-def _campaign_valid_on_date(campaign_name: str, date) -> bool:
-	"""Valid From <= date <= Valid Upto (blank date bounds are ignored)."""
-	if not campaign_name:
-		return False
-	if not frappe.db.exists("Promotion Campaign", campaign_name):
-		return False
+def _campaigns_valid_on_date(date) -> List[Dict]:
+	"""Promotion Campaigns with Valid From <= date <= Valid Upto (blank date bounds are ignored).
+
+	Filtered in SQL, without a row limit: the old loop read only the first 100
+	campaigns by name and checked dates afterwards, so once a site had more than
+	100 campaigns the ones sorted after them never reached the POS (PM-TASK-00482:
+	120 campaigns on Ha Vang, the running Pomelo campaigns sat at #101 and #102).
+	"""
 	meta = frappe.get_meta("Promotion Campaign")
-	check_date = getdate(date)
+	conditions = []
 	if meta.has_field("custom_valid_from"):
-		valid_from = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_from")
-		if valid_from and getdate(valid_from) > check_date:
-			return False
+		conditions.append("(custom_valid_from IS NULL OR custom_valid_from <= %(date)s)")
 	if meta.has_field("custom_valid_upto"):
-		valid_upto = frappe.db.get_value("Promotion Campaign", campaign_name, "custom_valid_upto")
-		if valid_upto and getdate(valid_upto) < check_date:
-			return False
-	return True
+		conditions.append("(custom_valid_upto IS NULL OR custom_valid_upto >= %(date)s)")
+	where = " AND ".join(conditions) or "1=1"
+	return frappe.db.sql(
+		f"""
+		SELECT name, promotion_name
+		FROM `tabPromotion Campaign`
+		WHERE {where}
+		ORDER BY promotion_name ASC
+		""",
+		{"date": getdate(date)},
+		as_dict=True,
+	)
 
 
-def _campaign_matches_pos_warehouse(campaign_name: str, pos_warehouse: Optional[str]) -> bool:
-	"""Child table Promotional Scheme Warehouse must include a row matching POS warehouse."""
-	if not campaign_name or not pos_warehouse:
-		return False
-
-	meta = frappe.get_meta("Promotion Campaign")
+def _campaign_warehouses(campaign_names: List[str]) -> Dict[str, List[str]]:
+	"""Rows of the Promotional Scheme Warehouse table, by campaign, in one query."""
 	child_field = "custom_promotional_scheme_warehouse"
-	if not meta.has_field(child_field):
-		return False
+	if not campaign_names or not frappe.get_meta("Promotion Campaign").has_field(child_field):
+		return {}
 
-	child_rows = frappe.get_all(
+	result: Dict[str, List[str]] = {}
+	for row in frappe.get_all(
 		"Promotional Scheme Warehouse",
 		filters={
-			"parent": campaign_name,
+			"parent": ["in", campaign_names],
 			"parenttype": "Promotion Campaign",
 			"parentfield": child_field,
 		},
-		fields=["warehouse"],
-		pluck="warehouse",
-	)
-	if not child_rows:
-		return False
-
-	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
-
-	return any(
-		pricing_rule_matches_warehouse(row_warehouse, pos_warehouse) for row_warehouse in child_rows
-	)
+		fields=["parent", "warehouse"],
+		limit_page_length=0,
+	):
+		result.setdefault(row.parent, []).append(row.warehouse)
+	return result
 
 
 @frappe.whitelist()
@@ -695,18 +694,25 @@ def get_promotion_campaigns_for_pos(pos_profile: str) -> List[Dict]:
 	if not pos_warehouse:
 		return []
 
-	date = getdate()
+	from pos_next.pricing_rule_warehouse import pricing_rule_matches_warehouse
+
+	campaigns = _campaigns_valid_on_date(getdate())
+	warehouses = _campaign_warehouses([row.name for row in campaigns])
 	result = []
 
-	for row in frappe.get_all(
-		"Promotion Campaign",
-		fields=["name", "promotion_name"],
-		order_by="promotion_name asc",
-		limit_page_length=100,
-	):
-		if not _campaign_valid_on_date(row.name, date):
-			continue
-		if not _campaign_matches_pos_warehouse(row.name, pos_warehouse):
+	# Many campaigns name the same parent warehouse; walk its tree once per call
+	matches_cache: Dict[Optional[str], bool] = {}
+
+	def matches(warehouse):
+		if warehouse not in matches_cache:
+			matches_cache[warehouse] = pricing_rule_matches_warehouse(warehouse, pos_warehouse)
+		return matches_cache[warehouse]
+
+	for row in campaigns:
+		# The campaign's warehouse table must have a row matching the till's
+		# warehouse (same or a parent group); an empty table matches no till
+		rows = warehouses.get(row.name)
+		if not rows or not any(matches(w) for w in rows):
 			continue
 		result.append(
 			{

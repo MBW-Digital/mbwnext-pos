@@ -304,7 +304,11 @@ def receive_webhook():
 		frappe.set_user("Administrator")
 		frappe.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
-		if not invoice_name:
+		claimed = None if invoice_name else _run_transfer_handlers(data)
+		if claimed:
+			# Another app (e.g. QR on Sales Order / Sales Invoice) owns this transfer
+			pass
+		elif not invoice_name:
 			frappe.log_error(
 				title="SePay Webhook",
 				message="SePay webhook: no invoice matches this transfer. Check it by hand.\n"
@@ -326,7 +330,8 @@ def receive_webhook():
 					title="SePay Webhook",
 					message=f"SePay webhook process error: {e}\nInvoice: {invoice_name}\nData: {data}\n{frappe.get_traceback()}",
 				)
-		_record_bank_transaction(data, invoice_name, booked)
+		extra = [("Payment Entry", claimed["payment_entry"])] if claimed and claimed.get("payment_entry") else None
+		_record_bank_transaction(data, invoice_name, booked, extra_vouchers=extra)
 	finally:
 		frappe.set_user(old_user)
 
@@ -376,7 +381,33 @@ def _invoice_payment_vouchers(invoice_name, gl_account, booked):
 	]
 
 
-def _record_bank_transaction(data, invoice_name=None, booked=False):
+def _run_transfer_handlers(data):
+	"""
+	A transfer that matches no POS invoice may belong to another app: hooks
+	`sepay_transfer_handlers` (e.g. mbwnext_advanced_selling for the QR printed on
+	Sales Orders / Sales Invoices) get it, in hook order, with the company Bank
+	Account that received it. A handler returns None when the transfer is not its
+	own, or a dict once it has claimed it ({"payment_entry": <name or None>, ...});
+	the first claim wins. A failing handler is logged and skipped, so one app's bug
+	never stops the Bank Transaction from being recorded.
+	"""
+	bank_account = _sepay_bank_account(data)
+	for path in frappe.get_hooks("sepay_transfer_handlers"):
+		try:
+			result = frappe.get_attr(path)(data, bank_account)
+		except Exception as e:
+			frappe.db.rollback()
+			frappe.log_error(
+				title="SePay Webhook",
+				message=f"SePay transfer handler {path} failed: {e}\nData: {data}\n{frappe.get_traceback()}",
+			)
+			continue
+		if result:
+			return result
+	return None
+
+
+def _record_bank_transaction(data, invoice_name=None, booked=False, extra_vouchers=None):
 	"""
 	One Bank Transaction per SePay transfer, so every money-in can be traced on
 	the bank side. Linked to the invoice it paid, it ends Reconciled; a transfer
@@ -412,6 +443,12 @@ def _record_bank_transaction(data, invoice_name=None, booked=False):
 					"payment_entries",
 					{"payment_document": doctype, "payment_entry": name, "allocated_amount": 0},
 				)
+		for doctype, name in extra_vouchers or []:
+			# Voucher booked by a transfer handler: link it only if it posted to the bank's account
+			if gl_account and frappe.db.exists(
+				"GL Entry", {"voucher_type": doctype, "voucher_no": name, "account": gl_account, "is_cancelled": 0}
+			):
+				bt.append("payment_entries", {"payment_document": doctype, "payment_entry": name, "allocated_amount": 0})
 		bt.insert(ignore_permissions=True)
 		bt.submit()
 		frappe.db.commit()
